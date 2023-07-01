@@ -5,7 +5,7 @@ description = "Latent trainer"
 authors = ["Kaszanas <andrzej.bialecki94@gmail.com>"]
 license = "All Rights Reserved"
 readme = "README.md"
-packages = [{include = "sci_sc2_latenttrainer"}]
+packages = [{include = "src/latent_trainer"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
