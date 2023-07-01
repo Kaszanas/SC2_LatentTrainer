@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "sci-sc2-latenttrainer"
+version = "0.1.0"
+description = "Latent trainer"
+authors = ["Kaszanas <andrzej.bialecki94@gmail.com>"]
+license = "All Rights Reserved"
+readme = "README.md"
+packages = [{include = "sci_sc2_latenttrainer"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+click = "^8.1.3"
+
+
+[tool.poetry.group.dev.dependencies]
+black = "^23.3.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
