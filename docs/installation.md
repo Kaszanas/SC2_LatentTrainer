@@ -7,7 +7,7 @@ There is no way of installing this repository outside of the development environ
 ## From source
 
 The source for SCI_SC2_LatentTrainer can be downloaded from
-the [Github repo][].
+the Github repo.
 
 You can either clone the public repository:
 
@@ -15,7 +15,7 @@ You can either clone the public repository:
 $ git clone git://github.com/Kaszanas/SCI_SC2_LatentTrainer
 ```
 
-Or download the [tarball][]:
+Or download the tarball:
 
 ``` console
 $ curl -OJL https://github.com/Kaszanas/SCI_SC2_LatentTrainer/tarball/master
