@@ -1,10 +1,9 @@
+import logging
+from pathlib import Path
+
 from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 
 from latent_trainer.config import LOGGING_FORMAT
-
-import logging
-
-from pathlib import Path
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)

@@ -1,4 +1,4 @@
-sources = some_test
+sources = src
 
 .PHONY: test format lint unittest coverage pre-commit clean
 test: format lint unittest
