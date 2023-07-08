@@ -1,27 +1,9 @@
-site_name: SC2_LatentTrainer
-repo_url: https://github.com/Kaszanas/SCI_SC2_LatentTrainer
-repo_name: Kaszanas/SCI_SC2_LatentTrainer
-#strict: true
+site_name: 'My Project Documentation'
 nav:
-  - Home: index.md
-  - Installation: installation.md
-  - Usage: usage.md
-  - Modules: api.md
-  - Reference: reference/
-  - Contributing: contributing.md
-  - Changelog: changelog.md
+  - Home: 'index.md'
+  - Code Reference: 'reference/'
 theme:
-  name: material
-  language: en
-  #logo: assets/logo.png
-  palette:
-    scheme: preference
-    primary: indigo
-    accent: indigo
-  features:
-    - navigation.indexes
-    - navigation.instant
-    - navigation.tabs.sticky
+  name: 'material'
 markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:materialx.emoji.twemoji
@@ -50,39 +32,17 @@ markdown_extensions:
           case: lower
   - meta
 plugins:
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+  - search
   - include-markdown
-  - search:
-      lang: en
   - gen-files:
       scripts:
-      - docs/gen_ref_pages.py
+        - docs/gen_ref_pages.py
   - literate-nav:
       nav_file: SUMMARY.md
   - section-index
-  - mkdocstrings:
-      default_handler: python
-      # handlers:
-      #   python:
-      #     options:
-      #       show_submodules: true
-# extra:
-#   social:
-#     - icon: fontawesome/brands/twitter
-#       # replace with your own tweet link below
-#       link: https://github.com/waynerv/cookiecutter-pypackage
-#       name: Tweet
-#     - icon: fontawesome/brands/facebook
-#       # replace with your own facebook link below
-#       link: https://github.com/waynerv/cookiecutter-pypackage
-#       name: Facebook
-#     - icon: fontawesome/brands/github
-#       link: https://github.com/Kaszanas/some_test
-#       name: Github
-#     - icon: material/email
-#       link: "mailto:ampedee@gmail.com"
-  # to enable disqus, uncomment the following and put your disqus id below
-  # disqus: disqus_id
-# uncomment the following and put your google tracking id below to enable GA
-#google_analytics:
-  #- UA-xxx
-  #- auto
+
+docs_dir: 'docs'

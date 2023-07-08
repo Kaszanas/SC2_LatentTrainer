@@ -1,7 +1,7 @@
+"""Train models module."""
+
 import logging
 from pathlib import Path
-
-from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 
 from latent_trainer.config import LOGGING_FORMAT
 

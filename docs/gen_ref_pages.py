@@ -1,18 +1,15 @@
-"""
-Generate the code reference pages and navigation.
+"""Generate the code reference pages and navigation."""
 
-Following:
-https://mkdocstrings.github.io/recipes/#automatic-code-reference-pages
-"""
 from pathlib import Path
-
 import mkdocs_gen_files
 
 nav = mkdocs_gen_files.Nav()
 
-for path in sorted(Path("src").rglob("*.py")):
-    module_path = path.relative_to("src").with_suffix("")
-    doc_path = path.relative_to("src").with_suffix(".md")
+src_path = "src"
+
+for path in sorted(Path(src_path).rglob("*.py")):
+    module_path = path.relative_to(src_path).with_suffix("")
+    doc_path = module_path.with_suffix(".md")
     full_doc_path = Path("reference", doc_path)
 
     parts = tuple(module_path.parts)
