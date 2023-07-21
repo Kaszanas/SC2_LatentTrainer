@@ -16,5 +16,3 @@ if __name__ == "__main__":
         download_dir=data_download_path,
         unpack_dir=data_unpack_path,
     )
-
-    print("Hello world!")
