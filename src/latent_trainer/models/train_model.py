@@ -1,47 +1,33 @@
 """Train models module."""
 from __future__ import print_function
 import argparse
-import torch
-import torch.utils.data
-from torch import nn, optim
-from torch.nn import functional as F
-from torchvision import datasets, transforms
-from torchvision.utils import save_image
-
-
 import logging
 from pathlib import Path
 import sys
 import os
-
 from tqdm import tqdm
+
 import torch
+import torch.utils.data
+from torch import optim
+from torch.nn import functional as F
 import torch.nn.functional as F
-from losses import loss_supervised, loss_unsupervised
-
-
-
-from latent_trainer.config import LOGGING_FORMAT
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "....")))
-from sc2_datasets.torch.sc2_egset_dataset import SC2EGSetDataset
-from sc2_datasets.torch.datasets.sc2_dataset import SC2Dataset
-from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData
-from sc2_datasets.available_replaypacks import EXAMPLE_SYNTHETIC_REPLAYPACKS
+from torchvision import transforms as T
+from torch.utils.data import DataLoader
 
 from guided_vae import Classifier, suGuidedVAE
 
-import argparse
-import torch
-import torch.utils.data
-from torch import nn, optim
-from torch.nn import functional as F
-from torchvision import datasets
-from torchvision.utils import save_image
-from torchvision import transforms as T
-from torch.utils.data import DataLoader
-from torch.utils.data import Dataset
+from losses import loss_supervised
+from latent_trainer.config import LOGGING_FORMAT
 
-from sc2_datasets.torch.datasets.sc2_replaypack_dataset import SC2ReplaypackDataset
+from sc2_datasets.torch.sc2_egset_dataset import SC2EGSetDataset
+
+from sc2_datasets.torch.datasets.sc2_dataset import SC2Dataset
+from sc2_datasets.available_replaypacks import EXAMPLE_SYNTHETIC_REPLAYPACKS, EXAMPLE_REAL_REPLAYPACKS
+from sc2_datasets.transforms.mmr_vs_result import mmr_vs_result
+from sc2_datasets.transforms.pytorch.economy_vs_outcome import economy_average_vs_outcome
+from sc2_datasets.transforms.utils import average_player_stats, select_outcome_1v1
+
 
 
 def train_supervised(epoch, model, model_c, optimizer, optimizer_c, dataloader, w_cls, device):
@@ -113,22 +99,14 @@ def arg_parse():
     parser = argparse.ArgumentParser(description='Guided VAE')
     parser.add_argument('--batch-size', '-b', type=int, default=128, metavar='N',
                         help='input batch size for training (default: 128)')
-    parser.add_argument('--epochs', type=int, default=128, metavar='N',
-                        help='number of epochs to train (default: 10)')
-    parser.add_argument('--gpu', type=int, default=0,
-                        help='gpu id to use')
-    parser.add_argument('--nz', type=int, default=10,
-                        help='bottleneck size')
     parser.add_argument('--output', default='output',
                         help='output directory for results')
-    parser.add_argument('--dataroot', default='data',
-                        help='root directory for dataset')
-    parser.add_argument('--dataset', default='MNIST', choices=['MNIST', 'CelebA'],
-                        help='dataset to train')
+    parser.add_argument('--epochs', type=int, default=128, metavar='N',
+                        help='number of epochs to train (default: 10)')
+    parser.add_argument('--nz', type=int, default=10,
+                        help='bottleneck size')
     parser.add_argument('--cls', default='200.0', type=float,
                         help='classification error weight for supervised Guided-VAE')
-    parser.add_argument('--selected_attrs', default=['Smiling'], nargs='+',
-                        help='selected attrs in CelebA training')
     parser.add_argument('--num_workers', default=1, type=int,
                         help='number of workers for dataloader')
     parser.add_argument('--test_interval', default=1, type=int,
@@ -143,6 +121,7 @@ def arg_parse():
                         help='classifier weight decay(in supervised version)')
     args = parser.parse_args()
     return args
+     
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
@@ -153,7 +132,7 @@ if __name__ == "__main__":
     logging.info(f"{download_path=}")
     logging.info(f"{unpack_path=}")
 
-    dataset = SC2Dataset(names_urls=EXAMPLE_SYNTHETIC_REPLAYPACKS).__getitem__("result")
+
     args = arg_parse()
     device = torch.device('cpu')
     if not os.path.exists(args.output):
@@ -166,17 +145,20 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     optimizer_c = optim.Adam(model_c.parameters(), lr=args.lr, weight_decay=args.weight_decay_c)
-    transform = T.Compose([
-            T.CenterCrop(178),
-            T.Resize(64),
-            T.ToTensor(),
-        ])
 
+    dataset = SC2Dataset(names_urls=EXAMPLE_REAL_REPLAYPACKS)
 
-    # data_path = Path(args.dataroot, 'images').resolve()
-    # attr_path = Path(args.dataroot, 'list_attr_celeba.txt').resolve()
+    for i in range(len(dataset)):
+        dataset[i]
+        replay = dataset[i]
+        economy = economy_average_vs_outcome(replay)
+        player_stats = average_player_stats(replay)
+        mmr = mmr_vs_result(replay)
+        outcome = select_outcome_1v1(replay)
 
-    train_dataset = dataset
+    # dataset = SC2EGSetDataset(download_dir=download_path, unpack_dir=unpack_path)
+
+    train_dataset = economy
     train_loader = DataLoader(dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_workers)        
     for epoch in range(1, args.epochs + 1):
             train_supervised(epoch, model, model_c, optimizer, optimizer_c, train_loader, args.cls, device)
