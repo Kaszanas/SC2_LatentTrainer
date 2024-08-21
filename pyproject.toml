@@ -9,15 +9,15 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = ">=3.11,<3.12"
 click = "^8.1.7"
-sc2-datasets = {git = "https://github.com/scmisa/SC2_Datasets", branch = "misa/dev"}
+sc2-datasets = {git = "https://github.com/Kaszanas/SC2_Datasets"}
 python-dotenv = "^1.0.1"
 
 
 [tool.poetry.group.dev.dependencies]
-black = "^24.2.0"
 mypy = "^1.8.0"
 flake8 = "^7.0.0"
 isort = "^5.13.2"
+ruff = "^0.6.1"
 
 [tool.poetry.group.doc.dependencies]
 mkdocs = "^1.5.3"
