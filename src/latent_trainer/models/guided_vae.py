@@ -101,6 +101,97 @@ class View(nn.Module):
         return tensor.view(self.size)
 
 
+class suGuidedVAE1(nn.Module):
+    def __init__(self, n_vae_dis=16):
+        super().__init__()
+
+        self.n_vae_dis = n_vae_dis
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(3, 32, 4, 2, 1),
+            nn.ReLU(True),
+            nn.Conv2d(32, 32, 4, 2, 1),
+            nn.ReLU(True),
+            nn.Conv2d(32, 64, 4, 2, 1),
+            nn.ReLU(True),
+            nn.Conv2d(64, 64, 4, 2, 1),
+            nn.ReLU(True),
+            nn.Conv2d(64, 256, 4, 1),
+            nn.ReLU(True),
+            View((-1, 256 * 1 * 1)),
+            nn.Linear(256, n_vae_dis * 2),
+        )
+
+        self.decoder = nn.Sequential(
+            nn.Linear(n_vae_dis, 256),
+            View((-1, 256, 1, 1)),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(256, 64, 4),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(64, 64, 4, 2, 1),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(64, 32, 4, 2, 1),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(32, 32, 4, 2, 1),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(32, 3, 4, 2, 1),
+        )
+
+        self.cls_sq = nn.Sequential(
+            nn.Linear(1, 32),
+            nn.BatchNorm1d(32),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Linear(32, 32),
+            nn.BatchNorm1d(32),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Linear(32, 1),
+            nn.Sigmoid(),
+        )
+
+    def encode(self, x):
+        x = self.encoder(x)
+        mu = x[:, : self.n_vae_dis]
+        logvar = x[:, self.n_vae_dis :]
+        return mu, logvar
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def cls(self, z):
+        z = torch.split(z, 1, 1)[0]
+        return self.cls_sq(z)
+
+    def forward(self, x):
+        mu, logvar = self.encode(x)
+        z = self.reparameterize(mu, logvar)
+        return self.decode(z), mu, logvar, self.cls(z)
+
+
+class Classifier1(nn.Module):
+    def __init__(self, n_vae_dis=16):
+        super(Classifier1, self).__init__()
+
+        self.cls_sq = nn.Sequential(
+            nn.Linear(n_vae_dis - 1, 32),
+            nn.BatchNorm1d(32),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Linear(32, 32),
+            nn.BatchNorm1d(32),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Linear(32, 1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        return self.cls_sq(x)
+
+
+# Main model
 class suGuidedVAE(nn.Module):
     def __init__(self, n_vae_dis=16):
         super().__init__()
@@ -172,20 +263,12 @@ class suGuidedVAE(nn.Module):
         return self.decode(z), mu, logvar, self.cls(z)
 
 
+# Main classifier
 class Classifier(nn.Module):
-    def __init__(self, n_vae_dis=16):
+    def __init__(self, n_inputs, n_outputs):
         super(Classifier, self).__init__()
-
-        self.cls_sq = nn.Sequential(
-            nn.Linear(n_vae_dis - 1, 32),
-            nn.BatchNorm1d(32),
-            nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Linear(32, 32),
-            nn.BatchNorm1d(32),
-            nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Linear(32, 1),
-            nn.Sigmoid(),
-        )
+        self.linear = nn.Linear(n_inputs, n_outputs)
 
     def forward(self, x):
-        return self.cls_sq(x)
+        y_pred = torch.sigmoid(self.linear(x))
+        return y_pred

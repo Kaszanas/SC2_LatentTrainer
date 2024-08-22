@@ -4,7 +4,6 @@ from __future__ import print_function
 import argparse
 import logging
 from pathlib import Path
-import sys
 import os
 from tqdm import tqdm
 
@@ -12,26 +11,19 @@ import torch
 import torch.utils.data
 from torch import optim
 from torch.nn import functional as F
-import torch.nn.functional as F
-from torchvision import transforms as T
-from torch.utils.data import DataLoader
-
 from guided_vae import Classifier, suGuidedVAE
 
 from losses import loss_supervised
 from latent_trainer.config import LOGGING_FORMAT
 
-from sc2_datasets.torch.sc2_egset_dataset import SC2EGSetDataset
+from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 
-from sc2_datasets.torch.datasets.sc2_dataset import SC2Dataset
-from sc2_datasets.available_replaypacks import (
-    EXAMPLE_SYNTHETIC_REPLAYPACKS,
-    EXAMPLE_REAL_REPLAYPACKS,
-)
+from sc2_datasets.available_replaypacks import EXAMPLE_REAL_REPLAYPACKS
 from sc2_datasets.transforms.mmr_vs_result import mmr_vs_result
 from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
     economy_average_vs_outcome,
 )
+
 from sc2_datasets.transforms.utils import average_player_stats, select_outcome_1v1
 
 
@@ -187,23 +179,16 @@ if __name__ == "__main__":
     optimizer_c = optim.Adam(
         model_c.parameters(), lr=args.lr, weight_decay=args.weight_decay_c
     )
-
-    dataset = SC2Dataset(names_urls=EXAMPLE_REAL_REPLAYPACKS)
-    # dataset = SC2EGSetDataset(download_dir=download_path, unpack_dir=unpack_path)
-    for i in range(len(dataset)):
-        dataset[i]
-        replay = dataset[i]
-        #    economy = economy_average_vs_outcome(replay)
-        #    player_stats = average_player_stats(replay)
-        mmr = mmr_vs_result(replay)
-    #    outcome = select_outcome_1v1(replay)
-
-    # dataset = SC2EGSetDataset(download_dir=download_path, unpack_dir=unpack_path)
-
-    train_dataset = mmr
-    train_loader = DataLoader(
-        dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_workers
+    sc2_egset_datamodule = SC2EGSetDataModule(
+        unpack_dir="./data/unpack",  # Specify existing directory path, where the data will be unpacked.
+        download_dir="./data/download",  # Specify existing directory path, where the data will be downloaded.
+        download=True,
+        replaypacks=EXAMPLE_REAL_REPLAYPACKS,  # Use a synthetic replaypack containing 1 replay.
+        transform=economy_average_vs_outcome,  # Apply the average_player_stats transform to the replaypack.
     )
+    sc2_egset_datamodule.prepare_data()
+    sc2_egset_datamodule.setup()
+    train_dataset = sc2_egset_datamodule.train_dataloader()
     for epoch in range(1, args.epochs + 1):
         train_supervised(
             epoch,
@@ -211,7 +196,7 @@ if __name__ == "__main__":
             model_c,
             optimizer,
             optimizer_c,
-            train_loader,
+            train_dataset,
             args.cls,
             device,
         )
