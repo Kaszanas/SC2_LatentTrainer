@@ -1,5 +1,5 @@
 [project]
-name = "sci-sc2-latenttrainer"
+name = "latent_trainer"
 version = "0.1.0"
 description = "SC2 Latent Trainer, a tool for training SC2 based on latent model representations."
 readme = "README.md"
@@ -23,3 +23,7 @@ dev = [
     "pre-commit>=4.0.1",
     "mypy>=1.13.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

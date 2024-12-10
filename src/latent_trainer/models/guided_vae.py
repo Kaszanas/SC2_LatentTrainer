@@ -3,35 +3,35 @@ from torch import nn
 import torch.nn.functional as F
 
 
-class unGuidedVAE(nn.Module):
-    def __init__(self, n_vae_dis=10, DIM=64):
+class UnsupervisedGuidedVAE(nn.Module):
+    def __init__(self, n_vae_dis=10, dimensions=64):
         super().__init__()
-        self.DIM = DIM
-        self.layer1 = nn.Conv2d(1, DIM, 6, stride=2)
+        self.DIM = dimensions
+        self.layer1 = nn.Conv2d(1, dimensions, 6, stride=2)
         self.layer2 = nn.Sequential(
-            nn.Conv2d(DIM, 2 * DIM, 5),
+            nn.Conv2d(dimensions, 2 * dimensions, 5),
             nn.ReLU(True),
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(2 * DIM, 4 * DIM, 5),
+            nn.Conv2d(2 * dimensions, 4 * dimensions, 5),
             nn.ReLU(True),
         )
-        self.layer41 = nn.Linear(4 * 4 * 4 * DIM, n_vae_dis)
-        self.layer42 = nn.Linear(4 * 4 * 4 * DIM, n_vae_dis)
+        self.layer41 = nn.Linear(4 * 4 * 4 * dimensions, n_vae_dis)
+        self.layer42 = nn.Linear(4 * 4 * 4 * dimensions, n_vae_dis)
 
         self.preprocess = nn.Sequential(
-            nn.Linear(n_vae_dis, 4 * 4 * 4 * DIM),
+            nn.Linear(n_vae_dis, 4 * 4 * 4 * dimensions),
             nn.ReLU(True),
         )
         self.block1 = nn.Sequential(
-            nn.ConvTranspose2d(4 * DIM, 2 * DIM, 5),
+            nn.ConvTranspose2d(4 * dimensions, 2 * dimensions, 5),
             nn.ReLU(True),
         )
         self.block2 = nn.Sequential(
-            nn.ConvTranspose2d(2 * DIM, DIM, 5),
+            nn.ConvTranspose2d(2 * dimensions, dimensions, 5),
             nn.ReLU(True),
         )
-        self.deconv_out = nn.ConvTranspose2d(DIM, 1, 6, stride=2)
+        self.deconv_out = nn.ConvTranspose2d(dimensions, 1, 6, stride=2)
 
         self.fc1 = nn.Linear(n_vae_dis - 2, 784)
         self.fc2 = nn.Linear(1, 1)
@@ -101,12 +101,13 @@ class View(nn.Module):
         return tensor.view(self.size)
 
 
-class suGuidedVAE(nn.Module):
+class SupervisedGuidedVAE(nn.Module):
     def __init__(self, n_vae_dis=16):
         super().__init__()
 
         self.n_vae_dis = n_vae_dis
 
+        # TODO: Change this to fit the model for SC2 data:
         self.encoder = nn.Sequential(
             nn.Conv2d(3, 32, 4, 2, 1),
             nn.ReLU(True),
@@ -122,6 +123,7 @@ class suGuidedVAE(nn.Module):
             nn.Linear(256, n_vae_dis * 2),
         )
 
+        # TODO: Change this to fit the model for SC2 data:
         self.decoder = nn.Sequential(
             nn.Linear(n_vae_dis, 256),
             View((-1, 256, 1, 1)),
@@ -137,7 +139,7 @@ class suGuidedVAE(nn.Module):
             nn.ConvTranspose2d(32, 3, 4, 2, 1),
         )
 
-        self.cls_sq = nn.Sequential(
+        self.classification_head = nn.Sequential(
             nn.Linear(1, 32),
             nn.BatchNorm1d(32),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
@@ -164,7 +166,7 @@ class suGuidedVAE(nn.Module):
 
     def cls(self, z):
         z = torch.split(z, 1, 1)[0]
-        return self.cls_sq(z)
+        return self.classification_head(z)
 
     def forward(self, x):
         mu, logvar = self.encode(x)
