@@ -4,11 +4,12 @@ sources = src
 test: format lint unittest
 
 format:
-	isort $(sources) tests
-	black $(sources) tests
+	ruff format $(sources)
+	ruff format tests
 
 lint:
-	flake8 $(sources) tests
+	ruff check $(sources)
+	ruff check tests
 	mypy $(sources) tests
 
 unittest:
