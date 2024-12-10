@@ -5,7 +5,7 @@ from pathlib import Path
 
 from latent_trainer.config import LOGGING_FORMAT
 
-from latent_trainer.models.guided_vae import SupervisedGuidedVAE
+from latent_trainer.models.guided_vae import SupervisedGuidedVAE, UnsupervisedGuidedVAE
 
 from sc2_datasets.torch.sc2_egset_dataset import SC2EGSetDataset
 from sc2_datasets.available_replaypacks import EXAMPLE_SYNTHETIC_REPLAYPACKS

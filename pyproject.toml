@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "SC2 Latent Trainer, a tool for training SC2 based on latent model representations."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["click>=8.1.7", "python-dotenv>=1.0.1", "sc2-datasets>=1.0.2"]
+dependencies = [
+    "click>=8.1.7",
+    "lightning>=2.4.0",
+    "python-dotenv>=1.0.1",
+    "sc2-datasets>=1.0.2",
+]
 
 [dependency-groups]
 dev = [
@@ -23,6 +28,11 @@ dev = [
     "pre-commit>=4.0.1",
     "mypy>=1.13.0",
 ]
+
+
+[tool.ruff]
+exclude = [".venv"]
+line-length = 88
 
 [build-system]
 requires = ["hatchling"]
