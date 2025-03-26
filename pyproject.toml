@@ -9,8 +9,20 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = ">=3.11,<3.12"
 click = "^8.1.7"
-sc2-datasets = {git = "https://github.com/Kaszanas/SC2_Datasets"}
+sc2-datasets = "^1.1.0"
 python-dotenv = "^1.0.1"
+regex = "^2024.11.6"
+sympy = "^1.13.3"
+pyyaml = "^6.0.2"
+typing-extensions = "^4.13.0"
+packaging = "^24.2"
+platformdirs = "^4.3.7"
+yarl = "^1.18.3"
+markdown = "^3.7"
+networkx = "^3.4.2"
+setuptools = "^78.1.0"
+watchdog = "^6.0.0"
+charset-normalizer = "^3.4.1"
 
 
 [tool.poetry.group.dev.dependencies]
