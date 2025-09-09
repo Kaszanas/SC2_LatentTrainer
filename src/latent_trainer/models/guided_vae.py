@@ -107,42 +107,34 @@ class suGuidedVAE(nn.Module):
 
         self.n_vae_dis = n_vae_dis
 
+        # Simple encoder for MMR data with shape [batch, 2] (two MMR values)
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 32, 4, 2, 1),
+            nn.Linear(2, 64),
             nn.ReLU(True),
-            nn.Conv2d(32, 32, 4, 2, 1),
+            nn.Linear(64, 128),
             nn.ReLU(True),
-            nn.Conv2d(32, 64, 4, 2, 1),
+            nn.Linear(128, 256),
             nn.ReLU(True),
-            nn.Conv2d(64, 64, 4, 2, 1),
-            nn.ReLU(True),
-            nn.Conv2d(64, 256, 4, 1),
-            nn.ReLU(True),
-            View((-1, 256 * 1 * 1)),
-            nn.Linear(256, n_vae_dis * 2),
+            nn.Linear(256, n_vae_dis * 2),  # mu and logvar
         )
 
+        # Simple decoder to reconstruct MMR data
         self.decoder = nn.Sequential(
             nn.Linear(n_vae_dis, 256),
-            View((-1, 256, 1, 1)),
             nn.ReLU(True),
-            nn.ConvTranspose2d(256, 64, 4),
+            nn.Linear(256, 128),
             nn.ReLU(True),
-            nn.ConvTranspose2d(64, 64, 4, 2, 1),
+            nn.Linear(128, 64),
             nn.ReLU(True),
-            nn.ConvTranspose2d(64, 32, 4, 2, 1),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(32, 32, 4, 2, 1),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(32, 3, 4, 2, 1),
+            nn.Linear(64, 2),  # Back to 2 MMR values
         )
 
         self.cls_sq = nn.Sequential(
             nn.Linear(1, 32),
-            nn.BatchNorm1d(32),
+            nn.LayerNorm(32),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
             nn.Linear(32, 32),
-            nn.BatchNorm1d(32),
+            nn.LayerNorm(32),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
             nn.Linear(32, 1),
             nn.Sigmoid(),
@@ -178,10 +170,10 @@ class Classifier(nn.Module):
 
         self.cls_sq = nn.Sequential(
             nn.Linear(n_vae_dis - 1, 32),
-            nn.BatchNorm1d(32),
+            nn.LayerNorm(32),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
             nn.Linear(32, 32),
-            nn.BatchNorm1d(32),
+            nn.LayerNorm(32),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
             nn.Linear(32, 1),
             nn.Sigmoid(),
