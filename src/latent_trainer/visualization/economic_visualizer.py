@@ -12,7 +12,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
-from ..models.guided_vae import suGuidedVAE, Classifier
+from models.guided_vae import suGuidedVAE, Classifier
+
 from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS, EXAMPLE_REAL_REPLAYPACKS
 from sc2_datasets.transforms.pytorch.economy_vs_outcome import economy_average_vs_outcome
