@@ -27,93 +27,193 @@ from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
 from sc2_datasets.transforms.utils import average_player_stats, select_outcome_1v1
 
 
-# Let's try using just the basic MMR vs result transform which is more robust
-# instead of the complex economy transform that's failing
+# Define custom collate function at module level so it's pickle-able
+def custom_collate(batch):
+    # Filter out None values
+    batch = list(filter(lambda x: x is not None and None not in x, batch))
+    if len(batch) == 0:
+        return None, None
+    
+    # Use default_collate for the filtered batch
+    try:
+        return torch.utils.data.dataloader.default_collate(batch)
+    except Exception as e:
+        logging.warning(f"Error in collation: {e}")
+        return None, None
+
+# Create a wrapper dataset to handle exceptions in __getitem__
+class SafeDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+    
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, idx):
+        try:
+            return self.dataset[idx]
+        except IndexError:
+            # Handle index out of range errors by returning None
+            logging.warning(f"IndexError in dataset __getitem__ for index {idx}")
+            return None, None
+        except Exception as e:
+            # Handle other exceptions
+            logging.warning(f"Exception in dataset __getitem__ for index {idx}: {e}")
+            return None, None
 
 
-def train_supervised(
-    epoch, model, model_c, optimizer, optimizer_c, dataloader, w_cls, device
-):
+def train_supervised(epoch, model, model_c, optimizer, optimizer_c, dataloader, w_cls, device):
+    """Train the model for one epoch with supervision."""
     model.train()
     re_loss = 0
     cls_error = 0
     correct = 0
-
     cls1_error = 0
     cls2_error = 0
-
     correct1 = 0
     correct2 = 0
-    for batch_idx, (data, label) in enumerate(tqdm(dataloader)):
-        # Convert label to float and add batch dimension if needed
-        if label.dtype == torch.int8:
-            label = label.float()
-        if len(label.shape) == 1:
-            label = label.unsqueeze(1)  # [batch] -> [batch, 1]
+    total_valid_samples = 0
+    
+    for batch_idx, batch_data in enumerate(tqdm(dataloader)):
+        # Skip invalid batches
+        if batch_data is None or not isinstance(batch_data, tuple) or len(batch_data) != 2:
+            logging.warning(f"Invalid batch format at index {batch_idx}")
+            continue
+            
+        data, label = batch_data
         
-        data = data.to(device)
-        label = label.to(device)
+        if data is None or label is None:
+            logging.warning(f"None data/label at batch {batch_idx}")
+            continue
+            
+        if isinstance(data, torch.Tensor) and data.numel() == 0:
+            logging.warning(f"Empty data tensor at batch {batch_idx}")
+            continue
+            
+        if isinstance(label, torch.Tensor) and label.numel() == 0:
+            logging.warning(f"Empty label tensor at batch {batch_idx}")
+            continue
         
-        optimizer.zero_grad()
-        recon_batch, mu, logvar, re = model(data)
-        loss_list = loss_supervised(recon_batch, data, mu, logvar)
-        loss = loss_list[0]
-        loss_cls = F.binary_cross_entropy(re, label, reduction="sum")
-        cls_error += loss_cls
-        loss += loss_cls * w_cls
-        loss.backward()
-        re_loss += loss_list[1].item()
-        optimizer.step()
-
-        optimizer_c.zero_grad()
-        z = model.reparameterize(mu, logvar).detach()
-        z = z[:, 1:]
-        cls1 = model_c(z)
-        loss = F.binary_cross_entropy(cls1, label, reduction="sum")
-        cls1_error += loss.item()
-        loss *= w_cls
-        loss.backward()
-        optimizer_c.step()
-
-        optimizer.zero_grad()
-        mu, logvar = model.encode(data)
-        z = model.reparameterize(mu, logvar)
-        z = z[:, 1:]
-        cls2 = model_c(z)
-        label1 = torch.empty_like(label).fill_(0.5)
-        loss = F.binary_cross_entropy(cls2, label1, reduction="sum")
-        cls2_error += loss.item()
-        loss *= w_cls
-        loss.backward()
-        optimizer.step()
-
-        pred = (re > 0.5).float()
-        correct += pred.eq(label).sum().item()
-
-        pred = (cls1 > 0.5).float()
-        correct1 += pred.eq(label).sum().item()
-
-        pred = (cls2 > 0.5).float()
-        correct2 += pred.eq(label).sum().item()
-
-    cls_error = cls_error / len(dataloader.dataset)
-    cls1_error = cls1_error / len(dataloader.dataset)
-    cls2_error = cls2_error / len(dataloader.dataset)
+        try:
+            # Process labels
+            if label.dtype == torch.int8:
+                label = label.float()
+            
+            if len(label.shape) == 1:
+                label = label.unsqueeze(1)
+                
+            # Filter out invalid labels (-1)
+            valid_indices = (label != -1).squeeze()
+            
+            if valid_indices.sum() == 0:
+                logging.warning(f"No valid samples after filtering at batch {batch_idx}")
+                continue
+                
+            # Extract valid data
+            valid_data = data[valid_indices]
+            valid_label = label[valid_indices]
+            
+            # Ensure labels are in valid range [0,1]
+            valid_label = torch.clamp(valid_label, 0, 1)
+            
+            # Track valid samples for metrics
+            total_valid_samples += valid_indices.sum().item()
+            
+            # Move to device
+            valid_data = valid_data.to(device)
+            valid_label = valid_label.to(device)
+            
+            # Step 1: VAE training
+            try:
+                optimizer.zero_grad()
+                recon_batch, mu, logvar, re = model(valid_data)
+                loss_list = loss_supervised(recon_batch, valid_data, mu, logvar)
+                loss = loss_list[0]
+                loss_cls = F.binary_cross_entropy(re, valid_label, reduction="sum")
+                cls_error += loss_cls
+                loss += loss_cls * w_cls
+                loss.backward()
+                re_loss += loss_list[1].item()
+                optimizer.step()
+            except Exception as e:
+                logging.error(f"VAE training error: {e}")
+                continue
+                
+            # Step 2: Classifier training
+            try:
+                optimizer_c.zero_grad()
+                z = model.reparameterize(mu, logvar).detach()
+                z = z[:, 1:]
+                cls1 = model_c(z)
+                loss = F.binary_cross_entropy(cls1, valid_label, reduction="sum")
+                cls1_error += loss.item()
+                loss *= w_cls
+                loss.backward()
+                optimizer_c.step()
+            except Exception as e:
+                logging.error(f"Classifier training error: {e}")
+                continue
+                
+            # Step 3: Adversarial training
+            try:
+                optimizer.zero_grad()
+                mu, logvar = model.encode(valid_data)
+                z = model.reparameterize(mu, logvar)
+                z = z[:, 1:]
+                cls2 = model_c(z)
+                label1 = torch.empty_like(valid_label).fill_(0.5)
+                loss = F.binary_cross_entropy(cls2, label1, reduction="sum")
+                cls2_error += loss.item()
+                loss *= w_cls
+                loss.backward()
+                optimizer.step()
+            except Exception as e:
+                logging.error(f"Adversarial training error: {e}")
+                continue
+                
+            # Calculate accuracies
+            try:
+                pred = (re > 0.5).float()
+                correct += pred.eq(valid_label).sum().item()
+                
+                pred = (cls1 > 0.5).float()
+                correct1 += pred.eq(valid_label).sum().item()
+                
+                pred = (cls2 > 0.5).float()
+                correct2 += pred.eq(valid_label).sum().item()
+            except Exception as e:
+                logging.error(f"Accuracy calculation error: {e}")
+                
+        except Exception as e:
+            logging.error(f"General batch processing error: {e}")
+            continue
+    
+    # Handle case with no valid samples
+    if total_valid_samples == 0:
+        logging.warning("No valid samples in this epoch!")
+        return float('inf')
+    
+    # Calculate metrics
+    cls_error = cls_error / total_valid_samples
+    cls1_error = cls1_error / total_valid_samples
+    cls2_error = cls2_error / total_valid_samples
+    
     print(
-        "====> Epoch: {} reconstruction loss: {:.4f} Cls loss: {:.4f} acc: {:.2f} cls1 loss: {:.4f} cls2 loss: {:.4f} acc1: {:.2f} acc2: {:.2f}".format(
+        "====> Epoch: {} reconstruction loss: {:.4f} Cls loss: {:.4f} acc: {:.2f} cls1 loss: {:.4f} cls2 loss: {:.4f} acc1: {:.2f} acc2: {:.2f} valid samples: {}".format(
             epoch,
-            re_loss / len(dataloader.dataset),
+            re_loss / total_valid_samples,
             cls_error,
-            100.0 * correct / len(dataloader.dataset),
+            100.0 * correct / total_valid_samples,
             cls1_error,
             cls2_error,
-            100.0 * correct1 / len(dataloader.dataset),
-            100.0 * correct2 / len(dataloader.dataset),
+            100.0 * correct1 / total_valid_samples,
+            100.0 * correct2 / total_valid_samples,
+            total_valid_samples
         )
     )
     
     # Return total loss for model saving
-    total_loss = re_loss / len(dataloader.dataset) + cls_error + cls1_error + cls2_error
+    total_loss = re_loss / total_valid_samples + cls_error + cls1_error + cls2_error
     return total_loss
 
 
@@ -146,7 +246,7 @@ def arg_parse():
         help="classification error weight for supervised Guided-VAE",
     )
     parser.add_argument(
-        "--num_workers", default=1, type=int, help="number of workers for dataloader"
+        "--num_workers", default=0, type=int, help="number of workers for dataloader"
     )
     parser.add_argument(
         "--test_interval", default=1, type=int, help="interval for testing"
@@ -170,7 +270,9 @@ def arg_parse():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
+    # Set up more verbose logging to help diagnose issues
+    logging.basicConfig(level=logging.DEBUG, format=LOGGING_FORMAT)
+    logging.info("Starting model training...")
 
     download_path = Path("./data/download").resolve().as_posix()
     unpack_path = Path("./data/unpack").resolve().as_posix()
@@ -203,7 +305,21 @@ if __name__ == "__main__":
     )
     sc2_egset_datamodule.prepare_data()
     sc2_egset_datamodule.setup()
-    train_dataset = sc2_egset_datamodule.train_dataloader()
+    
+    # Use the custom collate function
+    train_dataloader = sc2_egset_datamodule.train_dataloader()
+    
+    # Wrap the dataset with our SafeDataset to handle exceptions
+    safe_dataset = SafeDataset(train_dataloader.dataset)
+    
+    # Override the collate_fn with our custom one and disable multiprocessing
+    train_dataset = torch.utils.data.DataLoader(
+        safe_dataset,
+        batch_size=train_dataloader.batch_size,
+        shuffle=True,  # Always shuffle the training data
+        num_workers=0,  # Set to 0 to avoid multiprocessing issues
+        collate_fn=custom_collate
+    )
     
     best_loss = float('inf')
     
