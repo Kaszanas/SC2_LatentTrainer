@@ -11,9 +11,13 @@ import torch
 import torch.utils.data
 from torch import optim
 from torch.nn import functional as F
-from guided_vae import Classifier, suGuidedVAE
+import sys
 
-from losses import loss_supervised
+# Add the project root to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
+from models.guided_vae import Classifier, suGuidedVAE
+from models.losses import loss_supervised
+
 from latent_trainer.config import LOGGING_FORMAT
 
 from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
