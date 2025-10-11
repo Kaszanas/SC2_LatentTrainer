@@ -36,6 +36,9 @@ Example with custom parameters:
 python src\latent_trainer\models\train_model.py --epochs 20 --batch-size 256 --transform mmr_vs_result
 ```
 
+For now only mmr_vs_result
+
+
 ## Usage
 
 ### CLICK command line interface
