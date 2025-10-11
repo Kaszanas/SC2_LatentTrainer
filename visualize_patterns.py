@@ -11,7 +11,7 @@ sys.path.append(str(Path(__file__).parent / "src" / "latent_trainer" / "visualiz
 from economic_visualizer import EconomicPatternVisualizer
 
 def main():
-    print("=== StarCraft 2 Economic Pattern Visualizer ===")
+    print("=== StarCraft 2 MMR Pattern Visualizer ===")
     print()
     
     # Create output directory
@@ -22,11 +22,11 @@ def main():
     model_path = Path("output/best_model.pth")
     if model_path.exists():
         print(f"Found trained model at {model_path}")
-        visualizer = EconomicPatternVisualizer(model_path=str(model_path))
+        visualizer = EconomicPatternVisualizer(model_path=str(model_path), transform='mmr')
     else:
         print("No trained model found. Using untrained model for demonstration.")
         print("Train a model first using: python src/latent_trainer/models/train_model.py --epochs 10")
-        visualizer = EconomicPatternVisualizer()
+        visualizer = EconomicPatternVisualizer(transform='mmr')
     
     print()
     print("Generating visualizations...")
@@ -48,8 +48,8 @@ def main():
         print("📊 latent_space_tsne.png - 2D t-SNE projection of latent space")
         print("📊 latent_space_pca.png - 2D PCA projection of latent space") 
         print("📊 latent_dimensions.png - Distribution of each latent dimension")
-        print("📊 economic_patterns.png - Heatmaps of economic patterns by outcome")
-        print("📊 reconstruction_quality.png - Original vs reconstructed data comparison")
+        print("📊 mmr_patterns.png - APM patterns by outcome (Win/Loss)")
+        print("📊 reconstruction_quality.png - Original vs reconstructed APM comparison")
         print("🌐 interactive_latent_explorer.html - Interactive 3D latent space explorer")
         print()
         print(f"All files saved in: {output_dir.absolute()}")
@@ -62,7 +62,8 @@ def main():
         print("💡 Next steps:")
         print("   • Open the interactive HTML file in your browser")
         print("   • Examine the latent dimension distributions")
-        print("   • Look for patterns in the economic heatmaps")
+        print("   • Look for patterns in the APM scatter plots")
+        print("   • Compare original vs reconstructed APM values")
         
     except Exception as e:
         print(f"❌ Error during visualization: {e}")

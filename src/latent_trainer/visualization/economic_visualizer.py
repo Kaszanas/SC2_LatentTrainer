@@ -17,27 +17,41 @@ from models.guided_vae import suGuidedVAE, Classifier
 from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS, EXAMPLE_REAL_REPLAYPACKS
 from sc2_datasets.transforms.pytorch.economy_vs_outcome import economy_average_vs_outcome
+from sc2_datasets.transforms.mmr_vs_result import mmr_vs_result
 
 
 class EconomicPatternVisualizer:
-    """Visualizer for economic patterns learned by the Guided VAE."""
+    """Visualizer for MMR patterns learned by the Guided VAE."""
     
-    def __init__(self, model_path=None, n_vae_dis=16):
-        """Initialize the visualizer."""
+    def __init__(self, model_path=None, n_vae_dis=16, transform='mmr'):
+        """Initialize the visualizer.
+        
+        Args:
+            model_path: Path to trained model checkpoint
+            n_vae_dis: Number of VAE latent dimensions
+            transform: Type of transform to use ('mmr' or 'economy')
+        """
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = suGuidedVAE(n_vae_dis=n_vae_dis).to(self.device)
         self.classifier = Classifier(n_vae_dis=n_vae_dis).to(self.device)
+        self.transform_type = transform
         
         if model_path:
             self.load_model(model_path)
+        
+        # Choose transform based on type
+        if transform == 'mmr':
+            transform_fn = mmr_vs_result
+        else:
+            transform_fn = economy_average_vs_outcome
         
         # Set up data module
         self.datamodule = SC2EGSetDataModule(
             unpack_dir="./data/unpack",
             download_dir="./data/download",
             download=True,
-            replaypacks=SC2EGSET_DATASET_REPLAYPACKS,
-            transform=economy_average_vs_outcome,
+            replaypacks=EXAMPLE_REAL_REPLAYPACKS,
+            transform=transform_fn,
         )
         self.datamodule.prepare_data()
         self.datamodule.setup()
@@ -73,45 +87,59 @@ class EconomicPatternVisualizer:
             for i, (data, label) in enumerate(dataloader):
                 if sample_count >= num_samples:
                     break
+                
+                # Skip if either data or label is None (filtered by transform)
+                if data is None or label is None:
+                    continue
                     
-                # Fix data shape
-                if len(data.shape) == 3:
-                    data = data.unsqueeze(0)
+                # Handle batched data - process each sample individually
+                batch_size = data.shape[0] if len(data.shape) > 1 else 1
                 
-                # Fix label shape
-                if len(label.shape) == 1 and label.shape[0] > 1:
-                    # Multiple labels - take the first one
-                    label = label[0:1].float()
-                elif len(label.shape) == 1:
-                    label = label.float()
-                
-                data = data.to(self.device)
-                label = label.to(self.device)
-                
-                # Get latent representation
-                mu, logvar = self.model.encode(data)
-                z = self.model.reparameterize(mu, logvar)
-                recon = self.model.decode(z)
-                
-                latent_codes.append(z.cpu().numpy())
-                labels.append(label.cpu().numpy())
-                reconstructions.append(recon.cpu().numpy())
-                original_data.append(data.cpu().numpy())
-                
-                sample_count += 1
-                
-                if sample_count % 50 == 0:
-                    print(f"Processed {sample_count} samples...")
+                for j in range(batch_size):
+                    if sample_count >= num_samples:
+                        break
+                    
+                    # Extract single sample
+                    if batch_size > 1:
+                        sample_data = data[j:j+1]
+                        sample_label = label[j:j+1] if len(label.shape) > 0 else label.unsqueeze(0)
+                    else:
+                        sample_data = data.unsqueeze(0) if len(data.shape) == 1 else data
+                        sample_label = label.unsqueeze(0) if len(label.shape) == 0 else label
+                    
+                    sample_data = sample_data.to(self.device)
+                    sample_label = sample_label.to(self.device).float()
+                    
+                    # Get latent representation
+                    mu, logvar = self.model.encode(sample_data)
+                    z = self.model.reparameterize(mu, logvar)
+                    recon = self.model.decode(z)
+                    
+                    latent_codes.append(z.cpu().numpy().squeeze())
+                    labels.append(sample_label.cpu().numpy().squeeze())
+                    reconstructions.append(recon.cpu().numpy().squeeze())
+                    original_data.append(sample_data.cpu().numpy().squeeze())
+                    
+                    sample_count += 1
+                    
+                    if sample_count % 50 == 0:
+                        print(f"Processed {sample_count} samples...")
         
         print(f"Total samples collected: {sample_count}")
         
         if sample_count == 0:
             raise ValueError("No samples collected from dataloader!")
         
-        return (np.vstack(latent_codes), 
-                np.hstack(labels), 
-                np.vstack(reconstructions),
-                np.vstack(original_data))
+        # Stack arrays appropriately based on their shapes
+        latent_codes_arr = np.array(latent_codes)
+        labels_arr = np.array(labels)
+        reconstructions_arr = np.array(reconstructions)
+        original_data_arr = np.array(original_data)
+        
+        return (latent_codes_arr, 
+                labels_arr, 
+                reconstructions_arr,
+                original_data_arr)
     
     def plot_latent_space_2d(self, latent_codes, labels, method='tsne', save_path=None):
         """Visualize latent space in 2D using t-SNE or PCA."""
@@ -189,7 +217,7 @@ class EconomicPatternVisualizer:
         plt.show()
     
     def plot_economic_patterns_heatmap(self, original_data, labels, save_path=None):
-        """Plot heatmap of average economic patterns by outcome."""
+        """Plot heatmap of average patterns by outcome (works for both MMR and economic data)."""
         # Check if we have both wins and losses
         unique_labels = np.unique(labels)
         n_wins = np.sum(labels == 1)
@@ -201,11 +229,80 @@ class EconomicPatternVisualizer:
             print("No data available for heatmap")
             return
         
+        # Check data shape to determine if it's MMR or economic data
+        if len(original_data.shape) == 2 and original_data.shape[1] == 2:
+            # MMR data: shape (batch, 2) - just 2 APM values
+            self._plot_mmr_patterns(original_data, labels, n_wins, n_losses, save_path)
+        else:
+            # Economic data: shape (batch, 66, 2, 39)
+            self._plot_economic_patterns(original_data, labels, n_wins, n_losses, save_path)
+    
+    def _plot_mmr_patterns(self, original_data, labels, n_wins, n_losses, save_path):
+        """Plot MMR/APM patterns."""
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # Plot 1: Scatter plot of Player 1 APM vs Player 2 APM
+        if n_wins > 0:
+            wins_data = original_data[labels == 1]
+            axes[0].scatter(wins_data[:, 0], wins_data[:, 1], 
+                          alpha=0.6, c='blue', label=f'Wins ({n_wins})', s=50)
+        
+        if n_losses > 0:
+            losses_data = original_data[labels == 0]
+            axes[0].scatter(losses_data[:, 0], losses_data[:, 1], 
+                          alpha=0.6, c='red', label=f'Losses ({n_losses})', s=50)
+        
+        axes[0].set_xlabel('Player 1 APM', fontsize=12)
+        axes[0].set_ylabel('Player 2 APM', fontsize=12)
+        axes[0].set_title('APM Distribution by Outcome', fontsize=14)
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+        
+        # Plot 2: Bar plot of average APM by outcome
+        categories = []
+        p1_means = []
+        p2_means = []
+        colors = []
+        
+        if n_wins > 0:
+            wins_data = original_data[labels == 1]
+            categories.append('Wins')
+            p1_means.append(wins_data[:, 0].mean())
+            p2_means.append(wins_data[:, 1].mean())
+            colors.append('blue')
+        
+        if n_losses > 0:
+            losses_data = original_data[labels == 0]
+            categories.append('Losses')
+            p1_means.append(losses_data[:, 0].mean())
+            p2_means.append(losses_data[:, 1].mean())
+            colors.append('red')
+        
+        x = np.arange(len(categories))
+        width = 0.35
+        
+        axes[1].bar(x - width/2, p1_means, width, label='Player 1 APM', alpha=0.8)
+        axes[1].bar(x + width/2, p2_means, width, label='Player 2 APM', alpha=0.8)
+        
+        axes[1].set_ylabel('Average APM', fontsize=12)
+        axes[1].set_title('Average APM by Outcome', fontsize=14)
+        axes[1].set_xticks(x)
+        axes[1].set_xticklabels(categories)
+        axes[1].legend()
+        axes[1].grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.show()
+    
+    def _plot_economic_patterns(self, original_data, labels, n_wins, n_losses, save_path):
+        """Plot economic patterns for economy data."""
         # Reshape data from (batch, 66, 2, 39) to (batch, 66*2*39) for easier averaging
         # Then reshape back to (66, 2*39) for visualization
         reshaped_data = original_data.reshape(original_data.shape[0], 66, -1)  # (batch, 66, 78)
         
-        fig, axes = plt.subplots(1, min(3, len(unique_labels) + 1), figsize=(18, 6))
+        fig, axes = plt.subplots(1, min(3, len(np.unique(labels)) + 1), figsize=(18, 6))
         if not isinstance(axes, np.ndarray):
             axes = [axes]
         
@@ -253,6 +350,77 @@ class EconomicPatternVisualizer:
         actual_samples = min(n_samples, len(original_data))
         indices = np.random.choice(len(original_data), actual_samples, replace=False)
         
+        # Check data shape to determine visualization type
+        if len(original_data.shape) == 2 and original_data.shape[1] == 2:
+            # MMR data: shape (batch, 2)
+            self._plot_mmr_reconstruction(original_data, reconstructions, labels, indices, save_path)
+        else:
+            # Economic data: shape (batch, 66, 2, 39)
+            self._plot_economic_reconstruction(original_data, reconstructions, labels, indices, save_path)
+    
+    def _plot_mmr_reconstruction(self, original_data, reconstructions, labels, indices, save_path):
+        """Plot reconstruction quality for MMR data."""
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        
+        # Plot 1: Original vs Reconstructed scatter
+        ax = axes[0, 0]
+        for idx in indices:
+            outcome = "Win" if labels[idx] == 1 else "Loss"
+            color = 'blue' if labels[idx] == 1 else 'red'
+            ax.scatter(original_data[idx, 0], original_data[idx, 1], 
+                      marker='o', s=100, alpha=0.7, c=color, label=f'Original ({outcome})')
+            ax.scatter(reconstructions[idx, 0], reconstructions[idx, 1], 
+                      marker='x', s=100, alpha=0.7, c=color, label=f'Reconstructed')
+            
+            # Draw line connecting original to reconstruction
+            ax.plot([original_data[idx, 0], reconstructions[idx, 0]], 
+                   [original_data[idx, 1], reconstructions[idx, 1]], 
+                   'k--', alpha=0.3)
+        
+        ax.set_xlabel('Player 1 APM', fontsize=12)
+        ax.set_ylabel('Player 2 APM', fontsize=12)
+        ax.set_title('Original vs Reconstructed APM', fontsize=14)
+        ax.grid(True, alpha=0.3)
+        
+        # Plot 2: Reconstruction error per sample
+        ax = axes[0, 1]
+        errors = np.sqrt(((original_data[indices] - reconstructions[indices])**2).sum(axis=1))
+        colors = ['blue' if labels[idx] == 1 else 'red' for idx in indices]
+        bars = ax.bar(range(len(indices)), errors, color=colors, alpha=0.7)
+        ax.set_xlabel('Sample Index', fontsize=12)
+        ax.set_ylabel('Reconstruction Error (L2)', fontsize=12)
+        ax.set_title('Reconstruction Error per Sample', fontsize=14)
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        # Plot 3: Player 1 APM comparison
+        ax = axes[1, 0]
+        x = range(len(indices))
+        ax.plot(x, original_data[indices, 0], 'o-', label='Original', markersize=8)
+        ax.plot(x, reconstructions[indices, 0], 'x--', label='Reconstructed', markersize=8)
+        ax.set_xlabel('Sample Index', fontsize=12)
+        ax.set_ylabel('Player 1 APM', fontsize=12)
+        ax.set_title('Player 1 APM: Original vs Reconstructed', fontsize=14)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Plot 4: Player 2 APM comparison
+        ax = axes[1, 1]
+        ax.plot(x, original_data[indices, 1], 'o-', label='Original', markersize=8)
+        ax.plot(x, reconstructions[indices, 1], 'x--', label='Reconstructed', markersize=8)
+        ax.set_xlabel('Sample Index', fontsize=12)
+        ax.set_ylabel('Player 2 APM', fontsize=12)
+        ax.set_title('Player 2 APM: Original vs Reconstructed', fontsize=14)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.show()
+    
+    def _plot_economic_reconstruction(self, original_data, reconstructions, labels, indices, save_path):
+        """Plot reconstruction quality for economic data."""
+        actual_samples = len(indices)
         fig, axes = plt.subplots(actual_samples, 3, figsize=(15, 3*actual_samples))
         
         # Handle single sample case
@@ -365,9 +533,10 @@ class EconomicPatternVisualizer:
         self.plot_latent_dimensions(latent_codes, labels,
                                   save_path=output_path / 'latent_dimensions.png')
         
-        print("Creating economic pattern heatmaps...")
+        print("Creating pattern heatmaps...")
+        pattern_filename = 'mmr_patterns.png' if self.transform_type == 'mmr' else 'economic_patterns.png'
         self.plot_economic_patterns_heatmap(original_data, labels,
-                                          save_path=output_path / 'economic_patterns.png')
+                                          save_path=output_path / pattern_filename)
         
         print("Analyzing reconstruction quality...")
         n_recon_samples = min(5, n_samples)
