@@ -7,11 +7,13 @@ requires-python = ">=3.11"
 dependencies = [
     "click>=8.3.0",
     "matplotlib>=3.10.7",
+    "optuna>=4.5.0",
     "plotly>=6.3.1",
     "plotpy>=2.7.5",
     "sc2-datasets",
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",
+    "tensorboard>=2.20.0",
 ]
 
 [build-system]

@@ -11,6 +11,9 @@ __pycache__/
 # C extensions
 *.so
 
+# TensorBoard log files
+output/tensorboard_logs/
+
 # Distribution / packaging
 .Python
 env/

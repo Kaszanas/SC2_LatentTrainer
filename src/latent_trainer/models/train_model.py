@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 import click
+import optuna
 import logging
 from pathlib import Path
 import os
@@ -11,6 +12,7 @@ import torch
 import torch.utils.data
 from torch import optim
 from torch.nn import functional as F
+from torch.utils.tensorboard import SummaryWriter
 import sys
 
 # Add the project root to the Python path
@@ -31,7 +33,7 @@ from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
 from sc2_datasets.transforms.utils import select_outcome_1v1
 
 
-def train_supervised(epoch, model, model_c, optimizer, optimizer_c, dataloader, w_cls, device):
+def train_supervised(epoch, model, model_c, optimizer, optimizer_c, dataloader, w_cls, device, writer=None):
     """Train the model for one epoch with supervision."""
     model.train()
     re_loss = 0
@@ -148,23 +150,95 @@ def train_supervised(epoch, model, model_c, optimizer, optimizer_c, dataloader, 
     cls1_error = cls1_error / total_valid_samples
     cls2_error = cls2_error / total_valid_samples
     
+    # Calculate final values for printing and logging
+    re_loss_avg = re_loss / total_valid_samples
+    acc = 100.0 * correct / total_valid_samples
+    acc1 = 100.0 * correct1 / total_valid_samples
+    acc2 = 100.0 * correct2 / total_valid_samples
+    
     print(
         "====> Epoch: {} reconstruction loss: {:.4f} Cls loss: {:.4f} acc: {:.2f} cls1 loss: {:.4f} cls2 loss: {:.4f} acc1: {:.2f} acc2: {:.2f} valid samples: {}".format(
             epoch,
-            re_loss / total_valid_samples,
+            re_loss_avg,
             cls_error,
-            100.0 * correct / total_valid_samples,
+            acc,
             cls1_error,
             cls2_error,
-            100.0 * correct1 / total_valid_samples,
-            100.0 * correct2 / total_valid_samples,
+            acc1,
+            acc2,
             total_valid_samples
         )
     )
     
+    # Log to TensorBoard
+    if writer is not None:
+        writer.add_scalar('Loss/reconstruction', re_loss_avg, epoch)
+        writer.add_scalar('Loss/classification', cls_error, epoch)
+        writer.add_scalar('Loss/classifier1', cls1_error, epoch)
+        writer.add_scalar('Loss/classifier2', cls2_error, epoch)
+        writer.add_scalar('Loss/total', re_loss_avg + cls_error + cls1_error + cls2_error, epoch)
+        writer.add_scalar('Accuracy/vae', acc, epoch)
+        writer.add_scalar('Accuracy/classifier1', acc1, epoch)
+        writer.add_scalar('Accuracy/classifier2', acc2, epoch)
+        writer.add_scalar('Training/valid_samples', total_valid_samples, epoch)
+    
     # Return total loss for model saving
-    total_loss = re_loss / total_valid_samples + cls_error + cls1_error + cls2_error
+    total_loss = re_loss_avg + cls_error + cls1_error + cls2_error
     return total_loss
+
+def objective(trial, epochs, train_dataset, output, device):
+    """Optuna objective function for hyperparameter optimization."""
+    # Suggest hyperparameters
+    nz = trial.suggest_int('nz', 8, 64)
+    cls = trial.suggest_float('cls', 0.1, 10.0)
+    lr = trial.suggest_float('lr', 1e-5, 1e-3, log=True)
+    weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-3, log=True)
+    lr_c = trial.suggest_float('lr_c', 1e-5, 1e-3, log=True)
+    weight_decay_c = trial.suggest_float('weight_decay_c', 1e-6, 1e-3, log=True)
+    
+    logging.info(f"Trial {trial.number}: nz={nz}, cls={cls}, lr={lr}, weight_decay={weight_decay}, lr_c={lr_c}, weight_decay_c={weight_decay_c}")
+    
+    # Set up model and optimizer with suggested hyperparameters
+    model = suGuidedVAE(n_vae_dis=nz).to(device)
+    model_c = Classifier(n_vae_dis=nz).to(device)
+    
+    optimizer = optim.Adam(
+        model.parameters(), lr=lr, weight_decay=weight_decay
+    )
+    optimizer_c = optim.Adam(
+        model_c.parameters(), lr=lr_c, weight_decay=weight_decay_c
+    )
+    
+    # Create TensorBoard writer for this trial
+    tensorboard_dir = os.path.join(output, f'tensorboard_logs/trial_{trial.number}')
+    writer = SummaryWriter(log_dir=tensorboard_dir)
+    
+    # Train for a few epochs and return the final loss
+    final_loss = float('inf')
+    for epoch in range(1, epochs + 1):
+        epoch_loss = train_supervised(
+            epoch,
+            model,
+            model_c,
+            optimizer,
+            optimizer_c,
+            train_dataset,
+            cls,
+            device,
+            writer,
+        )
+        final_loss = epoch_loss
+        
+        # Report intermediate value for pruning
+        trial.report(epoch_loss, epoch)
+        
+        # Handle pruning based on the intermediate value
+        if trial.should_prune():
+            writer.close()
+            raise optuna.exceptions.TrialPruned()
+    
+    writer.close()
+    return final_loss
 
 
 # CLICK command line interface
@@ -181,8 +255,11 @@ def train_supervised(epoch, model, model_c, optimizer, optimizer_c, dataloader, 
 @click.option('--lr_c', default=1e-4, help='classifier learning rate(in supervised version)', type=float)
 @click.option('--weight_decay_c', default=1e-4, help='classifier weight decay(in supervised version)', type=float)
 @click.option('--transform', default='mmr_vs_result', type=click.Choice(['mmr_vs_result', 'economy_average_vs_outcome', 'average_player_stats', 'select_outcome_1v1']), help='which transform to use')
+@click.option('--optuna', 'use_optuna', is_flag=True, help='use Optuna for hyperparameter optimization')
+@click.option('--n_trials', default=20, help='number of Optuna trials (only used with --optuna)', type=int)
+@click.option('--optuna_epochs', default=3, help='number of epochs per trial for Optuna (only used with --optuna)', type=int)
 
-def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, weight_decay, lr_c, weight_decay_c, transform):
+def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, weight_decay, lr_c, weight_decay_c, transform, use_optuna, n_trials, optuna_epochs):
     """Main function to parse arguments and start training."""
     # Set up more verbose logging to help diagnose issues
     logging.basicConfig(level=logging.DEBUG, format=LOGGING_FORMAT)
@@ -199,16 +276,6 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
         os.mkdir(output)
 
     torch.manual_seed(1024)
-
-    model = suGuidedVAE(n_vae_dis=nz).to(device)
-    model_c = Classifier(n_vae_dis=nz).to(device)
-
-    optimizer = optim.Adam(
-        model.parameters(), lr=lr, weight_decay=weight_decay
-    )
-    optimizer_c = optim.Adam(
-        model_c.parameters(), lr=lr_c, weight_decay=weight_decay_c
-    )
     
     # Select the appropriate transform
     transform_map = {
@@ -232,43 +299,162 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
     # Use the dataloader directly from the datamodule
     train_dataset = sc2_egset_datamodule.train_dataloader()
     
-    best_loss = float('inf')
-    
-    for epoch in range(1, epochs + 1):
-        epoch_loss = train_supervised(
-            epoch,
-            model,
-            model_c,
-            optimizer,
-            optimizer_c,
-            train_dataset,
-            cls,
-            device,
+    # Check if Optuna optimization is requested
+    if use_optuna:
+        logging.info("Starting Optuna hyperparameter optimization...")
+        logging.info(f"Running {n_trials} trials with {optuna_epochs} epochs each")
+        
+        # Create Optuna study
+        study = optuna.create_study(
+            direction='minimize',
+            pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=5)
         )
         
-        # Save the best model
-        if epoch_loss < best_loss:
-            best_loss = epoch_loss
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'classifier_state_dict': model_c.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'optimizer_c_state_dict': optimizer_c.state_dict(),
-                'loss': best_loss,
-            }, f'{output}/best_model.pth')
-            print(f"Saved best model at epoch {epoch} with loss {best_loss:.4f}")
-    
-    # Save final model
-    torch.save({
-        'epoch': epochs,
-        'model_state_dict': model.state_dict(),
-        'classifier_state_dict': model_c.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'optimizer_c_state_dict': optimizer_c.state_dict(),
-        'loss': best_loss,
-    }, f'{output}/final_model.pth')
-    print(f"Training completed! Final model saved to {output}/final_model.pth")
+        # Run optimization
+        study.optimize(
+            lambda trial: objective(trial, optuna_epochs, train_dataset, output, device),
+            n_trials=n_trials
+        )
+        
+        # Print results
+        logging.info("Optuna optimization completed!")
+        logging.info(f"Best trial: {study.best_trial.number}")
+        logging.info(f"Best value (loss): {study.best_trial.value}")
+        logging.info("Best hyperparameters:")
+        for key, value in study.best_trial.params.items():
+            logging.info(f"  {key}: {value}")
+        
+        # Save best hyperparameters
+        best_params_path = os.path.join(output, 'best_hyperparameters.txt')
+        with open(best_params_path, 'w') as f:
+            f.write(f"Best trial: {study.best_trial.number}\n")
+            f.write(f"Best value (loss): {study.best_trial.value}\n")
+            f.write("Best hyperparameters:\n")
+            for key, value in study.best_trial.params.items():
+                f.write(f"  {key}: {value}\n")
+        logging.info(f"Best hyperparameters saved to {best_params_path}")
+        
+        # Train final model with best hyperparameters
+        logging.info("Training final model with best hyperparameters...")
+        best_params = study.best_trial.params
+        model = suGuidedVAE(n_vae_dis=best_params['nz']).to(device)
+        model_c = Classifier(n_vae_dis=best_params['nz']).to(device)
+        
+        optimizer = optim.Adam(
+            model.parameters(), lr=best_params['lr'], weight_decay=best_params['weight_decay']
+        )
+        optimizer_c = optim.Adam(
+            model_c.parameters(), lr=best_params['lr_c'], weight_decay=best_params['weight_decay_c']
+        )
+        
+        # Create TensorBoard writer for final training
+        tensorboard_dir = os.path.join(output, 'tensorboard_logs/final_model')
+        writer = SummaryWriter(log_dir=tensorboard_dir)
+        
+        best_loss = float('inf')
+        for epoch in range(1, epochs + 1):
+            epoch_loss = train_supervised(
+                epoch,
+                model,
+                model_c,
+                optimizer,
+                optimizer_c,
+                train_dataset,
+                best_params['cls'],
+                device,
+                writer,
+            )
+            
+            # Save the best model
+            if epoch_loss < best_loss:
+                best_loss = epoch_loss
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'classifier_state_dict': model_c.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'optimizer_c_state_dict': optimizer_c.state_dict(),
+                    'loss': best_loss,
+                    'hyperparameters': best_params,
+                }, f'{output}/best_model.pth')
+                print(f"Saved best model at epoch {epoch} with loss {best_loss:.4f}")
+        
+        writer.close()
+        
+        # Save final model
+        torch.save({
+            'epoch': epochs,
+            'model_state_dict': model.state_dict(),
+            'classifier_state_dict': model_c.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'optimizer_c_state_dict': optimizer_c.state_dict(),
+            'loss': best_loss,
+            'hyperparameters': best_params,
+        }, f'{output}/final_model.pth')
+        print(f"Training completed with Optuna! Final model saved to {output}/final_model.pth")
+        
+    else:
+        # Normal training without Optuna
+        logging.info("Starting normal training (without Optuna)...")
+        
+        # Create TensorBoard writer
+        tensorboard_dir = os.path.join(output, 'tensorboard_logs')
+        writer = SummaryWriter(log_dir=tensorboard_dir)
+        logging.info(f"TensorBoard logs will be saved to: {tensorboard_dir}")
+        logging.info(f"To view logs, run: tensorboard --logdir={tensorboard_dir}")
+        
+        model = suGuidedVAE(n_vae_dis=nz).to(device)
+        model_c = Classifier(n_vae_dis=nz).to(device)
+        
+        optimizer = optim.Adam(
+            model.parameters(), lr=lr, weight_decay=weight_decay
+        )
+        optimizer_c = optim.Adam(
+            model_c.parameters(), lr=lr_c, weight_decay=weight_decay_c
+        )
+        
+        best_loss = float('inf')
+        
+        for epoch in range(1, epochs + 1):
+            epoch_loss = train_supervised(
+                epoch,
+                model,
+                model_c,
+                optimizer,
+                optimizer_c,
+                train_dataset,
+                cls,
+                device,
+                writer,
+            )
+            
+            # Save the best model
+            if epoch_loss < best_loss:
+                best_loss = epoch_loss
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'classifier_state_dict': model_c.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'optimizer_c_state_dict': optimizer_c.state_dict(),
+                    'loss': best_loss,
+                }, f'{output}/best_model.pth')
+                print(f"Saved best model at epoch {epoch} with loss {best_loss:.4f}")
+        
+        # Close the TensorBoard writer
+        writer.close()
+        logging.info("TensorBoard writer closed")
+        
+        # Save final model
+        torch.save({
+            'epoch': epochs,
+            'model_state_dict': model.state_dict(),
+            'classifier_state_dict': model_c.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'optimizer_c_state_dict': optimizer_c.state_dict(),
+            'loss': best_loss,
+        }, f'{output}/final_model.pth')
+        print(f"Training completed! Final model saved to {output}/final_model.pth")
 
 
 
