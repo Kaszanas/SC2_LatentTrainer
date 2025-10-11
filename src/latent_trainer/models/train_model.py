@@ -22,48 +22,13 @@ from latent_trainer.config import LOGGING_FORMAT
 
 from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 
-from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS
+from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS, EXAMPLE_REAL_REPLAYPACKS
 from sc2_datasets.transforms.mmr_vs_result import mmr_vs_result
 from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
     economy_average_vs_outcome,
 )
 
 from sc2_datasets.transforms.utils import average_player_stats, select_outcome_1v1
-
-
-# Define custom collate function at module level so it's pickle-able
-def custom_collate(batch):
-    # Filter out None values
-    batch = list(filter(lambda x: x is not None and None not in x, batch))
-    if len(batch) == 0:
-        return None, None
-    
-    # Use default_collate for the filtered batch
-    try:
-        return torch.utils.data.dataloader.default_collate(batch)
-    except Exception as e:
-        logging.warning(f"Error in collation: {e}")
-        return None, None
-
-# Create a wrapper dataset to handle exceptions in __getitem__
-class SafeDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset):
-        self.dataset = dataset
-    
-    def __len__(self):
-        return len(self.dataset)
-    
-    def __getitem__(self, idx):
-        try:
-            return self.dataset[idx]
-        except IndexError:
-            # Handle index out of range errors by returning None
-            logging.warning(f"IndexError in dataset __getitem__ for index {idx}")
-            return None, None
-        except Exception as e:
-            # Handle other exceptions
-            logging.warning(f"Exception in dataset __getitem__ for index {idx}: {e}")
-            return None, None
 
 
 def train_supervised(epoch, model, model_c, optimizer, optimizer_c, dataloader, w_cls, device):
@@ -78,26 +43,7 @@ def train_supervised(epoch, model, model_c, optimizer, optimizer_c, dataloader, 
     correct2 = 0
     total_valid_samples = 0
     
-    for batch_idx, batch_data in enumerate(tqdm(dataloader)):
-        # Skip invalid batches
-        if batch_data is None or not isinstance(batch_data, tuple) or len(batch_data) != 2:
-            logging.warning(f"Invalid batch format at index {batch_idx}")
-            continue
-            
-        data, label = batch_data
-        
-        if data is None or label is None:
-            logging.warning(f"None data/label at batch {batch_idx}")
-            continue
-            
-        if isinstance(data, torch.Tensor) and data.numel() == 0:
-            logging.warning(f"Empty data tensor at batch {batch_idx}")
-            continue
-            
-        if isinstance(label, torch.Tensor) and label.numel() == 0:
-            logging.warning(f"Empty label tensor at batch {batch_idx}")
-            continue
-        
+    for batch_idx, (data, label) in enumerate(tqdm(dataloader)):
         try:
             # Process labels
             if label.dtype == torch.int8:
@@ -238,7 +184,7 @@ def arg_parse():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=128,
+        default=10,
         metavar="N",
         help="number of epochs to train (default: 10)",
     )
@@ -304,26 +250,14 @@ if __name__ == "__main__":
         unpack_dir="./data/unpack",  # Specify existing directory path, where the data will be unpacked.
         download_dir="./data/download",  # Specify existing directory path, where the data will be downloaded.
         download=True,
-        replaypacks=SC2EGSET_DATASET_REPLAYPACKS,  # Use a synthetic replaypack containing 1 replay.
+        replaypacks=EXAMPLE_REAL_REPLAYPACKS,  # Use a synthetic replaypack containing 1 replay. # Change to SC2EGSET_DATASET_REPLAYPACKS for full dataset.
         transform=mmr_vs_result,  # Use MMR vs result - simpler and more robust
     )
     sc2_egset_datamodule.prepare_data()
     sc2_egset_datamodule.setup()
     
-    # Use the custom collate function
-    train_dataloader = sc2_egset_datamodule.train_dataloader()
-    
-    # Wrap the dataset with our SafeDataset to handle exceptions
-    safe_dataset = SafeDataset(train_dataloader.dataset)
-    
-    # Override the collate_fn with our custom one and disable multiprocessing
-    train_dataset = torch.utils.data.DataLoader(
-        safe_dataset,
-        batch_size=train_dataloader.batch_size,
-        shuffle=True,  # Always shuffle the training data
-        num_workers=0,  # Set to 0 to avoid multiprocessing issues
-        collate_fn=custom_collate
-    )
+    # Use the dataloader directly from the datamodule
+    train_dataset = sc2_egset_datamodule.train_dataloader()
     
     best_loss = float('inf')
     
