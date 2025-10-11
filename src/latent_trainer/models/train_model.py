@@ -258,8 +258,10 @@ def objective(trial, epochs, train_dataset, output, device):
 @click.option('--optuna', 'use_optuna', is_flag=True, help='use Optuna for hyperparameter optimization')
 @click.option('--n_trials', default=20, help='number of Optuna trials (only used with --optuna)', type=int)
 @click.option('--optuna_epochs', default=3, help='number of epochs per trial for Optuna (only used with --optuna)', type=int)
+@click.option('--optuna_db', default='sqlite:///optuna_study.db', help='Optuna database URL for dashboard (only used with --optuna)', type=str)
+@click.option('--study_name', default='vae_optimization', help='Optuna study name (only used with --optuna)', type=str)
 
-def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, weight_decay, lr_c, weight_decay_c, transform, use_optuna, n_trials, optuna_epochs):
+def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, weight_decay, lr_c, weight_decay_c, transform, use_optuna, n_trials, optuna_epochs, optuna_db, study_name):
     """Main function to parse arguments and start training."""
     # Set up more verbose logging to help diagnose issues
     logging.basicConfig(level=logging.DEBUG, format=LOGGING_FORMAT)
@@ -303,11 +305,17 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
     if use_optuna:
         logging.info("Starting Optuna hyperparameter optimization...")
         logging.info(f"Running {n_trials} trials with {optuna_epochs} epochs each")
+        logging.info(f"Study will be saved to: {optuna_db}")
+        logging.info(f"Study name: {study_name}")
+        logging.info(f"To view Optuna Dashboard, run: optuna-dashboard {optuna_db}")
         
-        # Create Optuna study
+        # Create Optuna study with database storage
         study = optuna.create_study(
+            study_name=study_name,
+            storage=optuna_db,
             direction='minimize',
-            pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=5)
+            pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=5),
+            load_if_exists=True  # Allow resuming if study exists
         )
         
         # Run optimization
@@ -324,14 +332,23 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
         for key, value in study.best_trial.params.items():
             logging.info(f"  {key}: {value}")
         
+        logging.info(f"\n{'='*60}")
+        logging.info("To view the Optuna Dashboard with all trials, run:")
+        logging.info(f"  optuna-dashboard {optuna_db}")
+        logging.info(f"{'='*60}\n")
+        
         # Save best hyperparameters
         best_params_path = os.path.join(output, 'best_hyperparameters.txt')
         with open(best_params_path, 'w') as f:
+            f.write(f"Optuna Study: {study_name}\n")
+            f.write(f"Database: {optuna_db}\n")
+            f.write(f"Total trials: {len(study.trials)}\n")
             f.write(f"Best trial: {study.best_trial.number}\n")
             f.write(f"Best value (loss): {study.best_trial.value}\n")
-            f.write("Best hyperparameters:\n")
+            f.write("\nBest hyperparameters:\n")
             for key, value in study.best_trial.params.items():
                 f.write(f"  {key}: {value}\n")
+            f.write(f"\nTo view dashboard: optuna-dashboard {optuna_db}\n")
         logging.info(f"Best hyperparameters saved to {best_params_path}")
         
         # Train final model with best hyperparameters

@@ -8,6 +8,7 @@ dependencies = [
     "click>=8.3.0",
     "matplotlib>=3.10.7",
     "optuna>=4.5.0",
+    "optuna-dashboard>=0.19.0",
     "plotly>=6.3.1",
     "plotpy>=2.7.5",
     "sc2-datasets",
