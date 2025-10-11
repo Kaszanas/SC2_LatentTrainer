@@ -5,7 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "matplotlib>=3.10.7",
+    "plotly>=6.3.1",
+    "plotpy>=2.7.5",
     "sc2-datasets",
+    "scikit-learn>=1.7.2",
+    "seaborn>=0.13.2",
 ]
 
 [build-system]
