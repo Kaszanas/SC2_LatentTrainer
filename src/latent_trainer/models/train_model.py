@@ -6,13 +6,11 @@ import optuna
 import logging
 from pathlib import Path
 import os
-from tqdm import tqdm
 
 import torch
 import torch.utils.data
 from torch import optim
 from torch.nn import functional as F
-from torch.utils.tensorboard import SummaryWriter
 import sys
 
 # Add the project root to the Python path
@@ -24,222 +22,210 @@ from latent_trainer.config import LOGGING_FORMAT
 
 from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 
-from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS, EXAMPLE_REAL_REPLAYPACKS
+from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS, EXAMPLE_REAL_REPLAYPACKS #noqa F401
 from sc2_datasets.transforms.mmr_vs_result import mmr_vs_result
 from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
     economy_average_vs_outcome,
 )
 
 from sc2_datasets.transforms.utils import select_outcome_1v1
+import lightning as L
+from lightning.pytorch import Trainer
 
 
-def train_supervised(epoch, model, model_c, optimizer, optimizer_c, dataloader, w_cls, device, writer=None):
-    """Train the model for one epoch with supervision."""
-    model.train()
-    re_loss = 0
-    cls_error = 0
-    correct = 0
-    cls1_error = 0
-    cls2_error = 0
-    correct1 = 0
-    correct2 = 0
-    total_valid_samples = 0
-    
-    for batch_idx, (data, label) in enumerate(tqdm(dataloader)):
-        try:
-            # Process labels
-            if label.dtype == torch.int8:
-                label = label.float()
-            
-            if len(label.shape) == 1:
-                label = label.unsqueeze(1)
-                
-            # Filter out invalid labels (-1)
-            valid_indices = (label != -1).squeeze()
-            
-            if valid_indices.sum() == 0:
-                logging.warning(f"No valid samples after filtering at batch {batch_idx}")
-                continue
-                
-            # Extract valid data
-            valid_data = data[valid_indices]
-            valid_label = label[valid_indices]
-            
-            # Ensure labels are in valid range [0,1]
-            valid_label = torch.clamp(valid_label, 0, 1)
-            
-            # Track valid samples for metrics
-            total_valid_samples += valid_indices.sum().item()
-            
-            # Move to device
-            valid_data = valid_data.to(device)
-            valid_label = valid_label.to(device)
-            
-            # Step 1: VAE training
-            try:
-                optimizer.zero_grad()
-                recon_batch, mu, logvar, re = model(valid_data)
-                loss_list = loss_supervised(recon_batch, valid_data, mu, logvar)
-                loss = loss_list[0]
-                loss_cls = F.binary_cross_entropy(re, valid_label, reduction="sum")
-                cls_error += loss_cls
-                loss += loss_cls * w_cls
-                loss.backward()
-                re_loss += loss_list[1].item()
-                optimizer.step()
-            except Exception as e:
-                logging.error(f"VAE training error: {e}")
-                continue
-                
-            # Step 2: Classifier training
-            try:
-                optimizer_c.zero_grad()
-                z = model.reparameterize(mu, logvar).detach()
-                z = z[:, 1:]
-                cls1 = model_c(z)
-                loss = F.binary_cross_entropy(cls1, valid_label, reduction="sum")
-                cls1_error += loss.item()
-                loss *= w_cls
-                loss.backward()
-                optimizer_c.step()
-            except Exception as e:
-                logging.error(f"Classifier training error: {e}")
-                continue
-                
-            # Step 3: Adversarial training
-            try:
-                optimizer.zero_grad()
-                mu, logvar = model.encode(valid_data)
-                z = model.reparameterize(mu, logvar)
-                z = z[:, 1:]
-                cls2 = model_c(z)
-                label1 = torch.empty_like(valid_label).fill_(0.5)
-                loss = F.binary_cross_entropy(cls2, label1, reduction="sum")
-                cls2_error += loss.item()
-                loss *= w_cls
-                loss.backward()
-                optimizer.step()
-            except Exception as e:
-                logging.error(f"Adversarial training error: {e}")
-                continue
-                
-            # Calculate accuracies
-            try:
-                pred = (re > 0.5).float()
-                correct += pred.eq(valid_label).sum().item()
-                
-                pred = (cls1 > 0.5).float()
-                correct1 += pred.eq(valid_label).sum().item()
-                
-                pred = (cls2 > 0.5).float()
-                correct2 += pred.eq(valid_label).sum().item()
-            except Exception as e:
-                logging.error(f"Accuracy calculation error: {e}")
-                
-        except Exception as e:
-            logging.error(f"General batch processing error: {e}")
-            continue
-    
-    # Handle case with no valid samples
-    if total_valid_samples == 0:
-        logging.warning("No valid samples in this epoch!")
-        return float('inf')
-    
-    # Calculate metrics
-    cls_error = cls_error / total_valid_samples
-    cls1_error = cls1_error / total_valid_samples
-    cls2_error = cls2_error / total_valid_samples
-    
-    # Calculate final values for printing and logging
-    re_loss_avg = re_loss / total_valid_samples
-    acc = 100.0 * correct / total_valid_samples
-    acc1 = 100.0 * correct1 / total_valid_samples
-    acc2 = 100.0 * correct2 / total_valid_samples
-    
-    print(
-        "====> Epoch: {} reconstruction loss: {:.4f} Cls loss: {:.4f} acc: {:.2f} cls1 loss: {:.4f} cls2 loss: {:.4f} acc1: {:.2f} acc2: {:.2f} valid samples: {}".format(
-            epoch,
-            re_loss_avg,
-            cls_error,
-            acc,
-            cls1_error,
-            cls2_error,
-            acc1,
-            acc2,
-            total_valid_samples
-        )
-    )
-    
-    # Log to TensorBoard
-    if writer is not None:
-        writer.add_scalar('Loss/reconstruction', re_loss_avg, epoch)
-        writer.add_scalar('Loss/classification', cls_error, epoch)
-        writer.add_scalar('Loss/classifier1', cls1_error, epoch)
-        writer.add_scalar('Loss/classifier2', cls2_error, epoch)
-        writer.add_scalar('Loss/total', re_loss_avg + cls_error + cls1_error + cls2_error, epoch)
-        writer.add_scalar('Accuracy/vae', acc, epoch)
-        writer.add_scalar('Accuracy/classifier1', acc1, epoch)
-        writer.add_scalar('Accuracy/classifier2', acc2, epoch)
-        writer.add_scalar('Training/valid_samples', total_valid_samples, epoch)
-    
-    # Return total loss for model saving
-    total_loss = re_loss_avg + cls_error + cls1_error + cls2_error
-    return total_loss
-
-def objective(trial, epochs, train_dataset, output, device):
-    """Optuna objective function for hyperparameter optimization."""
-    # Suggest hyperparameters
-    nz = trial.suggest_int('nz', 8, 64)
-    cls = trial.suggest_float('cls', 0.1, 10.0)
-    lr = trial.suggest_float('lr', 1e-5, 1e-3, log=True)
-    weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-3, log=True)
-    lr_c = trial.suggest_float('lr_c', 1e-5, 1e-3, log=True)
-    weight_decay_c = trial.suggest_float('weight_decay_c', 1e-6, 1e-3, log=True)
-    
-    logging.info(f"Trial {trial.number}: nz={nz}, cls={cls}, lr={lr}, weight_decay={weight_decay}, lr_c={lr_c}, weight_decay_c={weight_decay_c}")
-    
-    # Set up model and optimizer with suggested hyperparameters
-    model = suGuidedVAE(n_vae_dis=nz).to(device)
-    model_c = Classifier(n_vae_dis=nz).to(device)
-    
-    optimizer = optim.Adam(
-        model.parameters(), lr=lr, weight_decay=weight_decay
-    )
-    optimizer_c = optim.Adam(
-        model_c.parameters(), lr=lr_c, weight_decay=weight_decay_c
-    )
-    
-    # Create TensorBoard writer for this trial
-    tensorboard_dir = os.path.join(output, f'tensorboard_logs/trial_{trial.number}')
-    writer = SummaryWriter(log_dir=tensorboard_dir)
-    
-    # Train for a few epochs and return the final loss
-    final_loss = float('inf')
-    for epoch in range(1, epochs + 1):
-        epoch_loss = train_supervised(
-            epoch,
-            model,
-            model_c,
-            optimizer,
-            optimizer_c,
-            train_dataset,
-            cls,
-            device,
-            writer,
-        )
-        final_loss = epoch_loss
+class LitGuidedVAE(L.LightningModule):
+    def __init__(self, n_vae_dis=16, lr=1e-4, weight_decay=1e-5, lr_c=1e-4, weight_decay_c=1e-4, w_cls=200.0):
+        super().__init__()
+        self.save_hyperparameters()
         
-        # Report intermediate value for pruning
-        trial.report(epoch_loss, epoch)
+        # Set manual optimization flag to use multiple optimizers
+        self.automatic_optimization = False
         
-        # Handle pruning based on the intermediate value
-        if trial.should_prune():
-            writer.close()
-            raise optuna.exceptions.TrialPruned()
-    
-    writer.close()
-    return final_loss
+        # Main VAE model
+        self.model = suGuidedVAE(n_vae_dis=n_vae_dis)
+        
+        # Classifier for adversarial training
+        self.classifier = Classifier(n_vae_dis=n_vae_dis)
+        
+        # Store hyperparameters
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.lr_c = lr_c
+        self.weight_decay_c = weight_decay_c
+        self.w_cls = w_cls
+        
+        # Track metrics
+        self.total_valid_samples = 0
+        
+    def forward(self, x):
+        return self.model(x)
 
+    def training_step(self, batch, batch_idx):
+        # Get optimizers for manual optimization
+        opt_vae, opt_cls, opt_adv = self.optimizers()
+        
+        data, label = batch
+        
+        # Process labels
+        if label.dtype == torch.int8:
+            label = label.float()
+        
+        if len(label.shape) == 1:
+            label = label.unsqueeze(1)
+            
+        # Filter out invalid labels (-1)
+        valid_indices = (label != -1).squeeze()
+        
+        if valid_indices.sum() == 0:
+            self.log('train_skip_batch', 1)
+            return None
+            
+        # Extract valid data
+        valid_data = data[valid_indices]
+        valid_label = label[valid_indices]
+        
+        # Ensure labels are in valid range [0,1]
+        valid_label = torch.clamp(valid_label, 0, 1)
+        
+        # Track valid samples
+        batch_valid_samples = valid_indices.sum().item()
+        self.total_valid_samples += batch_valid_samples
+        
+        # Step 1: VAE step
+        # Clear gradients for optimizer 1
+        opt_vae.zero_grad()
+        
+        recon_batch, mu, logvar, re = self.model(valid_data)
+        loss_list = loss_supervised(recon_batch, valid_data, mu, logvar)
+        vae_loss = loss_list[0]
+        loss_cls = F.binary_cross_entropy(re, valid_label, reduction="sum")
+        vae_total_loss = vae_loss + loss_cls * self.w_cls
+        
+        # Calculate accuracy
+        pred = (re > 0.5).float()
+        acc = pred.eq(valid_label).sum().item() / valid_label.size(0) * 100
+        
+        # Log metrics with on_step=True and on_epoch=True for better TensorBoard tracking
+        self.log('train_vae_loss', vae_loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log('train_cls_loss', loss_cls, prog_bar=True, on_step=True, on_epoch=True)
+        self.log('train_vae_acc', acc, prog_bar=True, on_step=True, on_epoch=True)
+        self.log('train_valid_samples', batch_valid_samples, on_epoch=True)
+        
+        # Manually backpropagate and optimize
+        self.manual_backward(vae_total_loss)
+        opt_vae.step()
+        
+        # Step 2: Classifier step
+        # Clear gradients for optimizer 2
+        opt_cls.zero_grad()
+        
+        mu, logvar = self.model.encode(valid_data)
+        z = self.model.reparameterize(mu, logvar).detach()
+        z = z[:, 1:]
+        cls1 = self.classifier(z)
+        cls_loss = F.binary_cross_entropy(cls1, valid_label, reduction="sum")
+        cls_loss *= self.w_cls
+        
+        # Calculate accuracy
+        pred = (cls1 > 0.5).float()
+        acc = pred.eq(valid_label).sum().item() / valid_label.size(0) * 100
+        
+        # Log metrics with on_step=True and on_epoch=True for better TensorBoard tracking
+        self.log('train_c_loss', cls_loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log('train_c_acc', acc, prog_bar=True, on_step=True, on_epoch=True)
+        
+        # Manually backpropagate and optimize
+        self.manual_backward(cls_loss)
+        opt_cls.step()
+        
+        # Step 3: Adversarial step
+        # Clear gradients for optimizer 3
+        opt_adv.zero_grad()
+        
+        mu, logvar = self.model.encode(valid_data)
+        z = self.model.reparameterize(mu, logvar)
+        z = z[:, 1:]
+        cls2 = self.classifier(z)
+        label1 = torch.empty_like(valid_label).fill_(0.5)
+        adv_loss = F.binary_cross_entropy(cls2, label1, reduction="sum")
+        adv_loss *= self.w_cls
+        
+        # Log metrics with on_step=True and on_epoch=True for better TensorBoard tracking
+        self.log('train_adv_loss', adv_loss, prog_bar=True, on_step=True, on_epoch=True)
+        
+        # Manually backpropagate and optimize
+        self.manual_backward(adv_loss)
+        opt_adv.step()
+        
+        # Return combined loss for logging purposes only
+        return vae_total_loss + cls_loss + adv_loss
+
+    def on_train_epoch_end(self):
+        self.log('epoch_valid_samples', self.total_valid_samples)
+        self.total_valid_samples = 0  # Reset for next epoch
+    
+    def validation_step(self, batch, batch_idx):
+        data, label = batch
+        
+        # Process labels (similar to training_step)
+        if label.dtype == torch.int8:
+            label = label.float()
+        
+        if len(label.shape) == 1:
+            label = label.unsqueeze(1)
+            
+        # Filter out invalid labels (-1)
+        valid_indices = (label != -1).squeeze()
+        
+        if valid_indices.sum() == 0:
+            return None
+            
+        # Extract valid data
+        valid_data = data[valid_indices]
+        valid_label = label[valid_indices]
+        
+        # Ensure labels are in valid range [0,1]
+        valid_label = torch.clamp(valid_label, 0, 1)
+        
+        # Run forward pass
+        recon_batch, mu, logvar, re = self.model(valid_data)
+        
+        # Calculate losses
+        loss_list = loss_supervised(recon_batch, valid_data, mu, logvar)
+        vae_loss = loss_list[0]
+        loss_cls = F.binary_cross_entropy(re, valid_label, reduction="sum")
+        
+        # Calculate accuracy
+        pred = (re > 0.5).float()
+        acc = pred.eq(valid_label).sum().item() / valid_label.size(0) * 100
+        
+        # Log metrics with enhanced settings for better visualization
+        self.log('val_vae_loss', vae_loss, prog_bar=True, sync_dist=True)
+        self.log('val_cls_loss', loss_cls, prog_bar=True, sync_dist=True)
+        self.log('val_acc', acc, prog_bar=True, sync_dist=True)
+        
+        return vae_loss
+
+    def configure_optimizers(self):
+        # Optimizer for the VAE
+        optimizer = optim.Adam(
+            self.model.parameters(),
+            lr=self.lr,
+            weight_decay=self.weight_decay
+        )
+        
+        # Optimizer for the Classifier
+        optimizer_c = optim.Adam(
+            self.classifier.parameters(),
+            lr=self.lr_c,
+            weight_decay=self.weight_decay_c
+        )
+        
+        return [optimizer, optimizer_c, optimizer], []  # No schedulers
+
+# Training is now handled in the LitGuidedVAE class training_step method
+
+# The objective function is now defined inside the main function when using Optuna
 
 # CLICK command line interface
 @click.command()
@@ -273,7 +259,6 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
     logging.info(f"{download_path=}")
     logging.info(f"{unpack_path=}")
 
-    device = torch.device("cpu")
     if not os.path.exists(output):
         os.mkdir(output)
 
@@ -288,18 +273,60 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
     }
     selected_transform = transform_map.get(transform, mmr_vs_result)
     
-    sc2_egset_datamodule = SC2EGSetDataModule(
+    # Create data module
+    # Wrap the SC2EGSetDataModule in a proper LightningDataModule
+    class SC2DataModule(L.LightningDataModule):
+        def __init__(self, original_datamodule):
+            super().__init__()
+            self.original_datamodule = original_datamodule
+            self.original_datamodule.prepare_data()
+            self.original_datamodule.setup()
+            
+        def train_dataloader(self):
+            return self.original_datamodule.train_dataloader()
+            
+        def val_dataloader(self):
+            return self.original_datamodule.val_dataloader()
+            
+        def test_dataloader(self):
+            return self.original_datamodule.test_dataloader()
+    
+    # Create the original datamodule
+    original_datamodule = SC2EGSetDataModule(
         unpack_dir="./data/unpack",
         download_dir="./data/download",
         download=True,
         replaypacks=EXAMPLE_REAL_REPLAYPACKS,
         transform=selected_transform,
+        batch_size=batch_size,
+        num_workers=num_workers
     )
-    sc2_egset_datamodule.prepare_data()
-    sc2_egset_datamodule.setup()
     
-    # Use the dataloader directly from the datamodule
-    train_dataset = sc2_egset_datamodule.train_dataloader()
+    # Wrap it in our Lightning-compatible module
+    sc2_egset_datamodule = SC2DataModule(original_datamodule)
+    
+    # Set up callbacks
+    checkpoint_callback = L.pytorch.callbacks.ModelCheckpoint(
+        dirpath=os.path.join(output, 'checkpoints'),
+        filename='model-{epoch:02d}-{val_vae_loss:.4f}',
+        monitor='val_vae_loss',
+        mode='min',
+        save_last=True,
+        save_top_k=3,
+    )
+    
+    early_stopping = L.pytorch.callbacks.EarlyStopping(
+        monitor='val_vae_loss', 
+        patience=5,
+        mode='min'
+    )
+    
+    # TensorBoard logger
+    tb_logger = L.pytorch.loggers.TensorBoardLogger(
+        save_dir=output,
+        name='tensorboard_logs',
+        version=None  # Use root directory directly for cleaner access
+    )
     
     # Check if Optuna optimization is requested
     if use_optuna:
@@ -308,6 +335,59 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
         logging.info(f"Study will be saved to: {optuna_db}")
         logging.info(f"Study name: {study_name}")
         logging.info(f"To view Optuna Dashboard, run: optuna-dashboard {optuna_db}")
+        
+        def objective(trial):
+            # Suggest hyperparameters
+            nz_trial = trial.suggest_int('nz', 8, 64)
+            cls_trial = trial.suggest_float('cls', 0.1, 10.0)
+            lr_trial = trial.suggest_float('lr', 1e-5, 1e-3, log=True)
+            weight_decay_trial = trial.suggest_float('weight_decay', 1e-6, 1e-3, log=True)
+            lr_c_trial = trial.suggest_float('lr_c', 1e-5, 1e-3, log=True)
+            weight_decay_c_trial = trial.suggest_float('weight_decay_c', 1e-6, 1e-3, log=True)
+            
+            # Create Lightning model with suggested hyperparameters
+            model = LitGuidedVAE(
+                n_vae_dis=nz_trial,
+                lr=lr_trial,
+                weight_decay=weight_decay_trial,
+                lr_c=lr_c_trial,
+                weight_decay_c=weight_decay_c_trial,
+                w_cls=cls_trial
+            )
+            
+            # Pruning callback for Optuna
+            pruning_callback = optuna.integration.PyTorchLightningPruningCallback(
+                trial, monitor='val_vae_loss'
+            )
+            
+            # Logger for this trial
+            trial_logger = L.pytorch.loggers.TensorBoardLogger(
+                save_dir=os.path.join(output, 'tensorboard_logs', 'optuna_trials'),
+                name=f'trial_{trial.number}',
+                version=None  # Use root directory directly for cleaner access
+            )
+            
+            # Create trainer with fewer epochs for trial
+            trainer = Trainer(
+                max_epochs=optuna_epochs,
+                logger=trial_logger,
+                enable_progress_bar=True,
+                callbacks=[pruning_callback],
+                accelerator='auto',
+                devices=1,
+                enable_checkpointing=False,
+                log_every_n_steps=10
+            )
+            
+            # Get the dataloaders directly to avoid the prepare_data issue
+            train_loader = sc2_egset_datamodule.train_dataloader()
+            val_loader = sc2_egset_datamodule.val_dataloader()
+            
+            # Train model with explicit dataloaders instead of the datamodule
+            trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+            
+            # Return the final validation loss
+            return trainer.callback_metrics['val_vae_loss'].item()
         
         # Create Optuna study with database storage
         study = optuna.create_study(
@@ -319,12 +399,13 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
         )
         
         # Run optimization
-        study.optimize(
-            lambda trial: objective(trial, optuna_epochs, train_dataset, output, device),
-            n_trials=n_trials
-        )
+        study.optimize(objective, n_trials=n_trials)
         
-        # Print results
+        # Print results and log hyperparameters to TensorBoard
+        hparam_dict = study.best_trial.params
+        metric_dict = {"val_vae_loss": study.best_trial.value}
+        tb_logger.log_hyperparams(hparam_dict, metric_dict)
+        
         logging.info("Optuna optimization completed!")
         logging.info(f"Best trial: {study.best_trial.number}")
         logging.info(f"Best value (loss): {study.best_trial.value}")
@@ -354,126 +435,94 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
         # Train final model with best hyperparameters
         logging.info("Training final model with best hyperparameters...")
         best_params = study.best_trial.params
-        model = suGuidedVAE(n_vae_dis=best_params['nz']).to(device)
-        model_c = Classifier(n_vae_dis=best_params['nz']).to(device)
         
-        optimizer = optim.Adam(
-            model.parameters(), lr=best_params['lr'], weight_decay=best_params['weight_decay']
+        # Create model with best parameters
+        model = LitGuidedVAE(
+            n_vae_dis=best_params['nz'],
+            lr=best_params['lr'],
+            weight_decay=best_params['weight_decay'],
+            lr_c=best_params['lr_c'],
+            weight_decay_c=best_params['weight_decay_c'],
+            w_cls=best_params['cls']
         )
-        optimizer_c = optim.Adam(
-            model_c.parameters(), lr=best_params['lr_c'], weight_decay=best_params['weight_decay_c']
+        
+        # Train with full epochs
+        final_trainer = Trainer(
+            max_epochs=epochs,
+            logger=tb_logger,
+            enable_progress_bar=True,
+            callbacks=[checkpoint_callback, early_stopping],
+            accelerator='auto',
+            devices=1,
+            log_every_n_steps=10
         )
         
-        # Create TensorBoard writer for final training
-        tensorboard_dir = os.path.join(output, 'tensorboard_logs/final_model')
-        writer = SummaryWriter(log_dir=tensorboard_dir)
+        # Get the dataloaders directly
+        train_loader = sc2_egset_datamodule.train_dataloader()
+        val_loader = sc2_egset_datamodule.val_dataloader()
         
-        best_loss = float('inf')
-        for epoch in range(1, epochs + 1):
-            epoch_loss = train_supervised(
-                epoch,
-                model,
-                model_c,
-                optimizer,
-                optimizer_c,
-                train_dataset,
-                best_params['cls'],
-                device,
-                writer,
-            )
-            
-            # Save the best model
-            if epoch_loss < best_loss:
-                best_loss = epoch_loss
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'classifier_state_dict': model_c.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'optimizer_c_state_dict': optimizer_c.state_dict(),
-                    'loss': best_loss,
-                    'hyperparameters': best_params,
-                }, f'{output}/best_model.pth')
-                print(f"Saved best model at epoch {epoch} with loss {best_loss:.4f}")
+        # Train with explicit dataloaders
+        final_trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
         
-        writer.close()
-        
-        # Save final model
+        # Save final model in PyTorch format for compatibility
         torch.save({
             'epoch': epochs,
-            'model_state_dict': model.state_dict(),
-            'classifier_state_dict': model_c.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'optimizer_c_state_dict': optimizer_c.state_dict(),
-            'loss': best_loss,
+            'model_state_dict': model.model.state_dict(),
+            'classifier_state_dict': model.classifier.state_dict(),
             'hyperparameters': best_params,
         }, f'{output}/final_model.pth')
+        
         print(f"Training completed with Optuna! Final model saved to {output}/final_model.pth")
+        print(f"Best checkpoints saved in: {os.path.join(output, 'checkpoints')}")
         
     else:
         # Normal training without Optuna
         logging.info("Starting normal training (without Optuna)...")
+        logging.info(f"TensorBoard logs will be saved to: {os.path.join(output, 'tensorboard_logs')}")
+        logging.info(f"To view logs, run: tensorboard --logdir={os.path.join(output, 'tensorboard_logs')}")
         
-        # Create TensorBoard writer
-        tensorboard_dir = os.path.join(output, 'tensorboard_logs')
-        writer = SummaryWriter(log_dir=tensorboard_dir)
-        logging.info(f"TensorBoard logs will be saved to: {tensorboard_dir}")
-        logging.info(f"To view logs, run: tensorboard --logdir={tensorboard_dir}")
-        
-        model = suGuidedVAE(n_vae_dis=nz).to(device)
-        model_c = Classifier(n_vae_dis=nz).to(device)
-        
-        optimizer = optim.Adam(
-            model.parameters(), lr=lr, weight_decay=weight_decay
-        )
-        optimizer_c = optim.Adam(
-            model_c.parameters(), lr=lr_c, weight_decay=weight_decay_c
+        # Create model
+        model = LitGuidedVAE(
+            n_vae_dis=nz,
+            lr=lr,
+            weight_decay=weight_decay,
+            lr_c=lr_c,
+            weight_decay_c=weight_decay_c,
+            w_cls=cls
         )
         
-        best_loss = float('inf')
+        # Create trainer
+        trainer = Trainer(
+            max_epochs=epochs,
+            logger=tb_logger,
+            enable_progress_bar=True,
+            callbacks=[checkpoint_callback, early_stopping],
+            accelerator='auto',
+            devices=1,
+            check_val_every_n_epoch=test_interval,
+            log_every_n_steps=10
+        )
         
-        for epoch in range(1, epochs + 1):
-            epoch_loss = train_supervised(
-                epoch,
-                model,
-                model_c,
-                optimizer,
-                optimizer_c,
-                train_dataset,
-                cls,
-                device,
-                writer,
-            )
-            
-            # Save the best model
-            if epoch_loss < best_loss:
-                best_loss = epoch_loss
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'classifier_state_dict': model_c.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'optimizer_c_state_dict': optimizer_c.state_dict(),
-                    'loss': best_loss,
-                }, f'{output}/best_model.pth')
-                print(f"Saved best model at epoch {epoch} with loss {best_loss:.4f}")
+        # Get the dataloaders directly to avoid the prepare_data issue
+        train_loader = sc2_egset_datamodule.train_dataloader()
+        val_loader = sc2_egset_datamodule.val_dataloader()
         
-        # Close the TensorBoard writer
-        writer.close()
-        logging.info("TensorBoard writer closed")
+        # Train the model with explicit dataloaders instead of the datamodule
+        trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
         
-        # Save final model
+        # Save final model in PyTorch format for compatibility
         torch.save({
             'epoch': epochs,
-            'model_state_dict': model.state_dict(),
-            'classifier_state_dict': model_c.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'optimizer_c_state_dict': optimizer_c.state_dict(),
-            'loss': best_loss,
+            'model_state_dict': model.model.state_dict(),
+            'classifier_state_dict': model.classifier.state_dict(),
+            'loss': trainer.callback_metrics.get('train_vae_loss', float('inf')).item(),
         }, f'{output}/final_model.pth')
+        
         print(f"Training completed! Final model saved to {output}/final_model.pth")
+        print(f"Best checkpoints saved in: {os.path.join(output, 'checkpoints')}")
 
 
 
 if __name__ == "__main__":
+    # The Click decorator will parse command line arguments and pass them to main
     main()
