@@ -22,9 +22,12 @@ RUN apt-get update && apt-get install -y \
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
-# Install uv package manager
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:${PATH}"
+# Install uv package manager and verify installation
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    /root/.local/bin/uv --version
+
+# Add uv to PATH
+ENV PATH="/root/.local/bin:${PATH}"
 
 # Set working directory
 WORKDIR /workspace
@@ -32,6 +35,7 @@ WORKDIR /workspace
 # Copy project files
 COPY pyproject.toml ./
 COPY setup.cfg* ./
+COPY uv.lock* ./
 
 # Copy source code
 COPY src/ ./src/
@@ -40,14 +44,21 @@ COPY src/ ./src/
 COPY data* ./data/
 COPY models* ./models/
 
-# Install PyTorch with CUDA support first
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Create a virtual environment with uv
+RUN uv venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+ENV VIRTUAL_ENV="/opt/venv"
 
-# Install project dependencies
-RUN pip install -e .
+# Install PyTorch with CUDA support using uv
+RUN uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Sync dependencies from pyproject.toml using uv
+RUN uv sync --no-dev || uv pip install -e .
 
 # Create necessary directories
 RUN mkdir -p /workspace/output/tensorboard_logs \
+    /workspace/output/checkpoints \
+    /workspace/output/predictions \
     /workspace/data/download \
     /workspace/data/unpack
 
