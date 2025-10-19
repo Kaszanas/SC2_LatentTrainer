@@ -34,7 +34,18 @@ from lightning.pytorch import Trainer
 
 
 class LitGuidedVAE(L.LightningModule):
+    """Lightning module for supervised Guided VAE training with adversarial classifier."""
     def __init__(self, n_vae_dis=16, lr=1e-4, weight_decay=1e-5, lr_c=1e-4, weight_decay_c=1e-4, w_cls=200.0):
+        """Initialize the LitGuidedVAE module.
+        Args:
+            n_vae_dis (int): Size of the VAE latent distribution.
+            lr (float): Learning rate for the VAE optimizer.
+            weight_decay (float): Weight decay for the VAE optimizer.
+            lr_c (float): Learning rate for the classifier optimizer.
+            weight_decay_c (float): Weight decay for the classifier optimizer.
+            w_cls (float): Weight for the classification loss.
+        """
+
         super().__init__()
         self.save_hyperparameters()
         
@@ -248,7 +259,26 @@ class LitGuidedVAE(L.LightningModule):
 @click.option('--study_name', default='vae_optimization', help='Optuna study name (only used with --optuna)', type=str)
 
 def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, weight_decay, lr_c, weight_decay_c, transform, use_optuna, n_trials, optuna_epochs, optuna_db, study_name):
-    """Main function to parse arguments and start training."""
+    """Main function to parse arguments and start training.
+    Args:
+        batch_size (int): Batch size for training.
+        output (str): Output directory for results.
+        epochs (int): Number of epochs to train.
+        nz (int): Bottleneck size.
+        cls (float): Classification error weight for supervised Guided-VAE.
+        num_workers (int): Number of workers for dataloader.
+        test_interval (int): Interval for testing.
+        lr (float): Learning rate.
+        weight_decay (float): Weight decay.
+        lr_c (float): Classifier learning rate (in supervised version).
+        weight_decay_c (float): Classifier weight decay (in supervised version).
+        transform (str): Which transform to use.
+        use_optuna (bool): Whether to use Optuna for hyperparameter optimization.
+        n_trials (int): Number of Optuna trials (only used with --optuna).
+        optuna_epochs (int): Number of epochs per trial for Optuna (only used with --optuna).
+        optuna_db (str): Optuna database URL for dashboard (only used with --optuna).
+        study_name (str): Optuna study name (only used with --optuna).
+    """
     # Set up more verbose logging to help diagnose issues
     logging.basicConfig(level=logging.DEBUG, format=LOGGING_FORMAT)
     logging.info("Starting model training...")
@@ -283,8 +313,20 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
         batch_size=batch_size,
         num_workers=num_workers
     )
+    """Prepare and set up the datamodule.
+    Args:
+        unpack_dir (str): Directory to unpack replays.
+        download_dir (str): Directory to download replays.
+        download (bool): Whether to download replays.
+        replaypacks (list): List of replay packs to use. Example: EXAMPLE_REAL_REPLAYPACKS
+        transform (callable): Transform function to apply to the data.
+        batch_size (int): Batch size for training.
+        num_workers (int): Number of workers for dataloader.
+    """
+
     sc2_egset_datamodule.prepare_data()
     sc2_egset_datamodule.setup()
+
     
     # Set up callbacks
     checkpoint_callback = L.pytorch.callbacks.ModelCheckpoint(
@@ -359,6 +401,7 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
                 enable_checkpointing=False,
                 log_every_n_steps=10
             )
+
             
             # Get the dataloaders directly to avoid the prepare_data issue
             train_loader = sc2_egset_datamodule.train_dataloader()
@@ -507,3 +550,6 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
 if __name__ == "__main__":
     # The Click decorator will parse command line arguments and pass them to main
     main()
+    """Entry point for the script.
+    This function is decorated with Click to handle command line arguments.    
+    """
