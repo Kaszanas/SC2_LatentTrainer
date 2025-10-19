@@ -35,5 +35,5 @@ Example with custom parameters:
 ```bash
 python src\latent_trainer\models\train_model.py --epochs 20 --batch-size 256 --transform economy_average_vs_outcome
 ```
-only economy_average_vs_outcome works 
+Note: Currently only the `economy_average_vs_outcome` transform is fully functional.
 
