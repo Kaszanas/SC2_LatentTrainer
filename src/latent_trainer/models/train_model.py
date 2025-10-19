@@ -22,7 +22,7 @@ from latent_trainer.config import LOGGING_FORMAT
 
 from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 
-from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS, EXAMPLE_REAL_REPLAYPACKS #noqa F401
+from sc2_datasets.available_replaypacks import EXAMPLE_REAL_REPLAYPACKS
 from sc2_datasets.transforms.mmr_vs_result import mmr_vs_result
 from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
     economy_average_vs_outcome,
