@@ -35,7 +35,7 @@ from lightning.pytorch import Trainer
 
 class LitGuidedVAE(L.LightningModule):
     """Lightning module for supervised Guided VAE training with adversarial classifier."""
-    def __init__(self, n_vae_dis=16, lr=1e-4, weight_decay=1e-5, lr_c=1e-4, weight_decay_c=1e-4, w_cls=200.0):
+    def __init__(self, n_vae_dis=16, lr=1e-4, weight_decay=1e-5, lr_c=1e-4, weight_decay_c=1e-4, w_cls=200.0, input_dim=2):
         """Initialize the LitGuidedVAE module.
         Args:
             n_vae_dis (int): Size of the VAE latent distribution.
@@ -44,6 +44,7 @@ class LitGuidedVAE(L.LightningModule):
             lr_c (float): Learning rate for the classifier optimizer.
             weight_decay_c (float): Weight decay for the classifier optimizer.
             w_cls (float): Weight for the classification loss.
+            input_dim (int): Input feature dimension (depends on transform).
         """
 
         super().__init__()
@@ -53,7 +54,7 @@ class LitGuidedVAE(L.LightningModule):
         self.automatic_optimization = False
         
         # Main VAE model
-        self.model = suGuidedVAE(n_vae_dis=n_vae_dis)
+        self.model = suGuidedVAE(n_vae_dis=n_vae_dis, input_dim=input_dim)
         
         # Classifier for adversarial training
         self.classifier = Classifier(n_vae_dis=n_vae_dis)
@@ -83,17 +84,34 @@ class LitGuidedVAE(L.LightningModule):
         
         if len(label.shape) == 1:
             label = label.unsqueeze(1)
+        
+        # Expand labels to match data dimensions if data is 3D [batch, num_players, features]
+        if len(data.shape) == 3 and len(label.shape) == 2:
+            # Expand label from [batch, 1] to [batch, num_players, 1]
+            label = label.unsqueeze(1).expand(-1, data.shape[1], -1)
+        
+        # Ensure labels are float after all transformations
+        if label.dtype != torch.float32:
+            label = label.float()
             
         # Filter out invalid labels (-1)
-        valid_indices = (label != -1).squeeze()
-        
-        if valid_indices.sum() == 0:
-            self.log('train_skip_batch', 1)
-            return None
-            
-        # Extract valid data
-        valid_data = data[valid_indices]
-        valid_label = label[valid_indices]
+        # For 3D data [batch, num_players, features], we need to filter carefully
+        if len(data.shape) == 3 and len(label.shape) == 3:
+            # Filter out samples where ANY player has invalid label
+            valid_indices = (label != -1).all(dim=1).all(dim=1)  # [batch]
+            if valid_indices.sum() == 0:
+                self.log('train_skip_batch', 1)
+                return None
+            valid_data = data[valid_indices]  # [valid_batch, num_players, features]
+            valid_label = label[valid_indices]  # [valid_batch, num_players, 1]
+        else:
+            # For 2D data, use simple filtering
+            valid_indices = (label != -1).squeeze()
+            if valid_indices.sum() == 0:
+                self.log('train_skip_batch', 1)
+                return None
+            valid_data = data[valid_indices]
+            valid_label = label[valid_indices]
         
         # Ensure labels are in valid range [0,1]
         valid_label = torch.clamp(valid_label, 0, 1)
@@ -101,7 +119,7 @@ class LitGuidedVAE(L.LightningModule):
         # Track valid samples
         batch_valid_samples = valid_indices.sum().item()
         self.total_valid_samples += batch_valid_samples
-        
+
         # Step 1: VAE step
         # Clear gradients for optimizer 1
         opt_vae.zero_grad()
@@ -114,7 +132,7 @@ class LitGuidedVAE(L.LightningModule):
         
         # Calculate accuracy
         pred = (re > 0.5).float()
-        acc = pred.eq(valid_label).sum().item() / valid_label.size(0) * 100
+        acc = pred.eq(valid_label).sum().item() / valid_label.numel() * 100
         
         # Log metrics with on_step=True and on_epoch=True for better TensorBoard tracking
         self.log('train_vae_loss', vae_loss, prog_bar=True, on_step=True, on_epoch=True)
@@ -132,14 +150,18 @@ class LitGuidedVAE(L.LightningModule):
         
         mu, logvar = self.model.encode(valid_data)
         z = self.model.reparameterize(mu, logvar).detach()
-        z = z[:, 1:]
-        cls1 = self.classifier(z)
+        # Slice latent dimensions (last dimension), excluding first latent dim used for classification
+        if len(z.shape) == 3:
+            z_cls = z[:, :, 1:]  # [batch, num_players, latent_dim-1]
+        else:
+            z_cls = z[:, 1:]  # [batch, latent_dim-1]
+        cls1 = self.classifier(z_cls)
         cls_loss = F.binary_cross_entropy(cls1, valid_label, reduction="sum")
         cls_loss *= self.w_cls
         
         # Calculate accuracy
         pred = (cls1 > 0.5).float()
-        acc = pred.eq(valid_label).sum().item() / valid_label.size(0) * 100
+        acc = pred.eq(valid_label).sum().item() / valid_label.numel() * 100
         
         # Log metrics with on_step=True and on_epoch=True for better TensorBoard tracking
         self.log('train_c_loss', cls_loss, prog_bar=True, on_step=True, on_epoch=True)
@@ -155,8 +177,12 @@ class LitGuidedVAE(L.LightningModule):
         
         mu, logvar = self.model.encode(valid_data)
         z = self.model.reparameterize(mu, logvar)
-        z = z[:, 1:]
-        cls2 = self.classifier(z)
+        # Slice latent dimensions (last dimension), excluding first latent dim used for classification
+        if len(z.shape) == 3:
+            z_cls = z[:, :, 1:]  # [batch, num_players, latent_dim-1]
+        else:
+            z_cls = z[:, 1:]  # [batch, latent_dim-1]
+        cls2 = self.classifier(z_cls)
         label1 = torch.empty_like(valid_label).fill_(0.5)
         adv_loss = F.binary_cross_entropy(cls2, label1, reduction="sum")
         adv_loss *= self.w_cls
@@ -178,22 +204,38 @@ class LitGuidedVAE(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         data, label = batch
         
-        # Process labels (similar to training_step)
+        # Process labels
         if label.dtype == torch.int8:
             label = label.float()
         
         if len(label.shape) == 1:
             label = label.unsqueeze(1)
+        
+        # Expand labels to match data dimensions if data is 3D [batch, num_players, features]
+        if len(data.shape) == 3 and len(label.shape) == 2:
+            # Expand label from [batch, 1] to [batch, num_players, 1]
+            label = label.unsqueeze(1).expand(-1, data.shape[1], -1)
+        
+        # Ensure labels are float after all transformations
+        if label.dtype != torch.float32:
+            label = label.float()
             
         # Filter out invalid labels (-1)
-        valid_indices = (label != -1).squeeze()
-        
-        if valid_indices.sum() == 0:
-            return None
-            
-        # Extract valid data
-        valid_data = data[valid_indices]
-        valid_label = label[valid_indices]
+        # For 3D data [batch, num_players, features], we need to filter carefully
+        if len(data.shape) == 3 and len(label.shape) == 3:
+            # Filter out samples where ANY player has invalid label
+            valid_indices = (label != -1).all(dim=1).all(dim=1)  # [batch]
+            if valid_indices.sum() == 0:
+                return None
+            valid_data = data[valid_indices]  # [valid_batch, num_players, features]
+            valid_label = label[valid_indices]  # [valid_batch, num_players, 1]
+        else:
+            # For 2D data, use simple filtering
+            valid_indices = (label != -1).squeeze()
+            if valid_indices.sum() == 0:
+                return None
+            valid_data = data[valid_indices]
+            valid_label = label[valid_indices]
         
         # Ensure labels are in valid range [0,1]
         valid_label = torch.clamp(valid_label, 0, 1)
@@ -208,7 +250,7 @@ class LitGuidedVAE(L.LightningModule):
         
         # Calculate accuracy
         pred = (re > 0.5).float()
-        acc = pred.eq(valid_label).sum().item() / valid_label.size(0) * 100
+        acc = pred.eq(valid_label).sum().item() / valid_label.numel() * 100
         
         # Log metrics with enhanced settings for better visualization
         self.log('val_vae_loss', vae_loss, prog_bar=True, sync_dist=True)
@@ -232,7 +274,14 @@ class LitGuidedVAE(L.LightningModule):
             weight_decay=self.weight_decay_c
         )
         
-        return [optimizer, optimizer_c], []  # No schedulers
+        # Adversarial optimizer (uses VAE params but trained adversarially)
+        optimizer_adv = optim.Adam(
+            self.model.parameters(),
+            lr=self.lr,
+            weight_decay=self.weight_decay
+        )
+        
+        return [optimizer, optimizer_c, optimizer_adv], []  # No schedulers
 
 # Training is now handled in the LitGuidedVAE class training_step method
 
@@ -251,7 +300,7 @@ class LitGuidedVAE(L.LightningModule):
 @click.option('--weight_decay', default=1e-5, help='weight decay', type=float)
 @click.option('--lr_c', default=1e-4, help='classifier learning rate(in supervised version)', type=float)
 @click.option('--weight_decay_c', default=1e-4, help='classifier weight decay(in supervised version)', type=float)
-@click.option('--transform', default='mmr_vs_result', type=click.Choice(['mmr_vs_result', 'economy_average_vs_outcome', 'average_player_stats', 'select_outcome_1v1']), help='which transform to use')
+@click.option('--transform', default='mmr_vs_result', type=click.Choice(['mmr_vs_result', 'economy_average_vs_outcome']), help='which transform to use')
 @click.option('--optuna', 'use_optuna', is_flag=True, help='use Optuna for hyperparameter optimization')
 @click.option('--n_trials', default=20, help='number of Optuna trials (only used with --optuna)', type=int)
 @click.option('--optuna_epochs', default=3, help='number of epochs per trial for Optuna (only used with --optuna)', type=int)
@@ -302,6 +351,16 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
         # 'average_player_stats': average_player_stats,  # Add this when available
     }
     selected_transform = transform_map.get(transform, mmr_vs_result)
+    
+    # Determine input dimension based on transform
+    input_dim_map = {
+        'mmr_vs_result': 2,
+        'economy_average_vs_outcome': 39,
+        'select_outcome_1v1': 2,  # Update this based on actual dimension
+    }
+    input_dim = input_dim_map.get(transform, 2)
+    
+    logging.info(f"Using transform: {transform} with input dimension: {input_dim}")
     
     # Set up lighting datamodule
     sc2_egset_datamodule = SC2EGSetDataModule(
@@ -375,7 +434,8 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
                 weight_decay=weight_decay_trial,
                 lr_c=lr_c_trial,
                 weight_decay_c=weight_decay_c_trial,
-                w_cls=cls_trial
+                w_cls=cls_trial,
+                input_dim=input_dim
             )
             
             # Pruning callback for Optuna
@@ -467,7 +527,8 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
             weight_decay=best_params['weight_decay'],
             lr_c=best_params['lr_c'],
             weight_decay_c=best_params['weight_decay_c'],
-            w_cls=best_params['cls']
+            w_cls=best_params['cls'],
+            input_dim=input_dim
         )
         
         # Train with full epochs
@@ -512,7 +573,8 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
             weight_decay=weight_decay,
             lr_c=lr_c,
             weight_decay_c=weight_decay_c,
-            w_cls=cls
+            w_cls=cls,
+            input_dim=input_dim
         )
         
         # Create trainer
