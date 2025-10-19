@@ -34,6 +34,7 @@ WORKDIR /workspace
 
 # Copy project files
 COPY pyproject.toml ./
+COPY README.md ./
 COPY setup.cfg* ./
 COPY uv.lock* ./
 

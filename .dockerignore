@@ -48,6 +48,7 @@ Thumbs.db
 # Documentation
 docs/_build/
 *.md
+!README.md
 
 # Jupyter
 .ipynb_checkpoints/
