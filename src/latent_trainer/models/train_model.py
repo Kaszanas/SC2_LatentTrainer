@@ -609,9 +609,11 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
 
 
 
-if __name__ == "__main__":
-    # The Click decorator will parse command line arguments and pass them to main
-    main()
     """Entry point for the script.
     This function is decorated with Click to handle command line arguments.    
     """
+
+
+if __name__ == "__main__":
+    # The Click decorator will parse command line arguments and pass them to main
+    main()
