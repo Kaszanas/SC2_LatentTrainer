@@ -31,17 +31,20 @@ WORKDIR /workspace
 
 # Copy project files
 COPY pyproject.toml ./
-COPY setup.cfg ./
-COPY README.md ./
+COPY setup.cfg* ./
+
+# Copy source code
 COPY src/ ./src/
-COPY data/ ./data/
-COPY models/ ./models/
+
+# Copy data and models directories if they exist
+COPY data* ./data/
+COPY models* ./models/
 
 # Install PyTorch with CUDA support first
 RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# Install project dependencies using uv
-RUN uv sync
+# Install project dependencies
+RUN pip install -e .
 
 # Create necessary directories
 RUN mkdir -p /workspace/output/tensorboard_logs \
