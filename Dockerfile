@@ -50,10 +50,10 @@ RUN uv venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 ENV VIRTUAL_ENV="/opt/venv"
 
-# Install PyTorch with CUDA support using uv
-RUN uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Configure PyTorch CUDA index for uv
+ENV UV_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu121"
 
-# Sync dependencies from pyproject.toml using uv
+# Sync dependencies from pyproject.toml using uv (includes PyTorch with CUDA)
 RUN uv sync --no-dev || uv pip install -e .
 
 # Create necessary directories
