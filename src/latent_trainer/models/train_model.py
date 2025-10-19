@@ -221,7 +221,7 @@ class LitGuidedVAE(L.LightningModule):
             weight_decay=self.weight_decay_c
         )
         
-        return [optimizer, optimizer_c, optimizer], []  # No schedulers
+        return [optimizer, optimizer_c], []  # No schedulers
 
 # Training is now handled in the LitGuidedVAE class training_step method
 
@@ -273,26 +273,8 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
     }
     selected_transform = transform_map.get(transform, mmr_vs_result)
     
-    # Create data module
-    # Wrap the SC2EGSetDataModule in a proper LightningDataModule
-    class SC2DataModule(L.LightningDataModule):
-        def __init__(self, original_datamodule):
-            super().__init__()
-            self.original_datamodule = original_datamodule
-            self.original_datamodule.prepare_data()
-            self.original_datamodule.setup()
-            
-        def train_dataloader(self):
-            return self.original_datamodule.train_dataloader()
-            
-        def val_dataloader(self):
-            return self.original_datamodule.val_dataloader()
-            
-        def test_dataloader(self):
-            return self.original_datamodule.test_dataloader()
-    
-    # Create the original datamodule
-    original_datamodule = SC2EGSetDataModule(
+    # Set up lighting datamodule
+    sc2_egset_datamodule = SC2EGSetDataModule(
         unpack_dir="./data/unpack",
         download_dir="./data/download",
         download=True,
@@ -301,9 +283,8 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
         batch_size=batch_size,
         num_workers=num_workers
     )
-    
-    # Wrap it in our Lightning-compatible module
-    sc2_egset_datamodule = SC2DataModule(original_datamodule)
+    sc2_egset_datamodule.prepare_data()
+    sc2_egset_datamodule.setup()
     
     # Set up callbacks
     checkpoint_callback = L.pytorch.callbacks.ModelCheckpoint(
