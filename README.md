@@ -33,7 +33,7 @@ You can customize your training run with various options (see command line inter
 Example with custom parameters:
 
 ```bash
-python src\latent_trainer\models\train_model.py --epochs 20 --batch-size 256 --transform mmr_vs_result
+python src\latent_trainer\models\train_model.py --epochs 20 --batch-size 256 --transform economy_average_vs_outcome
 ```
+only economy_average_vs_outcome works 
 
-For now only mmr_vs_result
