@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # Main Lightning AI training service
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: latent-trainer:latest
+    container_name: sc2-latent-trainer
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Mount source code for live development
+      - ./src:/workspace/src
+      - ./data:/workspace/data
+      - ./models:/workspace/models
+      - ./output:/workspace/output
+      - ./notebooks:/workspace/notebooks
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    networks:
+      - lightning-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: /bin/bash
+
+  # TensorBoard service for monitoring training
+  tensorboard:
+    image: tensorflow/tensorflow:latest
+    container_name: sc2-tensorboard
+    ports:
+      - "6006:6006"
+    volumes:
+      - ./output/tensorboard_logs:/logs
+    networks:
+      - lightning-network
+    command: tensorboard --logdir=/logs --host=0.0.0.0 --port=6006
+    depends_on:
+      - trainer
+
+  # Optuna Dashboard for hyperparameter optimization monitoring
+  optuna-dashboard:
+    image: ghcr.io/optuna/optuna-dashboard:latest
+    container_name: sc2-optuna-dashboard
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./output:/workspace/output
+    networks:
+      - lightning-network
+    environment:
+      - OPTUNA_STORAGE=sqlite:////workspace/output/optuna_study.db
+    command: optuna-dashboard --host 0.0.0.0 --port 8080 sqlite:////workspace/output/optuna_study.db
+    depends_on:
+      - trainer
+
+networks:
+  lightning-network:
+    driver: bridge
+
+volumes:
+  data-volume:
+  models-volume:
+  output-volume:
