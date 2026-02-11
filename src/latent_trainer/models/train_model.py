@@ -22,7 +22,7 @@ from latent_trainer.config import LOGGING_FORMAT
 
 from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 
-from sc2_datasets.available_replaypacks import EXAMPLE_REAL_REPLAYPACKS
+from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS
 from sc2_datasets.transforms.mmr_vs_result import mmr_vs_result
 from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
     economy_average_vs_outcome,
@@ -31,11 +31,100 @@ from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
 from sc2_datasets.transforms.utils import select_outcome_1v1
 import lightning as L
 from lightning.pytorch import Trainer
+from torch.utils.data import DataLoader, Dataset, TensorDataset
+
+
+class CachedSC2Dataset(Dataset):
+    """Loads pre-processed tensors from a .pt cache file for instant access."""
+    
+    def __init__(self, features, labels):
+        self.features = features
+        self.labels = labels
+    
+    def __len__(self):
+        return len(self.labels)
+    
+    def __getitem__(self, idx):
+        return self.features[idx], self.labels[idx]
+
+
+class SafeDataset(Dataset):
+    """Wraps a dataset to catch exceptions in __getitem__ and return None instead."""
+    
+    def __init__(self, dataset):
+        self.dataset = dataset
+    
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, idx):
+        try:
+            return self.dataset[idx]
+        except Exception:
+            return None
+
+
+def collate_fn_filter_none(batch):
+    """Custom collate function that filters out None samples."""
+    batch = [item for item in batch if item is not None 
+             and all(x is not None for x in item)]
+    if len(batch) == 0:
+        return None
+    return torch.utils.data.dataloader.default_collate(batch)
+
+
+def wrap_dataloader(dataloader, collate_fn=collate_fn_filter_none):
+    """Re-create a DataLoader with SafeDataset and custom collate_fn."""
+    return DataLoader(
+        dataset=SafeDataset(dataloader.dataset),
+        batch_size=dataloader.batch_size,
+        num_workers=dataloader.num_workers,
+        collate_fn=collate_fn,
+        shuffle=isinstance(dataloader.sampler, torch.utils.data.sampler.RandomSampler),
+    )
+
+
+def load_cached_dataloaders(cache_path, batch_size):
+    """Load pre-processed dataset from cache, normalize features, and return DataLoaders."""
+    logging.info(f"Loading cached dataset from {cache_path}...")
+    cached = torch.load(cache_path, weights_only=True)
+    
+    train_feats = cached['train_features'].float()  # [N, 2, 39]
+    val_feats = cached['val_features'].float()
+    
+    # Normalize features: fit on train, apply to both
+    # Reshape to [N*2, 39] for per-feature normalization across all players
+    orig_shape = train_feats.shape
+    train_flat = train_feats.reshape(-1, orig_shape[-1])  # [N*2, 39]
+    val_flat = val_feats.reshape(-1, orig_shape[-1])
+    
+    # Compute mean and std from training data
+    mean = train_flat.mean(dim=0, keepdim=True)  # [1, 39]
+    std = train_flat.std(dim=0, keepdim=True) + 1e-8  # avoid division by zero
+    
+    # Apply normalization
+    train_flat = (train_flat - mean) / std
+    val_flat = (val_flat - mean) / std
+    
+    train_feats = train_flat.reshape(orig_shape)
+    val_feats = val_flat.reshape(val_feats.shape)
+    
+    logging.info(f"  Feature normalization applied (mean={mean.mean():.2f}, std={std.mean():.2f})")
+    logging.info(f"  Train samples: {len(train_feats)}, Val samples: {len(val_feats)}")
+    logging.info(f"  Feature shape: {train_feats.shape}")
+    
+    train_dataset = CachedSC2Dataset(train_feats, cached['train_labels'])
+    val_dataset = CachedSC2Dataset(val_feats, cached['val_labels'])
+    
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    
+    return train_loader, val_loader, train_feats.shape[-1]
 
 
 class LitGuidedVAE(L.LightningModule):
     """Lightning module for supervised Guided VAE training with adversarial classifier."""
-    def __init__(self, n_vae_dis=16, lr=1e-4, weight_decay=1e-5, lr_c=1e-4, weight_decay_c=1e-4, w_cls=200.0, input_dim=2):
+    def __init__(self, n_vae_dis=16, lr=1e-4, weight_decay=1e-5, lr_c=1e-4, weight_decay_c=1e-4, w_cls=50000.0, input_dim=2):
         """Initialize the LitGuidedVAE module.
         Args:
             n_vae_dis (int): Size of the VAE latent distribution.
@@ -73,6 +162,8 @@ class LitGuidedVAE(L.LightningModule):
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
+        if batch is None:
+            return None
         # Get optimizers for manual optimization
         opt_vae, opt_cls, opt_adv = self.optimizers()
         
@@ -185,7 +276,7 @@ class LitGuidedVAE(L.LightningModule):
         cls2 = self.classifier(z_cls)
         label1 = torch.empty_like(valid_label).fill_(0.5)
         adv_loss = F.binary_cross_entropy(cls2, label1, reduction="sum")
-        adv_loss *= self.w_cls
+        adv_loss *= 0.0  # Disabled: adversarial step was cancelling classifier learning
         
         # Log metrics with on_step=True and on_epoch=True for better TensorBoard tracking
         self.log('train_adv_loss', adv_loss, prog_bar=True, on_step=True, on_epoch=True)
@@ -202,6 +293,8 @@ class LitGuidedVAE(L.LightningModule):
         self.total_valid_samples = 0  # Reset for next epoch
     
     def validation_step(self, batch, batch_idx):
+        if batch is None:
+            return None
         data, label = batch
         
         # Process labels
@@ -306,8 +399,9 @@ class LitGuidedVAE(L.LightningModule):
 @click.option('--optuna_epochs', default=3, help='number of epochs per trial for Optuna (only used with --optuna)', type=int)
 @click.option('--optuna_db', default='sqlite:///optuna_study.db', help='Optuna database URL for dashboard (only used with --optuna)', type=str)
 @click.option('--study_name', default='vae_optimization', help='Optuna study name (only used with --optuna)', type=str)
+@click.option('--cached', 'cache_path', default=None, type=str, help='Path to cached dataset .pt file (from preprocess_dataset.py). Skips slow SC2 data loading.')
 
-def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, weight_decay, lr_c, weight_decay_c, transform, use_optuna, n_trials, optuna_epochs, optuna_db, study_name):
+def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, weight_decay, lr_c, weight_decay_c, transform, use_optuna, n_trials, optuna_epochs, optuna_db, study_name, cache_path):
     """Main function to parse arguments and start training.
     Args:
         batch_size (int): Batch size for training.
@@ -356,35 +450,32 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
     input_dim_map = {
         'mmr_vs_result': 2,
         'economy_average_vs_outcome': 39,
-        'select_outcome_1v1': 2,  # Update this based on actual dimension
+        'select_outcome_1v1': 2,
     }
     input_dim = input_dim_map.get(transform, 2)
     
-    logging.info(f"Using transform: {transform} with input dimension: {input_dim}")
+    # Load data: either from cache or from SC2EGSet datamodule
+    use_cache = cache_path is not None and os.path.exists(cache_path)
     
-    # Set up lighting datamodule
-    sc2_egset_datamodule = SC2EGSetDataModule(
-        unpack_dir="./data/unpack",
-        download_dir="./data/download",
-        download=True,
-        replaypacks=EXAMPLE_REAL_REPLAYPACKS,
-        transform=selected_transform,
-        batch_size=batch_size,
-        num_workers=num_workers
-    )
-    """Prepare and set up the datamodule.
-    Args:
-        unpack_dir (str): Directory to unpack replays.
-        download_dir (str): Directory to download replays.
-        download (bool): Whether to download replays.
-        replaypacks (list): List of replay packs to use. Example: EXAMPLE_REAL_REPLAYPACKS
-        transform (callable): Transform function to apply to the data.
-        batch_size (int): Batch size for training.
-        num_workers (int): Number of workers for dataloader.
-    """
-
-    sc2_egset_datamodule.prepare_data()
-    sc2_egset_datamodule.setup()
+    if use_cache:
+        logging.info(f"Using cached dataset from: {cache_path}")
+        train_loader, val_loader, cached_input_dim = load_cached_dataloaders(cache_path, batch_size)
+        input_dim = cached_input_dim
+    else:
+        logging.info(f"Using live SC2EGSet dataset with transform: {transform}")
+        sc2_egset_datamodule = SC2EGSetDataModule(
+            unpack_dir="./data/unpack",
+            download_dir="./data/download",
+            download=True,
+            replaypacks=SC2EGSET_DATASET_REPLAYPACKS,
+            transform=selected_transform,
+            batch_size=batch_size,
+            num_workers=num_workers
+        )
+        sc2_egset_datamodule.prepare_data()
+        sc2_egset_datamodule.setup()
+    
+    logging.info(f"Input dimension: {input_dim}")
 
     
     # Set up callbacks
@@ -464,8 +555,8 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
 
             
             # Get the dataloaders directly to avoid the prepare_data issue
-            train_loader = sc2_egset_datamodule.train_dataloader()
-            val_loader = sc2_egset_datamodule.val_dataloader()
+            train_loader = wrap_dataloader(sc2_egset_datamodule.train_dataloader())
+            val_loader = wrap_dataloader(sc2_egset_datamodule.val_dataloader())
             
             # Train model with explicit dataloaders instead of the datamodule
             trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
@@ -543,8 +634,8 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
         )
         
         # Get the dataloaders directly
-        train_loader = sc2_egset_datamodule.train_dataloader()
-        val_loader = sc2_egset_datamodule.val_dataloader()
+        train_loader = wrap_dataloader(sc2_egset_datamodule.train_dataloader())
+        val_loader = wrap_dataloader(sc2_egset_datamodule.val_dataloader())
         
         # Train with explicit dataloaders
         final_trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
@@ -589,11 +680,12 @@ def main(batch_size, output, epochs, nz, cls, num_workers, test_interval, lr, we
             log_every_n_steps=10
         )
         
-        # Get the dataloaders directly to avoid the prepare_data issue
-        train_loader = sc2_egset_datamodule.train_dataloader()
-        val_loader = sc2_egset_datamodule.val_dataloader()
+        # Get dataloaders
+        if not use_cache:
+            train_loader = wrap_dataloader(sc2_egset_datamodule.train_dataloader())
+            val_loader = wrap_dataloader(sc2_egset_datamodule.val_dataloader())
         
-        # Train the model with explicit dataloaders instead of the datamodule
+        # Train the model
         trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
         
         # Save final model in PyTorch format for compatibility
