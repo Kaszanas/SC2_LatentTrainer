@@ -11,6 +11,12 @@ __pycache__/
 # C extensions
 *.so
 
+# TensorBoard log files
+output/tensorboard_logs/
+
+#optuna
+optuna_study.db
+
 # Distribution / packaging
 .Python
 env/
@@ -114,3 +120,8 @@ ENV/
 site/
 
 data/
+
+# Model outputs (regenerable)
+output/
+*.pth
+*.ckpt
