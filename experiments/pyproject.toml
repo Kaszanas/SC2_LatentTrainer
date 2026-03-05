@@ -1,0 +1,15 @@
+[project]
+name = "experiments"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas>=2.2.3",
+    "scikit-learn>=1.6.0",
+    "umap-learn[plot]>=0.5.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
