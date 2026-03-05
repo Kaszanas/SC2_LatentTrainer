@@ -125,3 +125,12 @@ data/
 output/
 *.pth
 *.ckpt
+
+
+mlruns/
+
+plots/
+ray_results/
+ray_tmp/
+
+*.db
