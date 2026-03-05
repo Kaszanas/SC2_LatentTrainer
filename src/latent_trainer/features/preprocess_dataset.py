@@ -12,23 +12,14 @@ Usage:
     uv run python src/latent_trainer/features/preprocess_dataset.py --transform economy
 """
 
-import argparse
 import logging
 import os
-import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
+import click
 import torch
-from torch.utils.data.dataloader import DataLoader
-from tqdm import tqdm
-
-# Add the project root to the Python path
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-)
-
 from sc2_datasets.lightning.sc2_egset_datamodule import (
     SC2EGSetDataModuleSingleJSON,
 )
@@ -36,15 +27,16 @@ from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData
 from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
     economy_average_vs_outcome,
 )
+from torch.utils.data.dataloader import DataLoader
+from tqdm import tqdm
 
-from src.latent_trainer.features.rich_transform import rich_transform
+from latent_trainer.features.rich_transform import rich_transform
 
 
 def _transform_single_object(
     dataset_object: DataLoader,
     index: int,
     transform_fn: Callable,
-    is_raw_transform: bool,
 ) -> tuple[torch.Tensor, torch.Tensor] | None | Exception:
 
     try:
@@ -53,7 +45,6 @@ def _transform_single_object(
         result = process_replay(
             replay=replay,
             transform_fn=transform_fn,
-            is_raw=is_raw_transform,
         )
 
         if result is None:
@@ -67,9 +58,30 @@ def _transform_single_object(
 def process_set(
     dataset_object: DataLoader,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]] = None,
-    is_raw_transform: bool = False,
     n_workers: int = 24,
-):
+) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
+    """
+    Process a dataset split (train/test/val) in parallel,
+    apply the transform, and return lists of features and labels along with counts of skipped and errored replays.
+
+    Parameters
+    ----------
+    dataset_object : DataLoader
+        Dataloader for the dataset split to process (train/test/val)
+    transform_fn : Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]], optional
+        Function to apply as the transform, by default None
+    n_workers : int, optional
+        Number of worker processes to use for parallel processing, by default 24
+
+    Returns
+    -------
+    tuple[list[torch.Tensor], list[torch.Tensor], int, int]
+        A tuple containing:
+        - List of feature tensors
+        - List of label tensors
+        - Count of skipped replays (where transform returned None)
+        - Count of errors encountered during processing
+    """
 
     skipped = 0
     errors = 0
@@ -87,7 +99,6 @@ def process_set(
                 dataset_object=dataset_object,
                 index=i,
                 transform_fn=transform_fn,
-                is_raw_transform=is_raw_transform,
             )
             for i in range(len(dataset_object))
         ]
@@ -120,15 +131,10 @@ def process_set(
 def process_replay(
     replay: SC2ReplayData,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
-    is_raw: bool,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
     """Apply transform and return (features, label) or None."""
-    if is_raw:
-        # Rich transform takes the raw replay directly
-        result = transform_fn(replay)
-    else:
-        # Legacy transform is already applied via __getitem__ or manually
-        result = transform_fn(replay)
+    # Rich transform takes the raw replay directly
+    result = transform_fn(replay)
 
     if result is None:
         return None
@@ -145,13 +151,42 @@ def process_replay(
 
 
 def preprocess_dataset(
-    output_path: Path | str = Path("data/cached_dataset.pt").resolve(),
-    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]]
-    | None = None,
-    transform_name: str = "rich",
+    transform_name: str,
+    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
+    dataset_name: str = "sc2egset_merged",
+    single_json_dataset_path: Path | str = Path(
+        "H:/sc2egset_merged/sc2egset_merged.json"
+    ).resolve(),
+    output_directory: Path | str = Path("./data").resolve(),
     n_workers: int = 24,
 ) -> None:
-    """Pre-process the entire SC2EGSet dataset and save to cache."""
+    """
+    Preprocess a single JSON dataset and cache the transformed tensors to disk.
+
+    Parameters
+    ----------
+    transform_name : str
+        The name of the transformation (e.g. ``"rich"`` or ``"averaged_economy"``).
+        Used to label the output file as ``cached_dataset_<transform_name>.pt``.
+    transform_fn : Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]]
+        Function that maps a raw SC2ReplayData replay to a (features, label) pair.
+    dataset_name : str, optional
+        Name of the dataset, matching the JSON file stem, by default ``"sc2egset_merged"``.
+    single_json_dataset_path : Path | str, optional
+        Path to the single-JSON index file for the dataset,
+        by default ``H:/sc2egset_merged/sc2egset_merged.json``.
+    output_directory : Path | str, optional
+        Directory where the cached ``.pt`` file will be written,
+        by default ``./data``.
+    n_workers : int, optional
+        Number of worker processes for parallel replay processing, by default 24.
+    """
+
+    output_directory = (
+        output_directory
+        if isinstance(output_directory, Path)
+        else Path(output_directory).resolve()
+    )
 
     # The rich transform handles its own feature extraction from raw replay
     # So we pass transform=None to the datamodule
@@ -165,29 +200,18 @@ def preprocess_dataset(
     print("\n[1/3] Loading SC2EGSet datamodule (downloading if needed)...")
 
     datamodule = SC2EGSetDataModuleSingleJSON(
-        dataset_name="sc2egset_merged",
-        json_path=Path("H:\sc2egset_merged\sc2egset_merged.json"),
+        dataset_name=dataset_name,
+        json_path=single_json_dataset_path,
         download=False,
     )
 
-    # datamodule = SC2EGSetDataModule(
-    #     unpack_dir="./data/unpack",
-    #     download_dir="./data/download",
-    #     download=True,
-    #     replaypacks=SC2EGSET_DATASET_REPLAYPACKS,
-    #     transform=None,  # We'll apply transform manually to catch errors
-    #     batch_size=1,
-    #     num_workers=0,
-    # )
-
-    # Access the underlying dataset
+    # Initialize the datamodule to get train/test/val splits (but skip any transforms for now)
     datamodule.prepare_data()
     datamodule.setup("fit")
 
-    # Get train and val datasets
+    # Get train, test, and val datasets
     train_dataset = datamodule.train_dataset
     test_dataset = datamodule.test_dataset
-
     val_dataset = datamodule.val_dataset
 
     total = len(train_dataset) + len(val_dataset)
@@ -202,21 +226,18 @@ def preprocess_dataset(
     train_features, train_labels, skipped_train, errors_train = process_set(
         dataset_object=train_dataset,
         transform_fn=transform_fn,
-        is_raw_transform=is_raw_transform,
         n_workers=n_workers,
     )
     logging.info("  Processing test set...")
     test_features, test_labels, skipped_test, errors_test = process_set(
         dataset_object=test_dataset,
         transform_fn=transform_fn,
-        is_raw_transform=is_raw_transform,
         n_workers=n_workers,
     )
     logging.info("  Processing validation set...")
     val_features, val_labels, skipped_val, errors_val = process_set(
         dataset_object=val_dataset,
         transform_fn=transform_fn,
-        is_raw_transform=is_raw_transform,
         n_workers=n_workers,
     )
 
@@ -231,7 +252,8 @@ def preprocess_dataset(
     val_labels_tensor = torch.tensor(val_labels, dtype=torch.long)
 
     # Save
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_directory), exist_ok=True)
+    path_to_save = output_directory / f"cached_dataset_{transform_name}.pt"
     torch.save(
         {
             "train_features": train_features_tensor,
@@ -242,10 +264,10 @@ def preprocess_dataset(
             "val_labels": val_labels_tensor,
             "transform": transform_name,
         },
-        output_path,
+        path_to_save,
     )
 
-    file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+    file_size_mb = os.path.getsize(path_to_save) / (1024 * 1024)
 
     print(f"\n{'=' * 60}")
     print("Pre-processing complete!")
@@ -256,44 +278,64 @@ def preprocess_dataset(
     print(f"  Skipped (None):   {skipped_train + skipped_val + skipped_test}")
     print(f"  Errors:           {errors_train + errors_val + errors_test}")
     print(f"  Feature shape:    {train_features_tensor.shape}")
-    print(f"  Cache file:       {output_path} ({file_size_mb:.1f} MB)")
+    print(f"  Cache file:       {output_directory} ({file_size_mb:.1f} MB)")
     print(f"{'=' * 60}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Pre-process SC2EGSet dataset")
-    parser.add_argument(
-        "--transform",
-        choices=["rich", "economy"],
-        default="rich",
-        help="Transform to use: 'rich' (temporal+meta+units, 204 features) or 'economy' (averaged economy, 39 features)",
-    )
-    parser.add_argument(
-        "--output",
-        default=None,
-        help="Output path for cached dataset (default: data/cached_dataset_<transform>.pt)",
-    )
-    parser.add_argument(
-        "--n-workers",
-        type=int,
-        default=24,
-        help="Number of parallel workers for processing replays (default: 24)",
-    )
-    args = parser.parse_args()
+class TransformEnumFunction(click.Choice):
+    """Custom Click Choice type that returns the actual transform function instead of the string name."""
 
-    if args.transform == "rich":
-        transform_fn = rich_transform
-        default_output = "data/cached_dataset_rich.pt"
-    else:
-        transform_fn = economy_average_vs_outcome
-        default_output = "data/cached_dataset.pt"
+    _TRANSFORM_NAMES: dict[Callable, str] = {
+        rich_transform: "rich",
+        economy_average_vs_outcome: "averaged_economy",
+    }
 
-    output_path = args.output or default_output
+    def convert(self, value, param, ctx):
+        match value:
+            case "rich":
+                return rich_transform
+            case "averaged_economy":
+                return economy_average_vs_outcome
+            case _:
+                raise click.BadParameter(f"Invalid transform choice: {value}")
+
+
+@click.command(
+    help="Pre-process the SC2_Dataset in a JSON format and cache transformed tensors to disk."
+)
+@click.option(
+    "--transform",
+    type=TransformEnumFunction(["rich", "averaged_economy"]),
+    default="rich",
+    show_default=True,
+    help="Transform to use: 'rich' (temporal+meta+units, 204 features) or 'averaged_economy' (averaged economy, 39 features)",
+)
+@click.option(
+    "--output-directory",
+    type=click.Path(
+        file_okay=False,
+        writable=True,
+        path_type=Path,
+        resolve_path=True,
+    ),
+    help="Output directory for cached dataset (default: data/)",
+)
+@click.option(
+    "--n-workers",
+    type=int,
+    default=24,
+    show_default=True,
+    help="Number of parallel workers for processing replays.",
+)
+def main(transform: Callable, output_directory: Path | None, n_workers: int) -> None:
+    """Pre-process Single JSON SC2_Dataset and cache the transformed tensors to drive."""
+    transform_name = TransformEnumFunction._TRANSFORM_NAMES[transform]
+    output_path = output_directory or Path("data")
     preprocess_dataset(
-        output_path=output_path,
-        transform_fn=transform_fn,
-        transform_name=args.transform,
-        n_workers=args.n_workers,
+        output_directory=output_path,
+        transform_fn=transform,
+        transform_name=transform_name,
+        n_workers=n_workers,
     )
 
 
