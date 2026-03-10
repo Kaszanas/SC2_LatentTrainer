@@ -2,14 +2,14 @@
 
 This module provides the **single canonical implementations** of dataset
 loading, normalisation, and latent extraction.  All training scripts,
-analysis tools, and the HPO system import from here instead of maintaining
-their own copies.
+analysis tools, and the hyperparameter search system import from here
+instead of maintaining their own copies.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 import torch
 from torch.utils.data import DataLoader, Dataset, TensorDataset
@@ -22,9 +22,26 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 
 class Encoder(Protocol):
-    """Structural type for any model that exposes an ``encode`` method."""
+    """Structural type for any model that exposes an ``encode`` method.
+
+    The ``encode`` method must return a tuple ``(mu, logvar)`` where:
+
+    - **mu** — latent mean, shape ``[batch, latent_dim]``
+    - **logvar** — latent log-variance, shape ``[batch, latent_dim]``
+    """
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]: ...
+
+
+class NormalizedData(NamedTuple):
+    """Return type of :func:`load_and_normalize`."""
+
+    train_X: torch.Tensor
+    train_y: torch.Tensor
+    val_X: torch.Tensor
+    val_y: torch.Tensor
+    mean: torch.Tensor
+    std: torch.Tensor
 
 
 # ------------------------------------------------------------------
@@ -87,14 +104,7 @@ def normalize(
 
 def load_and_normalize(
     cache_path: str,
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-]:
+) -> NormalizedData:
     """Load a cached ``.pt`` dataset and normalise features.
 
     The cache is expected to contain at least::
@@ -128,7 +138,7 @@ def load_and_normalize(
         len(train_X),
         len(val_X),
     )
-    return train_X, train_y, val_X, val_y, mean, std
+    return NormalizedData(train_X, train_y, val_X, val_y, mean, std)
 
 
 def load_cached_dataloaders(

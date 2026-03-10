@@ -367,5 +367,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    from latent_trainer.config import LOGGING_FORMAT
+    logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     main()

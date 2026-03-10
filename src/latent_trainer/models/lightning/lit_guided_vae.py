@@ -204,6 +204,10 @@ class LitGuidedVAE(L.LightningModule):
 
         return vae_loss
 
+    def test_step(self, batch, batch_idx):
+        # Re-use validation logic for test evaluation
+        return self.validation_step(batch, batch_idx)
+
     def configure_optimizers(self):
         opt_vae = optim.Adam(
             self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay,

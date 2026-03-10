@@ -7,7 +7,7 @@ Orchestrates distributed HPO by:
 
 Usage (from ``train.py`` entrypoint)::
 
-    from latent_trainer.hpo.ray_optuna_search import run_hpo
+    from latent_trainer.hyperparameter_search.ray_optuna_search import run_hpo
     run_hpo(config)
 """
 

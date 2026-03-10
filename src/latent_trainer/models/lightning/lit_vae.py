@@ -117,6 +117,9 @@ class LitVAE(L.LightningModule):
     def validation_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> None:
         self._common_step(batch, batch_idx, "val")
 
+    def test_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> None:
+        self._common_step(batch, batch_idx, "test")
+
     def configure_optimizers(self) -> dict[str, Any]:
         optimizer = optim.Adam(self.parameters(), lr=self.lr)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(

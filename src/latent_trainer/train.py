@@ -39,7 +39,7 @@ import torch
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
 from latent_trainer.data_utils import load_and_normalize
-from latent_trainer.hpo.ray_optuna_search import (
+from latent_trainer.hyperparameter_search.ray_optuna_search import (
     run_hpo,
     run_two_stage_pipeline,
 )

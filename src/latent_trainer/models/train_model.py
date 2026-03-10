@@ -64,7 +64,7 @@ class SafeDataset(Dataset):
             return None
 
 
-def collate_fn_filter_none(batch: list):
+def collate_fn_filter_none(batch: list) -> list | None:
     """Custom collate function that filters out ``None`` samples."""
     batch = [item for item in batch if item is not None]
     if len(batch) == 0:
