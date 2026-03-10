@@ -31,6 +31,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from latent_trainer.data_utils import load_cached_dataloaders
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
+from latent_trainer.tracking.mlflow_utils import create_mlflow_logger, log_best_trial
 
 from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS
@@ -151,6 +152,9 @@ def train_guided(
     lr_c: float = 1e-4,
     weight_decay_c: float = 1e-4,
     test_interval: int = 1,
+    mlflow_uri: str = "mlruns",
+    experiment_name: str = "SC2_GuidedVAE",
+    run_name: str | None = None,
 ) -> LitGuidedVAE:
     """Run a single guided-VAE training run and return the trained model."""
     os.makedirs(output_dir, exist_ok=True)
@@ -179,10 +183,15 @@ def train_guided(
     tb_logger = L.pytorch.loggers.TensorBoardLogger(
         save_dir=output_dir, name="tensorboard_logs",
     )
+    mlf_logger = create_mlflow_logger(
+        experiment_name=experiment_name,
+        run_name=run_name or "guided_vae_train",
+        tracking_uri=mlflow_uri,
+    )
 
     trainer = Trainer(
         max_epochs=epochs,
-        logger=tb_logger,
+        logger=[tb_logger, mlf_logger],
         enable_progress_bar=True,
         callbacks=[checkpoint_cb, early_stop],
         accelerator="auto",
@@ -218,6 +227,8 @@ def run_optuna_search(
     optuna_db: str = "sqlite:///optuna_study.db",
     study_name: str = "vae_optimization",
     full_epochs: int = 10,
+    mlflow_uri: str = "mlruns",
+    experiment_name: str = "SC2_GuidedVAE",
 ) -> optuna.Study:
     """Run Optuna HPO for the guided VAE and retrain with best params."""
     os.makedirs(output_dir, exist_ok=True)
@@ -239,12 +250,18 @@ def run_optuna_search(
         pruning_cb = optuna.integration.PyTorchLightningPruningCallback(
             trial, monitor="val_vae_loss",
         )
+        trial_tb = L.pytorch.loggers.TensorBoardLogger(
+            save_dir=os.path.join(output_dir, "tensorboard_logs", "optuna_trials"),
+            name=f"trial_{trial.number}",
+        )
+        trial_mlf = create_mlflow_logger(
+            experiment_name=experiment_name,
+            run_name=f"guided_vae_trial_{trial.number}",
+            tracking_uri=mlflow_uri,
+        )
         trainer = Trainer(
             max_epochs=optuna_epochs,
-            logger=L.pytorch.loggers.TensorBoardLogger(
-                save_dir=os.path.join(output_dir, "tensorboard_logs", "optuna_trials"),
-                name=f"trial_{trial.number}",
-            ),
+            logger=[trial_tb, trial_mlf],
             enable_progress_bar=True,
             callbacks=[pruning_cb],
             accelerator="auto",
@@ -264,12 +281,23 @@ def run_optuna_search(
     )
     study.optimize(objective, n_trials=n_trials)
 
-    # Log best trial
+    # Log best trial to TensorBoard + MLFlow
     best = study.best_trial
     tb_logger.log_hyperparams(best.params, {"val_vae_loss": best.value})
     logger.info("Best trial #%d  val_vae_loss=%.4f", best.number, best.value)
     for k, v in best.params.items():
         logger.info("  %s: %s", k, v)
+
+    # Log summary to MLFlow
+    import mlflow
+    mlflow.set_tracking_uri(mlflow_uri)
+    mlflow.set_experiment(experiment_name)
+    with mlflow.start_run(run_name="best_trial_summary"):
+        mlflow.log_params(best.params)
+        mlflow.log_metric("best_val_vae_loss", best.value)
+        mlflow.log_metric("best_trial_number", best.number)
+        mlflow.set_tag("source", "optuna_best_trial")
+    logger.info("MLFlow: logged best trial as summary run")
 
     # Retrain with best params
     logger.info("Retraining with best hyperparameters…")
@@ -285,6 +313,9 @@ def run_optuna_search(
         weight_decay=best.params["weight_decay"],
         lr_c=best.params["lr_c"],
         weight_decay_c=best.params["weight_decay_c"],
+        mlflow_uri=mlflow_uri,
+        experiment_name=experiment_name,
+        run_name="guided_vae_best_retrain",
     )
 
     return study
@@ -314,6 +345,8 @@ def run_optuna_search(
 @click.option("--optuna-db", default="sqlite:///optuna_study.db", show_default=True, help="Optuna DB URL.")
 @click.option("--study-name", default="vae_optimization", show_default=True, help="Optuna study name.")
 @click.option("--cached", "cache_path", default=None, type=str, help="Path to cached .pt dataset.")
+@click.option("--mlflow-uri", default="mlruns", show_default=True, help="MLFlow tracking URI.")
+@click.option("--experiment-name", default="SC2_GuidedVAE", show_default=True, help="MLFlow experiment name.")
 def main(
     batch_size: int,
     output: str,
@@ -333,12 +366,12 @@ def main(
     optuna_db: str,
     study_name: str,
     cache_path: str | None,
+    mlflow_uri: str,
+    experiment_name: str,
 ) -> None:
     """Train the supervised Guided VAE with optional Optuna HPO."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    from latent_trainer.config import LOGGING_FORMAT
+    logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     torch.manual_seed(1024)
 
     # Load data
@@ -364,6 +397,8 @@ def main(
             optuna_db=optuna_db,
             study_name=study_name,
             full_epochs=epochs,
+            mlflow_uri=mlflow_uri,
+            experiment_name=experiment_name,
         )
     else:
         train_guided(
@@ -379,6 +414,8 @@ def main(
             lr_c=lr_c,
             weight_decay_c=weight_decay_c,
             test_interval=test_interval,
+            mlflow_uri=mlflow_uri,
+            experiment_name=experiment_name,
         )
 
 
