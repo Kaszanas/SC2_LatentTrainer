@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from latent_trainer.config import DEFAULT_MLFLOW_URI
+
 
 @dataclass
 class ExperimentConfig:
@@ -24,8 +26,8 @@ class ExperimentConfig:
     experiment_name:
         MLFlow experiment name.
     mlflow_tracking_uri:
-        URI for the MLFlow tracking server (e.g. ``http://localhost:5000``).
-        Falls back to local ``./mlruns`` when left as the default.
+        URI for the MLFlow tracking server.  Defaults to a local SQLite
+        database (``sqlite:///mlflow.db``) for robust, query-able storage.
     n_trials:
         Number of Optuna trials when running a sweep.
     vae_epochs:
@@ -61,7 +63,7 @@ class ExperimentConfig:
 
     # MLFlow
     experiment_name: str = "SC2_Latent_TwoStage"
-    mlflow_tracking_uri: str = "mlruns"
+    mlflow_tracking_uri: str = DEFAULT_MLFLOW_URI
 
     # Sweep
     n_trials: int = 20

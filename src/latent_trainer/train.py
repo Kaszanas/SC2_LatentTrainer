@@ -37,6 +37,7 @@ import click
 import lightning as L
 import torch
 
+from latent_trainer.config import DEFAULT_MLFLOW_URI, LOGGING_FORMAT
 from latent_trainer.configs.experiment_config import ExperimentConfig
 from latent_trainer.data_utils import load_and_normalize
 from latent_trainer.hyperparameter_search.ray_optuna_search import (
@@ -72,7 +73,7 @@ logger = logging.getLogger(__name__)
 )
 @click.option("--n-trials", type=int, default=20, show_default=True, help="Optuna trials for sweep mode.")
 @click.option("--experiment-name", default="SC2_Latent_TwoStage", show_default=True, help="MLFlow experiment name.")
-@click.option("--mlflow-uri", default="mlruns", show_default=True, help="MLFlow tracking URI (e.g. http://localhost:5000).")
+@click.option("--mlflow-uri", default=None, show_default=False, help="MLFlow tracking URI.  Defaults to sqlite:///mlflow.db.")
 @click.option("--vae-epochs", type=int, default=200, show_default=True, help="Max VAE epochs.")
 @click.option("--cls-epochs", type=int, default=100, show_default=True, help="Max classifier epochs.")
 @click.option("--batch-size", type=int, default=256, show_default=True, help="Default batch size.")
@@ -106,8 +107,12 @@ def main(
     """SC2 Latent Trainer — unified training & HPO entrypoint."""
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        format=LOGGING_FORMAT,
     )
+
+    # Fall back to SQLite URI when CLI doesn't specify
+    if mlflow_uri is None:
+        mlflow_uri = DEFAULT_MLFLOW_URI
 
     config = ExperimentConfig(
         pipeline=pipeline,

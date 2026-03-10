@@ -29,9 +29,17 @@ import torch
 from lightning.pytorch import Trainer
 from torch.utils.data import DataLoader, Dataset
 
+import mlflow
+
+from latent_trainer.config import DEFAULT_MLFLOW_URI
 from latent_trainer.data_utils import load_cached_dataloaders
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
-from latent_trainer.tracking.mlflow_utils import create_mlflow_logger, log_best_trial
+from latent_trainer.tracking.mlflow_utils import (
+    create_child_mlflow_logger,
+    create_mlflow_logger,
+    log_checkpoint_artifacts,
+    start_parent_run,
+)
 
 from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
 from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS
@@ -152,9 +160,10 @@ def train_guided(
     lr_c: float = 1e-4,
     weight_decay_c: float = 1e-4,
     test_interval: int = 1,
-    mlflow_uri: str = "mlruns",
+    mlflow_uri: str = DEFAULT_MLFLOW_URI,
     experiment_name: str = "SC2_GuidedVAE",
     run_name: str | None = None,
+    parent_run_id: str | None = None,
 ) -> LitGuidedVAE:
     """Run a single guided-VAE training run and return the trained model."""
     os.makedirs(output_dir, exist_ok=True)
@@ -183,11 +192,20 @@ def train_guided(
     tb_logger = L.pytorch.loggers.TensorBoardLogger(
         save_dir=output_dir, name="tensorboard_logs",
     )
-    mlf_logger = create_mlflow_logger(
-        experiment_name=experiment_name,
-        run_name=run_name or "guided_vae_train",
-        tracking_uri=mlflow_uri,
-    )
+    # Use child nesting if we have a parent run
+    if parent_run_id:
+        mlf_logger = create_child_mlflow_logger(
+            experiment_name=experiment_name,
+            run_name=run_name or "guided_vae_train",
+            parent_run_id=parent_run_id,
+            tracking_uri=mlflow_uri,
+        )
+    else:
+        mlf_logger = create_mlflow_logger(
+            experiment_name=experiment_name,
+            run_name=run_name or "guided_vae_train",
+            tracking_uri=mlflow_uri,
+        )
 
     trainer = Trainer(
         max_epochs=epochs,
@@ -202,6 +220,7 @@ def train_guided(
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
     # Save final model in PyTorch format
+    final_model_path = os.path.join(output_dir, "final_model.pth")
     torch.save(
         {
             "epoch": epochs,
@@ -209,9 +228,18 @@ def train_guided(
             "classifier_state_dict": model.classifier.state_dict(),
             "loss": trainer.callback_metrics.get("train_vae_loss", float("inf")).item(),
         },
-        os.path.join(output_dir, "final_model.pth"),
+        final_model_path,
     )
-    logger.info("Training complete.  Model saved to %s/final_model.pth", output_dir)
+
+    # Log checkpoints as MLFlow artifacts
+    ckpt_dir = os.path.join(output_dir, "checkpoints")
+    if mlf_logger.run_id:
+        mlflow.set_tracking_uri(mlflow_uri)
+        with mlflow.start_run(run_id=mlf_logger.run_id):
+            log_checkpoint_artifacts(ckpt_dir, mlflow_uri)
+            mlflow.log_artifact(final_model_path)
+
+    logger.info("Training complete.  Model saved to %s", final_model_path)
 
     return model
 
@@ -227,80 +255,89 @@ def run_optuna_search(
     optuna_db: str = "sqlite:///optuna_study.db",
     study_name: str = "vae_optimization",
     full_epochs: int = 10,
-    mlflow_uri: str = "mlruns",
+    mlflow_uri: str = DEFAULT_MLFLOW_URI,
     experiment_name: str = "SC2_GuidedVAE",
 ) -> optuna.Study:
-    """Run Optuna HPO for the guided VAE and retrain with best params."""
+    """Run Optuna HPO for the guided VAE and retrain with best params.
+
+    All trials are nested under a parent MLFlow run for grouped UI display.
+    """
     os.makedirs(output_dir, exist_ok=True)
 
     tb_logger = L.pytorch.loggers.TensorBoardLogger(
         save_dir=output_dir, name="tensorboard_logs",
     )
 
-    def objective(trial: optuna.Trial) -> float:
-        model = LitGuidedVAE(
-            n_vae_dis=trial.suggest_int("nz", 8, 64),
-            lr=trial.suggest_float("lr", 1e-5, 1e-3, log=True),
-            weight_decay=trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
-            lr_c=trial.suggest_float("lr_c", 1e-5, 1e-3, log=True),
-            weight_decay_c=trial.suggest_float("weight_decay_c", 1e-6, 1e-3, log=True),
-            w_cls=trial.suggest_float("cls", 0.1, 10.0),
-            input_dim=input_dim,
-        )
-        pruning_cb = optuna.integration.PyTorchLightningPruningCallback(
-            trial, monitor="val_vae_loss",
-        )
-        trial_tb = L.pytorch.loggers.TensorBoardLogger(
-            save_dir=os.path.join(output_dir, "tensorboard_logs", "optuna_trials"),
-            name=f"trial_{trial.number}",
-        )
-        trial_mlf = create_mlflow_logger(
-            experiment_name=experiment_name,
-            run_name=f"guided_vae_trial_{trial.number}",
-            tracking_uri=mlflow_uri,
-        )
-        trainer = Trainer(
-            max_epochs=optuna_epochs,
-            logger=[trial_tb, trial_mlf],
-            enable_progress_bar=True,
-            callbacks=[pruning_cb],
-            accelerator="auto",
-            devices=1,
-            enable_checkpointing=False,
-            log_every_n_steps=10,
-        )
-        trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
-        return trainer.callback_metrics["val_vae_loss"].item()
+    # Open a parent run that all Optuna trials nest under
+    with start_parent_run(
+        experiment_name=experiment_name,
+        run_name="guided_vae_search",
+        tracking_uri=mlflow_uri,
+        params={"n_trials": n_trials, "optuna_epochs": optuna_epochs},
+    ) as parent_run:
+        parent_run_id = parent_run.info.run_id
 
-    study = optuna.create_study(
-        study_name=study_name,
-        storage=optuna_db,
-        direction="minimize",
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=5),
-        load_if_exists=True,
-    )
-    study.optimize(objective, n_trials=n_trials)
+        def objective(trial: optuna.Trial) -> float:
+            model = LitGuidedVAE(
+                n_vae_dis=trial.suggest_int("nz", 8, 64),
+                lr=trial.suggest_float("lr", 1e-5, 1e-3, log=True),
+                weight_decay=trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
+                lr_c=trial.suggest_float("lr_c", 1e-5, 1e-3, log=True),
+                weight_decay_c=trial.suggest_float("weight_decay_c", 1e-6, 1e-3, log=True),
+                w_cls=trial.suggest_float("cls", 0.1, 10.0),
+                input_dim=input_dim,
+            )
+            pruning_cb = optuna.integration.PyTorchLightningPruningCallback(
+                trial, monitor="val_vae_loss",
+            )
+            trial_tb = L.pytorch.loggers.TensorBoardLogger(
+                save_dir=os.path.join(output_dir, "tensorboard_logs", "optuna_trials"),
+                name=f"trial_{trial.number}",
+            )
+            trial_mlf = create_child_mlflow_logger(
+                experiment_name=experiment_name,
+                run_name=f"guided_vae_trial_{trial.number}",
+                parent_run_id=parent_run_id,
+                tracking_uri=mlflow_uri,
+                params=trial.params,
+            )
+            trainer = Trainer(
+                max_epochs=optuna_epochs,
+                logger=[trial_tb, trial_mlf],
+                enable_progress_bar=True,
+                callbacks=[pruning_cb],
+                accelerator="auto",
+                devices=1,
+                enable_checkpointing=False,
+                log_every_n_steps=10,
+            )
+            trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+            return trainer.callback_metrics["val_vae_loss"].item()
 
-    # Log best trial to TensorBoard + MLFlow
-    best = study.best_trial
-    tb_logger.log_hyperparams(best.params, {"val_vae_loss": best.value})
-    logger.info("Best trial #%d  val_vae_loss=%.4f", best.number, best.value)
-    for k, v in best.params.items():
-        logger.info("  %s: %s", k, v)
+        study = optuna.create_study(
+            study_name=study_name,
+            storage=optuna_db,
+            direction="minimize",
+            pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=5),
+            load_if_exists=True,
+        )
+        study.optimize(objective, n_trials=n_trials)
 
-    # Log summary to MLFlow
-    import mlflow
-    mlflow.set_tracking_uri(mlflow_uri)
-    mlflow.set_experiment(experiment_name)
-    with mlflow.start_run(run_name="best_trial_summary"):
-        mlflow.log_params(best.params)
+        # Log best trial to TensorBoard + parent MLFlow run
+        best = study.best_trial
+        tb_logger.log_hyperparams(best.params, {"val_vae_loss": best.value})
+        logger.info("Best trial #%d  val_vae_loss=%.4f", best.number, best.value)
+        for k, v in best.params.items():
+            logger.info("  %s: %s", k, v)
+
+        # Log best results to the parent run
         mlflow.log_metric("best_val_vae_loss", best.value)
         mlflow.log_metric("best_trial_number", best.number)
+        mlflow.log_params({f"best_{k}": v for k, v in best.params.items()})
         mlflow.set_tag("source", "optuna_best_trial")
-    logger.info("MLFlow: logged best trial as summary run")
 
-    # Retrain with best params
-    logger.info("Retraining with best hyperparameters…")
+    # Retrain with best params (outside parent run — gets its own run)
+    logger.info("Retraining with best hyperparameters\u2026")
     train_guided(
         train_loader=train_loader,
         val_loader=val_loader,
