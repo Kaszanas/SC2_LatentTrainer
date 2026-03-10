@@ -1,3 +1,4 @@
+import logging
 import argparse
 from typing import Any
 
@@ -12,6 +13,10 @@ from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import MLFlowLogger
 from optuna.integration.mlflow import MLflowCallback
 from torch.utils.data import DataLoader, TensorDataset
+
+from latent_trainer.data_utils import extract_latents, load_and_normalize
+
+logger = logging.getLogger(__name__)
 
 
 # --- VAE Lightning Module ---
@@ -198,56 +203,7 @@ class LitClassifier(L.LightningModule):
 
 
 # --- Helpers ---
-def load_and_normalize(
-    cache_path: str,
-) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
-]:
-    """Load cached dataset and normalize."""
-    print(f"Loading data from {cache_path}...")
-    cached = torch.load(cache_path, weights_only=True)
-    train_X = cached["train_features"].float()  # [N, 2, F]
-    train_y = cached["train_labels"].float()
-    val_X = cached["val_features"].float()
-    val_y = cached["val_labels"].float()
-
-    # Normalize (fit on train)
-    shape = train_X.shape
-    train_flat = train_X.reshape(-1, shape[-1])
-    val_flat = val_X.reshape(-1, shape[-1])
-    mean = train_flat.mean(dim=0, keepdim=True)
-    std = train_flat.std(dim=0, keepdim=True) + 1e-8
-
-    train_flat = (train_flat - mean) / std
-    val_flat = (val_flat - mean) / std
-
-    train_X = train_flat.reshape(shape)
-    val_X = val_flat.reshape(val_X.shape)
-
-    return train_X, train_y, val_X, val_y, mean, std
-
-
-def extract_latents(
-    vae: LitVAE, data: torch.Tensor, device: torch.device, batch_size: int = 256
-) -> torch.Tensor:
-    """Extract latent representations using frozen encoder."""
-    vae.eval()
-    vae.to(device)
-
-    # Process each player separately
-    all_latents = []
-    for player_idx in range(2):
-        player_data = data[:, player_idx, :]  # [N, 203]
-        latents = []
-        with torch.no_grad():
-            for i in range(0, len(player_data), batch_size):
-                batch = player_data[i : i + batch_size].to(device)
-                mu, _ = vae.encode(batch)  # Use mean
-                latents.append(mu.cpu())
-        all_latents.append(torch.cat(latents, dim=0))
-
-    # Concatenate both players' latents: [N, 2*latent_dim]
-    return torch.cat(all_latents, dim=1)
+# load_and_normalize and extract_latents are imported from latent_trainer.data_utils
 
 
 def run_pipeline(
@@ -276,9 +232,9 @@ def run_pipeline(
     run_prefix = f"trial_{trial_num}" if trial_num is not None else "run"
 
     # --- Stage 1: VAE Training ---
-    print("\n" + "=" * 60)
-    print(f"STAGE 1: VAE Training ({run_prefix})")
-    print("=" * 60)
+    logger.info("\n" + "=" * 60)
+    logger.info(f"STAGE 1: VAE Training ({run_prefix})")
+    logger.info("=" * 60)
 
     # Flatten inputs for VAE: [N, 2, F] -> [N*2, F]
     train_flat = train_X.reshape(-1, input_dim)
@@ -329,21 +285,21 @@ def run_pipeline(
     trainer_vae.fit(vae_model, vae_train_loader, vae_val_loader)
 
     # Load best VAE model
-    print(f"Loading best VAE checkpoint: {checkpoint_callback_vae.best_model_path}")
+    logger.info(f"Loading best VAE checkpoint: {checkpoint_callback_vae.best_model_path}")
     best_vae = LitVAE.load_from_checkpoint(checkpoint_callback_vae.best_model_path)
     best_vae.eval()
     best_vae.to(device)
 
     # --- Intermediate: Extract Latents ---
-    print("\nExtracting latents...")
+    logger.info("\nExtracting latents...")
     train_z = extract_latents(best_vae, train_X, device, batch_size)
     val_z = extract_latents(best_vae, val_X, device, batch_size)
-    print(f"Latents shape - Train: {train_z.shape}, Val: {val_z.shape}")
+    logger.info(f"Latents shape - Train: {train_z.shape}, Val: {val_z.shape}")
 
     # --- Stage 2: Classifier Training ---
-    print("\n" + "=" * 60)
-    print(f"STAGE 2: Classifier Training ({run_prefix})")
-    print("=" * 60)
+    logger.info("\n" + "=" * 60)
+    logger.info(f"STAGE 2: Classifier Training ({run_prefix})")
+    logger.info("=" * 60)
 
     # Use unsqueeze(1) to match classifier output shape [N, 1]
     cls_train_loader = DataLoader(
@@ -390,7 +346,7 @@ def run_pipeline(
 
     trainer_cls.fit(cls_model, cls_train_loader, cls_val_loader)
 
-    print(
+    logger.info(
         f"\nBest Classifier Accuracy: {checkpoint_callback_cls.best_model_score:.2f}%"
     )
 
@@ -441,7 +397,7 @@ def main() -> None:
     input_dim = train_X.shape[-1]
 
     if args.sweep:
-        print("Starting Optuna Hyperparameter Sweep...")
+        logger.info("Starting Optuna Hyperparameter Sweep...")
 
         def objective(trial):
             # Define architecture search space
@@ -492,8 +448,8 @@ def main() -> None:
         study = optuna.create_study(direction="maximize")
         study.optimize(objective, n_trials=args.n_trials, callbacks=[mlflow_callback])
 
-        print(f"Best trial: {study.best_trial.value}")
-        print(f"Best params: {study.best_trial.params}")
+        logger.info(f"Best trial: {study.best_trial.value}")
+        logger.info(f"Best params: {study.best_trial.params}")
 
     else:
         # Standard Single Run
@@ -505,8 +461,9 @@ def main() -> None:
             "dropout": 0.3,  # Default
         }
         run_pipeline(train_X, train_y, val_X, val_y, input_dim, device, args, params)
-        print("Two-stage training complete.")
+        logger.info("Two-stage training complete.")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     main()

@@ -14,7 +14,9 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-from train_transformer import SC2Transformer, load_and_normalize, FEATURE_GROUPS, NUM_GROUPS
+from train_transformer import SC2Transformer
+from latent_trainer.data_utils import load_and_normalize
+from latent_trainer.features.feature_groups import FEATURE_GROUPS, NUM_GROUPS
 
 
 # Token labels for visualization
