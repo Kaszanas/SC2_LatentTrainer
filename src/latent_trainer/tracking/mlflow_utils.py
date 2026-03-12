@@ -2,7 +2,38 @@
 
 Provides thin wrappers around the MLFlow client so every module uses
 consistent tracking URIs, experiment naming, artifact logging, and
-parent–child run nesting.
+parent-child run nesting.
+
+Three key patterns are implemented:
+
+1. **SQLite-backed tracking** -- all modules default to
+   ``sqlite:///mlflow.db`` via :data:`~latent_trainer.config.DEFAULT_MLFLOW_URI`.
+
+2. **Parent-child run nesting** -- HPO sweeps create a single parent run
+   and nest each trial underneath it.  Trials are tagged with
+   ``mlflow.parentRunId`` so they appear grouped in the MLFlow UI.
+
+3. **Artifact logging** -- checkpoint directories and model files are
+   logged as MLFlow artifacts for easy retrieval from the UI.
+
+Usage::
+
+    from latent_trainer.tracking.mlflow_utils import (
+        create_mlflow_logger,
+        start_parent_run,
+        create_child_mlflow_logger,
+        log_checkpoint_artifacts,
+    )
+
+    # Simple single run:
+    mlf_logger = create_mlflow_logger("my_experiment", "run_1")
+
+    # Nested HPO sweep:
+    with start_parent_run("my_experiment", "hparam_search") as parent:
+        for i in range(n_trials):
+            child_logger = create_child_mlflow_logger(
+                "my_experiment", f"trial_{i}", parent.info.run_id,
+            )
 """
 
 from __future__ import annotations
@@ -74,7 +105,12 @@ def create_mlflow_logger(
 
 
 # ------------------------------------------------------------------
-# Parent–child run nesting
+# Parent-child run nesting
+#
+# During HPO sweeps, a "parent" run is opened and all individual trial
+# runs are created as children.  This groups trials in the MLFlow UI
+# and lets you log aggregate results (best params, best metric) on
+# the parent run itself.
 # ------------------------------------------------------------------
 
 
@@ -165,6 +201,10 @@ def create_child_mlflow_logger(
 
 # ------------------------------------------------------------------
 # Artifact logging
+#
+# After training, checkpoint files and final model weights can be
+# uploaded to MLFlow as artifacts.  This makes them browsable and
+# downloadable from the MLFlow UI without needing filesystem access.
 # ------------------------------------------------------------------
 
 
