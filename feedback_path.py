@@ -16,13 +16,32 @@ Two strategies are available:
     winning region.  Reports three complementary feedback signals:
     raw delta, minimum-viable delta, and P(win)-gain-weighted delta.
 
+    The gradient has two components at each step::
+
+        total_grad = grad_classifier + density_weight * grad_kde
+
+    - ``grad_classifier``: direction that increases P(win) fastest
+      (backprop through the opponent-aware binary classifier).
+    - ``grad_kde``: direction that increases log-density under a
+      Gaussian KDE fitted to all training latents (numerical gradient).
+
+    The density term prevents the path from leaving the data manifold,
+    ensuring that decoded features remain realistic.
+
 Both strategies are **opponent-aware** — P(win) is computed using the
 full ``(player_z, opponent_z)`` input to the classifier.
 
 Usage::
 
+    # Linear interpolation toward win centroid:
     uv run python feedback_path.py --strategy linear --method centroid
+
+    # Gradient ascent + KDE with 15 top features:
     uv run python feedback_path.py --strategy gradient_kde --top-k 15
+
+    # Custom GA hyperparameters:
+    uv run python feedback_path.py --strategy gradient_kde \\
+        --ga-steps 800 --ga-lr 0.01 --density-weight 0.5
 """
 
 import argparse
@@ -157,17 +176,43 @@ def _opponent_aware_p_win(
 
 # ---------------------------------------------------------------------------
 # Strategy: linear
+#
+# The simplest approach: pick a target in the winning region (centroid
+# or k-NN average), then linearly interpolate from the losing sample.
+# Fast, deterministic, but the straight line may cut through low-density
+# regions where decoded features are unrealistic.
 # ---------------------------------------------------------------------------
 
 
 def _find_path_linear(start_z, target_z, n_steps) -> torch.Tensor:
-    """Straight-line interpolation in latent space."""
+    """Straight-line interpolation in latent space.
+
+    Returns ``n_steps`` evenly-spaced points along the line from
+    ``start_z`` to ``target_z``.
+    """
     alphas = torch.linspace(0.0, 1.0, n_steps).unsqueeze(1)
     return start_z + alphas * (target_z - start_z)
 
 
 # ---------------------------------------------------------------------------
 # Strategy: gradient_kde
+#
+# Instead of picking a fixed target, this strategy uses gradient ascent
+# to iteratively move the player's latent code toward higher P(win).
+#
+# At each step the total gradient is:
+#   total_grad = grad_classifier  +  density_weight * grad_kde
+#
+# - grad_classifier comes from backprop through the classifier.
+#   Because our classifier takes (player_z, opponent_z), only the
+#   player dimensions carry gradient; the opponent is detached.
+#
+# - grad_kde comes from numerical differentiation of the log-density
+#   under a Gaussian KDE fitted to all training latent codes.  This
+#   regularises the path to stay in data-dense regions.
+#
+# Momentum-based updates (velocity) smooth out the trajectory.
+# The path is downsampled to n_waypoints for uniform spacing.
 # ---------------------------------------------------------------------------
 
 
@@ -257,9 +302,13 @@ def _gradient_ascent_path(
         logit.backward()
 
         with torch.no_grad():
+            # ── Classifier gradient: direction that increases P(win)
             grad_cls = z.grad.clone()
 
-            # KDE density gradient (numerical, per-dimension)
+            # ── KDE density gradient: numerical central difference
+            #    For each latent dimension i, perturb z[i] by ±eps and
+            #    measure the change in log-density.  This steers the path
+            #    toward high-density regions of the training distribution.
             z_np = z.detach().cpu().numpy()
             grads_kde = np.zeros_like(z_np)
             eps = 1e-3
