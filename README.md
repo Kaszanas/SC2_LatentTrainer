@@ -16,24 +16,75 @@ uv sync
 
 ### Step 2: Start the training
 
+**Unified entrypoint (two-stage or guided VAE):**
+
 ```bash
-python src\latent_trainer\models\train_model.py
+# Two-stage pipeline (default):
+uv run python -m latent_trainer --pipeline two_stage --cache data/cached_dataset_rich.pt
+
+# Guided VAE pipeline:
+uv run python -m latent_trainer --pipeline guided_vae --cache data/cached_dataset_rich.pt
+
+# Hyperparameter sweep (Ray Tune + Optuna):
+uv run python -m latent_trainer --pipeline two_stage --mode sweep --n-trials 30
 ```
 
-### Step 3: Monitor training with TensorBoard (in a separate terminal)
+**Standalone guided-VAE training:**
+
+```bash
+uv run python -m latent_trainer.models.train_model --cached data/cached_dataset_rich.pt
+```
+
+### Step 3: Monitor training
+
+**TensorBoard** (in a separate terminal):
 
 ```bash
 tensorboard --logdir=output/tensorboard_logs
 ```
 
-## Advanced Usage
-
-You can customize your training run with various options (see command line interface below).
-
-Example with custom parameters:
+**MLFlow UI** (in a separate terminal):
 
 ```bash
-python src\latent_trainer\models\train_model.py --epochs 20 --batch-size 256 --transform economy_average_vs_outcome
+mlflow ui --backend-store-uri sqlite:///mlflow.db
+```
+
+All training runs are logged to a local SQLite database (`mlflow.db`) by
+default.  To use a remote tracking server, pass `--mlflow-uri`:
+
+```bash
+uv run python -m latent_trainer --mlflow-uri http://localhost:5000
+```
+
+## Feedback Path Finder
+
+After training, use the feedback path finder to generate improvement
+guidance for a losing sample:
+
+```bash
+# Linear interpolation (fast, deterministic):
+uv run python feedback_path.py --strategy linear --method centroid
+
+# Gradient ascent + KDE density (manifold-following, 3-signal feedback):
+uv run python feedback_path.py --strategy gradient_kde --top-k 15
+```
+
+The `gradient_kde` strategy computes:
+1. **Raw delta** — overall direction of change (start → end)
+2. **Minimum-viable delta** — change needed just to cross P(win) = 0.5
+3. **P(win)-gain-weighted delta** — features that moved while winning probability rose
+
+Both strategies are opponent-aware — P(win) is computed using both
+players' latent codes.
+
+## Advanced Usage
+
+You can customize your training run with various options (see `--help`):
+
+```bash
+uv run python -m latent_trainer --help
+uv run python -m latent_trainer.models.train_model --help
+uv run python feedback_path.py --help
 ```
 
 Note: Currently only the `economy_average_vs_outcome` transform is fully functional.
