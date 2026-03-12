@@ -127,7 +127,7 @@ def rich_transform(sc2_replay: SC2ReplayData) -> Optional[Tuple[torch.Tensor, in
     # Game duration in loops
     try:
         game_duration = float(sc2_replay.header.elapsedGameLoops)
-    except:
+    except (AttributeError, ValueError, TypeError):
         game_duration = 0.0
 
     player_features = []

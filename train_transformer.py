@@ -28,6 +28,7 @@ Usage:
     uv run python train_transformer.py --d-model 128 --n-heads 4 --n-layers 4 --epochs 200
 """
 
+import logging
 import os
 import argparse
 import math
@@ -37,20 +38,13 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
+from latent_trainer.data_utils import load_and_normalize
 
-# --- Feature Group Definitions ---
-# These correspond to the layout in rich_transform.py
-FEATURE_GROUPS = [
-    ("early_economy", 0, 39),
-    ("mid_economy", 39, 78),
-    ("late_economy", 78, 117),
-    ("final_state", 117, 156),
-    ("economy_delta", 156, 195),
-    ("meta_stats", 195, 199),     # APM, MMR, SQ, supplyCappedPercent
-    ("unit_activity", 199, 201),  # units_born, units_killed
-    ("game_info", 201, 203),      # upgrades, duration
-]
-NUM_GROUPS = len(FEATURE_GROUPS)
+
+# Feature group definitions — imported from the features package
+from latent_trainer.features.feature_groups import FEATURE_GROUPS, NUM_GROUPS
+
+logger = logging.getLogger(__name__)
 
 
 class FeatureTokenizer(nn.Module):
@@ -172,26 +166,7 @@ class SC2Transformer(nn.Module):
         return self.classifier(cls_output)  # [B, 1]
 
 
-def load_and_normalize(cache_path):
-    """Load cached dataset and normalize."""
-    cached = torch.load(cache_path, weights_only=True)
-    train_X = cached['train_features'].float()
-    train_y = cached['train_labels'].float()
-    val_X = cached['val_features'].float()
-    val_y = cached['val_labels'].float()
-
-    # Normalize per-feature (fit on train)
-    shape = train_X.shape
-    train_flat = train_X.reshape(-1, shape[-1])
-    val_flat = val_X.reshape(-1, shape[-1])
-    mean = train_flat.mean(dim=0, keepdim=True)
-    std = train_flat.std(dim=0, keepdim=True) + 1e-8
-    train_flat = (train_flat - mean) / std
-    val_flat = (val_flat - mean) / std
-    train_X = train_flat.reshape(shape)
-    val_X = val_flat.reshape(val_X.shape)
-
-    return train_X, train_y, val_X, val_y
+# load_and_normalize is imported from latent_trainer.data_utils
 
 
 def count_parameters(model):
@@ -200,13 +175,13 @@ def count_parameters(model):
 
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
 
     # Load data
-    print("Loading dataset...")
-    train_X, train_y, val_X, val_y = load_and_normalize(args.cache)
-    print(f"  Train: {train_X.shape}, Val: {val_X.shape}")
-    print(f"  Label balance — Train: {train_y.mean():.3f}, Val: {val_y.mean():.3f}")
+    logger.info("Loading dataset...")
+    train_X, train_y, val_X, val_y, _mean, _std = load_and_normalize(args.cache)
+    logger.info(f"  Train: {train_X.shape}, Val: {val_X.shape}")
+    logger.info(f"  Label balance — Train: {train_y.mean():.3f}, Val: {val_y.mean():.3f}")
 
     train_loader = DataLoader(
         TensorDataset(train_X, train_y.unsqueeze(1)),
@@ -225,12 +200,12 @@ def train(args):
         dropout=args.dropout,
     ).to(device)
 
-    print(f"\n{'='*60}")
-    print(f"SC2 Transformer Classifier")
-    print(f"  d_model={args.d_model}, heads={args.n_heads}, layers={args.n_layers}")
-    print(f"  Tokens: 8 groups × 2 players + 1 [CLS] = 17")
-    print(f"  Parameters: {count_parameters(model):,}")
-    print(f"{'='*60}\n")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"SC2 Transformer Classifier")
+    logger.info(f"  d_model={args.d_model}, heads={args.n_heads}, layers={args.n_layers}")
+    logger.info(f"  Tokens: 8 groups × 2 players + 1 [CLS] = 17")
+    logger.info(f"  Parameters: {count_parameters(model):,}")
+    logger.info(f"{'='*60}\n")
 
     criterion = nn.BCELoss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -295,22 +270,22 @@ def train(args):
             no_improve += 1
 
         if epoch % 5 == 0 or no_improve == 0:
-            print(f"  Epoch {epoch:3d}: train_acc={train_acc:.1f}%, val_acc={val_acc:.1f}%, "
+            logger.info(f"  Epoch {epoch:3d}: train_acc={train_acc:.1f}%, val_acc={val_acc:.1f}%, "
                   f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, "
                   f"lr={optimizer.param_groups[0]['lr']:.1e} "
                   f"{'*BEST*' if no_improve == 0 else ''}")
 
         if no_improve >= patience:
-            print(f"  Early stopped at epoch {epoch}")
+            logger.info(f"  Early stopped at epoch {epoch}")
             break
 
-    print(f"\n{'='*60}")
-    print(f"TRANSFORMER TRAINING COMPLETE")
-    print(f"  Architecture: d_model={args.d_model}, heads={args.n_heads}, layers={args.n_layers}")
-    print(f"  Parameters:   {count_parameters(model):,}")
-    print(f"  Best val acc: {best_val_acc:.2f}%")
-    print(f"  Saved to:     output/transformer_best.pth")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"TRANSFORMER TRAINING COMPLETE")
+    logger.info(f"  Architecture: d_model={args.d_model}, heads={args.n_heads}, layers={args.n_layers}")
+    logger.info(f"  Parameters:   {count_parameters(model):,}")
+    logger.info(f"  Best val acc: {best_val_acc:.2f}%")
+    logger.info(f"  Saved to:     output/transformer_best.pth")
+    logger.info(f"{'='*60}")
 
     return best_val_acc
 
@@ -333,4 +308,6 @@ def main():
 
 
 if __name__ == "__main__":
+    from latent_trainer.config import LOGGING_FORMAT
+    logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     main()

@@ -32,8 +32,9 @@ import matplotlib.pyplot as plt
 import json
 
 # --- Import models ---
-from train_two_stage import SimpleVAE, LatentClassifier, load_and_normalize, extract_latents
+from train_two_stage import SimpleVAE, LatentClassifier
 from train_transformer import SC2Transformer
+from latent_trainer.data_utils import extract_latents, load_and_normalize
 
 
 def load_data(cache_path="data/cached_dataset_rich.pt"):

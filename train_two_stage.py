@@ -12,6 +12,7 @@ Usage:
     uv run python train_two_stage.py --vae-epochs 200 --cls-epochs 100 --latent-dim 32
 """
 
+import logging
 import os
 import argparse
 import torch
@@ -19,6 +20,10 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
+
+from latent_trainer.data_utils import extract_latents, load_and_normalize
+
+logger = logging.getLogger(__name__)
 
 
 # --- VAE Model (reconstruction only) ---
@@ -99,32 +104,6 @@ class LatentClassifier(nn.Module):
         return self.net(z)
 
 
-def load_and_normalize(
-    cache_path: str,
-) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
-]:
-    """Load cached dataset and normalize."""
-    cached = torch.load(cache_path, weights_only=True)
-    train_X = cached["train_features"].float()  # [N, 2, F]
-    train_y = cached["train_labels"].float()
-    val_X = cached["val_features"].float()
-    val_y = cached["val_labels"].float()
-
-    # Normalize (fit on train)
-    shape = train_X.shape
-    train_flat = train_X.reshape(-1, shape[-1])
-    val_flat = val_X.reshape(-1, shape[-1])
-    mean = train_flat.mean(dim=0, keepdim=True)
-    std = train_flat.std(dim=0, keepdim=True) + 1e-8
-    train_flat = (train_flat - mean) / std
-    val_flat = (val_flat - mean) / std
-    train_X = train_flat.reshape(shape)
-    val_X = val_flat.reshape(val_X.shape)
-
-    return train_X, train_y, val_X, val_y, mean, std
-
-
 def train_vae_stage(
     train_X: torch.Tensor,
     val_X: torch.Tensor,
@@ -156,11 +135,11 @@ def train_vae_stage(
     patience = 20
     no_improve = 0
 
-    print(f"\n{'=' * 60}")
-    print("STAGE 1: VAE Reconstruction Training")
-    print(f"  Input dim: {input_dim}, Latent dim: {latent_dim}")
-    print(f"  Train: {len(train_flat)}, Val: {len(val_flat)}")
-    print(f"{'=' * 60}")
+    logger.info(f"\n{'=' * 60}")
+    logger.info("STAGE 1: VAE Reconstruction Training")
+    logger.info(f"  Input dim: {input_dim}, Latent dim: {latent_dim}")
+    logger.info(f"  Train: {len(train_flat)}, Val: {len(val_flat)}")
+    logger.info(f"{'=' * 60}")
 
     for epoch in range(epochs):
         vae.train()
@@ -195,45 +174,21 @@ def train_vae_stage(
             no_improve += 1
 
         if epoch % 10 == 0 or no_improve == 0:
-            print(
+            logger.info(
                 f"  Epoch {epoch:3d}: train_loss={train_loss:.2f}, val_loss={val_loss:.2f}, "
                 f"lr={optimizer.param_groups[0]['lr']:.1e} {'*BEST*' if no_improve == 0 else ''}"
             )
 
         if no_improve >= patience:
-            print(f"  Early stopped at epoch {epoch}")
+            logger.info(f"  Early stopped at epoch {epoch}")
             break
 
     # Load best VAE
     vae.load_state_dict(torch.load("output/vae_best.pth", weights_only=True))
-    print(f"\n  Best VAE val_loss: {best_val_loss:.2f}")
+    logger.info(f"\n  Best VAE val_loss: {best_val_loss:.2f}")
     return vae
 
 
-def extract_latents(
-    vae: SimpleVAE, data: torch.Tensor, device: torch.device, batch_size: int = 256
-) -> torch.Tensor:
-    """Extract latent representations using frozen encoder."""
-    vae.eval()
-    input_dim = data.shape[-1]
-    N = data.shape[0]
-
-    # Process each player separately
-    all_latents = []
-    for player_idx in range(2):
-        player_data = data[:, player_idx, :]  # [N, 203]
-        latents = []
-        with torch.no_grad():
-            for i in range(0, len(player_data), batch_size):
-                batch = player_data[i : i + batch_size].to(device)
-                mu, _ = vae.encode(
-                    batch
-                )  # Use mean (not sampled z) for deterministic encoding
-                latents.append(mu.cpu())
-        all_latents.append(torch.cat(latents, dim=0))
-
-    # Concatenate both players' latents: [N, 2*latent_dim]
-    return torch.cat(all_latents, dim=1)
 
 
 def train_classifier_stage(
@@ -267,11 +222,11 @@ def train_classifier_stage(
     patience = 15
     no_improve = 0
 
-    print(f"\n{'=' * 60}")
-    print("STAGE 2: Classifier on Frozen Latent Space")
-    print(f"  Input: [N, {latent_dim * 2}] (both players concatenated)")
-    print(f"  Train: {len(train_z)}, Val: {len(val_z)}")
-    print(f"{'=' * 60}")
+    logger.info(f"\n{'=' * 60}")
+    logger.info("STAGE 2: Classifier on Frozen Latent Space")
+    logger.info(f"  Input: [N, {latent_dim * 2}] (both players concatenated)")
+    logger.info(f"  Train: {len(train_z)}, Val: {len(val_z)}")
+    logger.info(f"{'=' * 60}")
 
     for epoch in range(epochs):
         classifier.train()
@@ -315,16 +270,16 @@ def train_classifier_stage(
             no_improve += 1
 
         if epoch % 10 == 0 or no_improve == 0:
-            print(
+            logger.info(
                 f"  Epoch {epoch:3d}: train_acc={train_acc:.1f}%, val_acc={val_acc:.1f}%, "
                 f"lr={optimizer.param_groups[0]['lr']:.1e} {'*BEST*' if no_improve == 0 else ''}"
             )
 
         if no_improve >= patience:
-            print(f"  Early stopped at epoch {epoch}")
+            logger.info(f"  Early stopped at epoch {epoch}")
             break
 
-    print(f"\n  >>> BEST classifier val accuracy: {best_val_acc:.2f}%")
+    logger.info(f"\n  >>> BEST classifier val accuracy: {best_val_acc:.2f}%")
     return classifier, best_val_acc
 
 
@@ -350,15 +305,15 @@ def main() -> None:
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
 
     os.makedirs("output", exist_ok=True)
 
     # Load data
-    print("Loading dataset...")
+    logger.info("Loading dataset...")
     train_X, train_y, val_X, val_y, mean, std = load_and_normalize(args.cache)
-    print(f"  Train: {train_X.shape}, Val: {val_X.shape}")
-    print(f"  Label balance — Train: {train_y.mean():.3f}, Val: {val_y.mean():.3f}")
+    logger.info(f"  Train: {train_X.shape}, Val: {val_X.shape}")
+    logger.info(f"  Label balance — Train: {train_y.mean():.3f}, Val: {val_y.mean():.3f}")
 
     # Stage 1: Train VAE
     vae = train_vae_stage(
@@ -372,10 +327,10 @@ def main() -> None:
     )
 
     # Extract latent representations
-    print("\nExtracting latent representations...")
+    logger.info("\nExtracting latent representations...")
     train_z = extract_latents(vae, train_X, device)
     val_z = extract_latents(vae, val_X, device)
-    print(f"  Train latents: {train_z.shape}, Val latents: {val_z.shape}")
+    logger.info(f"  Train latents: {train_z.shape}, Val latents: {val_z.shape}")
 
     # Stage 2: Train classifier on latent space
     classifier, best_acc = train_classifier_stage(
@@ -403,13 +358,15 @@ def main() -> None:
         "output/two_stage_model.pth",
     )
 
-    print(f"\n{'=' * 60}")
-    print("TWO-STAGE TRAINING COMPLETE")
-    print(f"  VAE latent dim:      {args.latent_dim}")
-    print(f"  Best val accuracy:   {best_acc:.2f}%")
-    print("  Model saved to:      output/two_stage_model.pth")
-    print(f"{'=' * 60}")
+    logger.info(f"\n{'=' * 60}")
+    logger.info("TWO-STAGE TRAINING COMPLETE")
+    logger.info(f"  VAE latent dim:      {args.latent_dim}")
+    logger.info(f"  Best val accuracy:   {best_acc:.2f}%")
+    logger.info("  Model saved to:      output/two_stage_model.pth")
+    logger.info(f"{'=' * 60}")
 
 
 if __name__ == "__main__":
+    from latent_trainer.config import LOGGING_FORMAT
+    logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     main()

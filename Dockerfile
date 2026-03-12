@@ -1,5 +1,5 @@
 # Use NVIDIA CUDA base image with Python
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -51,7 +51,7 @@ ENV PATH="/opt/venv/bin:${PATH}"
 ENV VIRTUAL_ENV="/opt/venv"
 
 # Configure PyTorch CUDA index for uv
-ENV UV_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu121"
+ENV UV_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu128"
 
 # Sync dependencies from pyproject.toml using uv (includes PyTorch with CUDA)
 RUN uv sync --no-dev || uv pip install -e .
@@ -63,8 +63,8 @@ RUN mkdir -p /workspace/output/tensorboard_logs \
     /workspace/data/download \
     /workspace/data/unpack
 
-# Expose ports for TensorBoard and Optuna Dashboard
-EXPOSE 6006 8080
+# Expose ports for TensorBoard, Optuna Dashboard, and MLFlow
+EXPOSE 5000 6006 8080
 
 # Set the entrypoint
 CMD ["/bin/bash"]

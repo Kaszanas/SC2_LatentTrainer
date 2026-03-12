@@ -21,7 +21,9 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import f1_score, matthews_corrcoef, balanced_accuracy_score
 from sklearn.model_selection import StratifiedKFold
 
-from train_transformer import FEATURE_GROUPS
+from latent_trainer.features.feature_groups import FEATURE_GROUPS
+
+from latent_trainer.data_utils import normalize
 
 
 def load_all_data(cache_path="data/cached_dataset_rich.pt"):
@@ -35,16 +37,7 @@ def load_all_data(cache_path="data/cached_dataset_rich.pt"):
     return all_X, all_y
 
 
-def normalize(train_X, val_X):
-    """Normalize per-feature, fit on train."""
-    shape = train_X.shape
-    train_flat = train_X.reshape(-1, shape[-1])
-    val_flat = val_X.reshape(-1, shape[-1])
-    mean = train_flat.mean(dim=0, keepdim=True)
-    std = train_flat.std(dim=0, keepdim=True) + 1e-8
-    train_flat = (train_flat - mean) / std
-    val_flat = (val_flat - mean) / std
-    return train_flat.reshape(shape), val_flat.reshape(val_X.shape)
+
 
 
 def build_mlp(input_dim):
@@ -148,7 +141,7 @@ def run_kfold(all_X, all_y, n_folds=5, epochs=60):
         train_y, val_y = all_y[train_idx], all_y[val_idx]
 
         # Normalize per fold
-        train_X, val_X = normalize(train_X, val_X)
+        train_X, val_X = normalize(train_X, val_X)[:2]
 
         # Prepare features
         train_feat = prepare_features(train_X)
@@ -185,7 +178,7 @@ def run_ablation(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
     print(f"{'='*70}")
 
     # Baseline with all features
-    train_X_norm, val_X_norm = normalize(train_X_raw.clone(), val_X_raw.clone())
+    train_X_norm, val_X_norm = normalize(train_X_raw.clone(), val_X_raw.clone())[:2]
     train_feat = prepare_features(train_X_norm)
     val_feat = prepare_features(val_X_norm)
     model = build_mlp(train_feat.shape[1])
@@ -202,7 +195,7 @@ def run_ablation(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
         train_X_abl[:, :, start:end] = 0
         val_X_abl[:, :, start:end] = 0
 
-        train_X_norm, val_X_norm = normalize(train_X_abl, val_X_abl)
+        train_X_norm, val_X_norm = normalize(train_X_abl, val_X_abl)[:2]
         train_feat = prepare_features(train_X_norm)
         val_feat = prepare_features(val_X_norm)
         model = build_mlp(train_feat.shape[1])
@@ -251,7 +244,7 @@ def run_progressive(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
         val_X_prog[:, :, start:end] = 0
         removed_so_far.append(group_name)
 
-        train_norm, val_norm = normalize(train_X_prog.clone(), val_X_prog.clone())
+        train_norm, val_norm = normalize(train_X_prog.clone(), val_X_prog.clone())[:2]
         train_feat = prepare_features(train_norm)
         val_feat = prepare_features(val_norm)
         model = build_mlp(train_feat.shape[1])
@@ -291,7 +284,7 @@ def run_early_only(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
         train_X_sel = train_X_raw[:, :, selected]
         val_X_sel = val_X_raw[:, :, selected]
 
-        train_norm, val_norm = normalize(train_X_sel, val_X_sel)
+        train_norm, val_norm = normalize(train_X_sel, val_X_sel)[:2]
         train_feat = prepare_features(train_norm)
         val_feat = prepare_features(val_norm)
         model = build_mlp(train_feat.shape[1])

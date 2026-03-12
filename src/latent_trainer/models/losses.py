@@ -1,21 +1,37 @@
+"""Loss functions for the guided VAE training loop.
+
+``loss_supervised`` is used by :func:`latent_trainer.models.train_model.train_guided`
+for the ``suGuidedVAE`` (tabular SC2 features).
+"""
+
 import torch
 import torch.nn.functional as F
 
 
-def loss_unsupervised(recon_x, x, mu, logvar, recon_light, par):
-    BCE = F.binary_cross_entropy(recon_x.view(-1, 1, 28, 28), x, reduction="sum")
+def loss_supervised(
+    recon_x: torch.Tensor,
+    x: torch.Tensor,
+    mu: torch.Tensor,
+    logvar: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """VAE loss: MSE reconstruction + KL divergence.
 
-    BCE_light = F.binary_cross_entropy(recon_light, x, reduction="sum")
+    Parameters
+    ----------
+    recon_x : Tensor
+        Reconstructed features from the decoder.
+    x : Tensor
+        Original input features.
+    mu : Tensor
+        Latent mean from the encoder.
+    logvar : Tensor
+        Latent log-variance from the encoder.
 
-    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-
-    pd = torch.mm(par.transpose(0, 1), par).abs()
-    ORG = pd.sum() - pd.trace()
-
-    return BCE + KLD + 0.5 * BCE_light + ORG, BCE, BCE_light, ORG
-
-
-def loss_supervised(recon_x, x, mu, logvar):
+    Returns
+    -------
+    (total_loss, mse_loss)
+        Total loss is MSE + KLD, with both computed as sums over the batch.
+    """
     MSE = F.mse_loss(recon_x, x, reduction="sum")
     KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     return MSE + KLD, MSE

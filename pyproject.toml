@@ -16,7 +16,7 @@ dependencies = [
     "plotly>=6.3.1",
     "plotpy>=2.7.5",
     "pot>=0.9.6.post1",
-    "ray>=2.54.0",
+    "ray[tune]>=2.54.0",
     "sc2-datasets",
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",

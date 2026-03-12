@@ -64,6 +64,26 @@ services:
     depends_on:
       - trainer
 
+  # MLFlow tracking server for experiment management
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: sc2-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlflow/mlruns
+      - ./mlflow-db:/mlflow/db
+    networks:
+      - lightning-network
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:///mlflow/db/mlflow.db
+      --default-artifact-root /mlflow/mlruns
+    depends_on:
+      - trainer
+
 networks:
   lightning-network:
     driver: bridge
