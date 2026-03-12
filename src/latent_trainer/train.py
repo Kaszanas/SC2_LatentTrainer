@@ -3,6 +3,13 @@
 Supports both single-run and HPO (Ray Tune + Optuna) modes, with MLFlow
 experiment tracking and flexible architecture search.
 
+MLFlow tracking
+~~~~~~~~~~~~~~~
+All runs are tracked via MLFlow using a local SQLite database by default
+(`sqlite:///mlflow.db`).  Override with `--mlflow-uri` to point at a
+remote tracking server.  HPO trials are nested under a parent run for
+grouped display in the MLFlow UI.
+
 Examples
 --------
 Single run (two-stage pipeline)::

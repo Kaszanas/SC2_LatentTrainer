@@ -3,6 +3,13 @@
 Provides both cached (``.pt``) and live (``SC2EGSetDataModule``) data
 loading, with optional Optuna hyperparameter search.
 
+MLFlow integration
+~~~~~~~~~~~~~~~~~~
+Every training run is logged to MLFlow (dual TensorBoard + MLFlow loggers).
+When running Optuna HPO, trial runs are nested under a parent run (see
+:func:`run_optuna_search`).  Model checkpoints and the final ``.pth`` file
+are logged as MLFlow artifacts for easy retrieval.
+
 Usage examples::
 
     # Cached dataset (fast):
