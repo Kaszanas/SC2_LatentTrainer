@@ -1,7 +1,19 @@
 """Experiment configuration dataclass.
 
 Centralises all runtime parameters so they can be passed between modules
-without ad-hoc dictionaries.
+without ad-hoc dictionaries.  The unified ``train.py`` CLI populates
+this dataclass from command-line arguments and passes it to all
+downstream functions.
+
+Usage::
+
+    config = ExperimentConfig(
+        pipeline="two_stage",
+        cache_path="data/cached_dataset_rich.pt",
+        mode="sweep",
+        n_trials=30,
+    )
+    setup_mlflow(config)
 """
 
 from __future__ import annotations
@@ -28,6 +40,7 @@ class ExperimentConfig:
     mlflow_tracking_uri:
         URI for the MLFlow tracking server.  Defaults to a local SQLite
         database (``sqlite:///mlflow.db``) for robust, query-able storage.
+        Override via ``--mlflow-uri`` CLI flag or by editing this default.
     n_trials:
         Number of Optuna trials when running a sweep.
     vae_epochs:
@@ -52,23 +65,25 @@ class ExperimentConfig:
     cpus_per_trial:
         CPU allocation per Ray trial.
     optuna_db:
-        Optuna storage URL for the dashboard.
+        Optuna storage URL.  SQLite by default for persistence across
+        restarts and for the Optuna dashboard.
     study_name:
         Optuna study name (used for persistence / resumption).
     """
 
+    # ── Pipeline selection ──────────────────────────────────────────
     pipeline: str = "two_stage"
     cache_path: str = "data/cached_dataset_rich.pt"
     mode: str = "single"
 
-    # MLFlow
+    # ── MLFlow tracking ─────────────────────────────────────────────
     experiment_name: str = "SC2_Latent_TwoStage"
     mlflow_tracking_uri: str = DEFAULT_MLFLOW_URI
 
-    # Sweep
+    # ── Sweep configuration ─────────────────────────────────────────
     n_trials: int = 20
 
-    # Training defaults
+    # ── Training defaults (overridden per-trial during sweeps) ──────
     vae_epochs: int = 200
     cls_epochs: int = 100
     guided_vae_epochs: int = 10
@@ -78,10 +93,10 @@ class ExperimentConfig:
     cls_lr: float = 1e-3
     seed: int = 42
 
-    # Ray resources
+    # ── Ray resource allocation ─────────────────────────────────────
     gpus_per_trial: float = 1.0
     cpus_per_trial: int = 2
 
-    # Optuna persistence
+    # ── Optuna persistence ──────────────────────────────────────────
     optuna_db: str = "sqlite:///optuna_study.db"
     study_name: str = "latent_trainer_hpo"
