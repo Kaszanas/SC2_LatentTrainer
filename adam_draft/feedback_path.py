@@ -52,8 +52,11 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 from sklearn.neighbors import KernelDensity
-
 from train_two_stage import LatentClassifier, SimpleVAE, load_and_normalize
+
+# REVIEW: This is not integrated into project structure.
+# REVIEW: Not using click as in the other pieces of code.
+# REVIEW:
 
 # ---------------------------------------------------------------------------
 # Feature names -- 203 per player
@@ -236,10 +239,8 @@ def _find_path_linear(start_z, target_z, n_steps) -> torch.Tensor:
 # Momentum-based updates (velocity) smooth out the trajectory.
 # The path is downsampled to n_waypoints for uniform spacing.
 # ---------------------------------------------------------------------------
-
-
 def _gradient_ascent_path(
-    vae,
+    vae,  # REVIEW: Why passing VAE if it is not used?
     classifier,
     sample_z: torch.Tensor,
     opponent_z: torch.Tensor,
@@ -517,6 +518,7 @@ def _print_feedback_report(feedback: dict, top_k: int = 10) -> None:
 # ---------------------------------------------------------------------------
 
 
+# REVIEW: Type hints
 def _plot_main(win_c, loss_c, path_c, alphas, win_probs, pca, save_path):
     """Two-panel figure: latent space + P(win) curve."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))

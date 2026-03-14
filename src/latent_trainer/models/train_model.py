@@ -43,7 +43,7 @@ from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
 from sc2_datasets.transforms.utils import select_outcome_1v1
 from torch.utils.data import DataLoader, Dataset
 
-from latent_trainer.config import DEFAULT_MLFLOW_URI
+from latent_trainer.config import DEFAULT_MLFLOW_URI, LOGGING_FORMAT
 from latent_trainer.data_utils import load_cached_dataloaders
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
 from latent_trainer.tracking.mlflow_utils import (
@@ -59,8 +59,6 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 # Dataset helpers
 # ------------------------------------------------------------------
-
-
 class SafeDataset(Dataset):
     """Wraps a dataset to catch exceptions in ``__getitem__`` and return ``None``."""
 
@@ -102,7 +100,6 @@ def wrap_dataloader(
 # ------------------------------------------------------------------
 # Data loading
 # ------------------------------------------------------------------
-
 # Maps transform name → (transform function, input dimension)
 _TRANSFORM_REGISTRY: dict[str, tuple] = {
     "mmr_vs_result": (mmr_vs_result, 2),
@@ -149,8 +146,6 @@ def _load_cached_data(
 # ------------------------------------------------------------------
 # Training
 # ------------------------------------------------------------------
-
-
 def train_guided(
     *,
     train_loader: DataLoader,
@@ -372,11 +367,6 @@ def run_optuna_search(
     return study
 
 
-# ------------------------------------------------------------------
-# CLI
-# ------------------------------------------------------------------
-
-
 @click.command()
 @click.option(
     "-b",
@@ -504,7 +494,6 @@ def main(
     experiment_name: str,
 ) -> None:
     """Train the supervised Guided VAE with optional Optuna HPO."""
-    from latent_trainer.config import LOGGING_FORMAT
 
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     torch.manual_seed(1024)
