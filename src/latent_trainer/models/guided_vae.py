@@ -9,8 +9,14 @@ import torch
 from torch import nn
 
 
+# REVIEW: This architecture is hardcoded.
+# REVIEW: We are still using in training, but I thought we wanted to be able
+# REVIEW: To do architecture search as well?
+# REVIEW: Other models are defined directly in Lightning while this one is
+# REVIEW: left as a PyTorch module. Why is that?
+# REVIEW: No type hints are applied here.
 class suGuidedVAE(nn.Module):
-    def __init__(self, n_vae_dis=16, input_dim=39):
+    def __init__(self, n_vae_dis: int = 16, input_dim: int = 39):
         super().__init__()
 
         self.n_vae_dis = n_vae_dis
