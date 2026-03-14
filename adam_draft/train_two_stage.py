@@ -12,13 +12,14 @@ Usage:
     uv run python train_two_stage.py --vae-epochs 200 --cls-epochs 100 --latent-dim 32
 """
 
+import argparse
 import logging
 import os
-import argparse
+
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
+import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
 from latent_trainer.data_utils import extract_latents, load_and_normalize
@@ -189,8 +190,6 @@ def train_vae_stage(
     return vae
 
 
-
-
 def train_classifier_stage(
     train_z: torch.Tensor,
     train_y: torch.Tensor,
@@ -313,7 +312,9 @@ def main() -> None:
     logger.info("Loading dataset...")
     train_X, train_y, val_X, val_y, mean, std = load_and_normalize(args.cache)
     logger.info(f"  Train: {train_X.shape}, Val: {val_X.shape}")
-    logger.info(f"  Label balance — Train: {train_y.mean():.3f}, Val: {val_y.mean():.3f}")
+    logger.info(
+        f"  Label balance — Train: {train_y.mean():.3f}, Val: {val_y.mean():.3f}"
+    )
 
     # Stage 1: Train VAE
     vae = train_vae_stage(
@@ -368,5 +369,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     from latent_trainer.config import LOGGING_FORMAT
+
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     main()

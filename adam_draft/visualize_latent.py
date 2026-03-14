@@ -7,11 +7,12 @@ Usage:
     uv run python visualize_latent.py
 """
 
-import torch
-import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
+import numpy as np
+import torch
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+
 from train_two_stage import SimpleVAE, load_and_normalize
 
 

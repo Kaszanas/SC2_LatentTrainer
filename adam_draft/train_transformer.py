@@ -28,18 +28,16 @@ Usage:
     uv run python train_transformer.py --d-model 128 --n-heads 4 --n-layers 4 --epochs 200
 """
 
+import argparse
 import logging
 import os
-import argparse
-import math
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
 
 from latent_trainer.data_utils import load_and_normalize
-
 
 # Feature group definitions — imported from the features package
 from latent_trainer.features.feature_groups import FEATURE_GROUPS, NUM_GROUPS
@@ -55,11 +53,13 @@ class FeatureTokenizer(nn.Module):
         self.projections = nn.ModuleList()
         for name, start, end in FEATURE_GROUPS:
             dim = end - start
-            self.projections.append(nn.Sequential(
-                nn.Linear(dim, d_model),
-                nn.LayerNorm(d_model),
-                nn.GELU(),
-            ))
+            self.projections.append(
+                nn.Sequential(
+                    nn.Linear(dim, d_model),
+                    nn.LayerNorm(d_model),
+                    nn.GELU(),
+                )
+            )
 
     def forward(self, x):
         """
@@ -100,13 +100,11 @@ class SC2Transformer(nn.Module):
             nhead=n_heads,
             dim_feedforward=d_model * 4,
             dropout=dropout,
-            activation='gelu',
+            activation="gelu",
             batch_first=True,
             norm_first=True,  # Pre-norm for better training stability
         )
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer, num_layers=n_layers
-        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
 
         # Classification head
         self.classifier = nn.Sequential(
@@ -181,15 +179,19 @@ def train(args):
     logger.info("Loading dataset...")
     train_X, train_y, val_X, val_y, _mean, _std = load_and_normalize(args.cache)
     logger.info(f"  Train: {train_X.shape}, Val: {val_X.shape}")
-    logger.info(f"  Label balance — Train: {train_y.mean():.3f}, Val: {val_y.mean():.3f}")
+    logger.info(
+        f"  Label balance — Train: {train_y.mean():.3f}, Val: {val_y.mean():.3f}"
+    )
 
     train_loader = DataLoader(
         TensorDataset(train_X, train_y.unsqueeze(1)),
-        batch_size=args.batch_size, shuffle=True
+        batch_size=args.batch_size,
+        shuffle=True,
     )
     val_loader = DataLoader(
         TensorDataset(val_X, val_y.unsqueeze(1)),
-        batch_size=args.batch_size, shuffle=False
+        batch_size=args.batch_size,
+        shuffle=False,
     )
 
     # Create model
@@ -200,12 +202,14 @@ def train(args):
         dropout=args.dropout,
     ).to(device)
 
-    logger.info(f"\n{'='*60}")
-    logger.info(f"SC2 Transformer Classifier")
-    logger.info(f"  d_model={args.d_model}, heads={args.n_heads}, layers={args.n_layers}")
-    logger.info(f"  Tokens: 8 groups × 2 players + 1 [CLS] = 17")
+    logger.info(f"\n{'=' * 60}")
+    logger.info("SC2 Transformer Classifier")
+    logger.info(
+        f"  d_model={args.d_model}, heads={args.n_heads}, layers={args.n_layers}"
+    )
+    logger.info("  Tokens: 8 groups × 2 players + 1 [CLS] = 17")
     logger.info(f"  Parameters: {count_parameters(model):,}")
-    logger.info(f"{'='*60}\n")
+    logger.info(f"{'=' * 60}\n")
 
     criterion = nn.BCELoss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -270,22 +274,26 @@ def train(args):
             no_improve += 1
 
         if epoch % 5 == 0 or no_improve == 0:
-            logger.info(f"  Epoch {epoch:3d}: train_acc={train_acc:.1f}%, val_acc={val_acc:.1f}%, "
-                  f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, "
-                  f"lr={optimizer.param_groups[0]['lr']:.1e} "
-                  f"{'*BEST*' if no_improve == 0 else ''}")
+            logger.info(
+                f"  Epoch {epoch:3d}: train_acc={train_acc:.1f}%, val_acc={val_acc:.1f}%, "
+                f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, "
+                f"lr={optimizer.param_groups[0]['lr']:.1e} "
+                f"{'*BEST*' if no_improve == 0 else ''}"
+            )
 
         if no_improve >= patience:
             logger.info(f"  Early stopped at epoch {epoch}")
             break
 
-    logger.info(f"\n{'='*60}")
-    logger.info(f"TRANSFORMER TRAINING COMPLETE")
-    logger.info(f"  Architecture: d_model={args.d_model}, heads={args.n_heads}, layers={args.n_layers}")
+    logger.info(f"\n{'=' * 60}")
+    logger.info("TRANSFORMER TRAINING COMPLETE")
+    logger.info(
+        f"  Architecture: d_model={args.d_model}, heads={args.n_heads}, layers={args.n_layers}"
+    )
     logger.info(f"  Parameters:   {count_parameters(model):,}")
     logger.info(f"  Best val acc: {best_val_acc:.2f}%")
-    logger.info(f"  Saved to:     output/transformer_best.pth")
-    logger.info(f"{'='*60}")
+    logger.info("  Saved to:     output/transformer_best.pth")
+    logger.info(f"{'=' * 60}")
 
     return best_val_acc
 
@@ -294,8 +302,12 @@ def main():
     parser = argparse.ArgumentParser(description="Transformer SC2 match classifier")
     parser.add_argument("--cache", default="data/cached_dataset_rich.pt")
     parser.add_argument("--d-model", type=int, default=64, help="Embedding dimension")
-    parser.add_argument("--n-heads", type=int, default=4, help="Number of attention heads")
-    parser.add_argument("--n-layers", type=int, default=3, help="Number of transformer layers")
+    parser.add_argument(
+        "--n-heads", type=int, default=4, help="Number of attention heads"
+    )
+    parser.add_argument(
+        "--n-layers", type=int, default=3, help="Number of transformer layers"
+    )
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -309,5 +321,6 @@ def main():
 
 if __name__ == "__main__":
     from latent_trainer.config import LOGGING_FORMAT
+
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     main()

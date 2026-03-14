@@ -50,34 +50,53 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from sklearn.neighbors import KernelDensity
 from sklearn.decomposition import PCA
+from sklearn.neighbors import KernelDensity
 
-from train_two_stage import SimpleVAE, LatentClassifier, load_and_normalize
+from train_two_stage import LatentClassifier, SimpleVAE, load_and_normalize
 
 # ---------------------------------------------------------------------------
 # Feature names -- 203 per player
 # ---------------------------------------------------------------------------
 
 _ECON_FIELDS: list[str] = [
-    "foodMade", "foodUsed",
-    "mineralsCollectionRate", "mineralsCurrent",
-    "mineralsFriendlyFireArmy", "mineralsFriendlyFireEconomy",
+    "foodMade",
+    "foodUsed",
+    "mineralsCollectionRate",
+    "mineralsCurrent",
+    "mineralsFriendlyFireArmy",
+    "mineralsFriendlyFireEconomy",
     "mineralsFriendlyFireTechnology",
-    "mineralsKilledArmy", "mineralsKilledEconomy", "mineralsKilledTechnology",
-    "mineralsLostArmy", "mineralsLostEconomy", "mineralsLostTechnology",
-    "mineralsUsedActiveForces", "mineralsUsedCurrentArmy",
-    "mineralsUsedCurrentEconomy", "mineralsUsedCurrentTechnology",
-    "mineralsUsedInProgressArmy", "mineralsUsedInProgressEconomy",
+    "mineralsKilledArmy",
+    "mineralsKilledEconomy",
+    "mineralsKilledTechnology",
+    "mineralsLostArmy",
+    "mineralsLostEconomy",
+    "mineralsLostTechnology",
+    "mineralsUsedActiveForces",
+    "mineralsUsedCurrentArmy",
+    "mineralsUsedCurrentEconomy",
+    "mineralsUsedCurrentTechnology",
+    "mineralsUsedInProgressArmy",
+    "mineralsUsedInProgressEconomy",
     "mineralsUsedInProgressTechnology",
-    "vespeneCollectionRate", "vespeneCurrent",
-    "vespeneFriendlyFireArmy", "vespeneFriendlyFireEconomy",
+    "vespeneCollectionRate",
+    "vespeneCurrent",
+    "vespeneFriendlyFireArmy",
+    "vespeneFriendlyFireEconomy",
     "vespeneFriendlyFireTechnology",
-    "vespeneKilledArmy", "vespeneKilledEconomy", "vespeneKilledTechnology",
-    "vespeneLostArmy", "vespeneLostEconomy", "vespeneLostTechnology",
-    "vespeneUsedActiveForces", "vespeneUsedCurrentArmy",
-    "vespeneUsedCurrentEconomy", "vespeneUsedCurrentTechnology",
-    "vespeneUsedInProgressArmy", "vespeneUsedInProgressEconomy",
+    "vespeneKilledArmy",
+    "vespeneKilledEconomy",
+    "vespeneKilledTechnology",
+    "vespeneLostArmy",
+    "vespeneLostEconomy",
+    "vespeneLostTechnology",
+    "vespeneUsedActiveForces",
+    "vespeneUsedCurrentArmy",
+    "vespeneUsedCurrentEconomy",
+    "vespeneUsedCurrentTechnology",
+    "vespeneUsedInProgressArmy",
+    "vespeneUsedInProgressEconomy",
     "vespeneUsedInProgressTechnology",
     "workersActiveCount",
 ]
@@ -145,7 +164,10 @@ def _nearest_winning_target(sample_z, win_latents, k=5) -> torch.Tensor:
 
 
 def _opponent_aware_p_win(
-    classifier, player_z, opponent_z, player_idx,
+    classifier,
+    player_z,
+    opponent_z,
+    player_idx,
 ) -> np.ndarray:
     """Compute P(win) for each row in player_z (opponent_z is broadcast).
 
@@ -316,16 +338,14 @@ def _gradient_ascent_path(
                 zp, zm = z_np.copy(), z_np.copy()
                 zp[i] += eps
                 zm[i] -= eps
-                grads_kde[i] = (
-                    float(
-                        kde.score_samples(zp.reshape(1, -1))[0]
-                        - kde.score_samples(zm.reshape(1, -1))[0]
-                    )
-                    / (2 * eps)
-                )
+                grads_kde[i] = float(
+                    kde.score_samples(zp.reshape(1, -1))[0]
+                    - kde.score_samples(zm.reshape(1, -1))[0]
+                ) / (2 * eps)
 
             total_grad = grad_cls + density_weight * torch.tensor(
-                grads_kde, dtype=torch.float32,
+                grads_kde,
+                dtype=torch.float32,
             )
             velocity = momentum * velocity + lr * total_grad
             z = z.detach() + velocity
@@ -345,9 +365,7 @@ def _gradient_ascent_path(
                     f"  |grad|={grad_cls.norm().item():.5f}"
                 )
             if current_p > convergence_threshold:
-                print(
-                    f"  [GA+KDE]  Converged at step {step}  P(win)={current_p:.4f}"
-                )
+                print(f"  [GA+KDE]  Converged at step {step}  P(win)={current_p:.4f}")
                 break
 
     trajectory = np.array(trajectory)
@@ -437,14 +455,16 @@ def _compute_three_signal_feedback(
         ranked = np.argsort(np.abs(delta))[::-1]
         rows = []
         for i in ranked[:top_k]:
-            rows.append({
-                "priority": int(np.where(ranked == i)[0][0]) + 1,
-                "feature": feature_names[i],
-                "current": float(x_start[i]),
-                "target": float(x_start[i] + delta[i]),
-                "delta": float(delta[i]),
-                "direction": "▲" if delta[i] > 0 else "▼",
-            })
+            rows.append(
+                {
+                    "priority": int(np.where(ranked == i)[0][0]) + 1,
+                    "feature": feature_names[i],
+                    "current": float(x_start[i]),
+                    "target": float(x_start[i] + delta[i]),
+                    "delta": float(delta[i]),
+                    "direction": "▲" if delta[i] > 0 else "▼",
+                }
+            )
         return rows, label
 
     raw_rows, raw_lbl = _rank_table(raw_delta, "Full path  (start → end)")
@@ -452,9 +472,12 @@ def _compute_three_signal_feedback(
     wgt_rows, wgt_lbl = _rank_table(weighted_delta, "P(win)-gain weighted")
 
     return {
-        "raw": raw_rows, "raw_label": raw_lbl,
-        "minimum_viable": mv_rows, "mv_label": mv_lbl,
-        "gain_weighted": wgt_rows, "wgt_label": wgt_lbl,
+        "raw": raw_rows,
+        "raw_label": raw_lbl,
+        "minimum_viable": mv_rows,
+        "mv_label": mv_lbl,
+        "gain_weighted": wgt_rows,
+        "wgt_label": wgt_lbl,
         "_raw_delta": raw_delta,
         "_mv_delta": mv_delta,
         "_weighted_delta": weighted_delta,
@@ -499,7 +522,8 @@ def _plot_main(win_c, loss_c, path_c, alphas, win_probs, pca, save_path):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
     fig.suptitle(
         "Latent Space — Counterfactual Improvement Path",
-        fontsize=15, fontweight="bold",
+        fontsize=15,
+        fontweight="bold",
     )
 
     # --- Left: latent space ---
@@ -508,24 +532,43 @@ def _plot_main(win_c, loss_c, path_c, alphas, win_probs, pca, save_path):
 
     ax1.plot(path_c[:, 0], path_c[:, 1], color="black", linewidth=2.5, zorder=5)
     ax1.scatter(
-        path_c[1:-1, 0], path_c[1:-1, 1],
-        c="gold", s=50, marker="D", edgecolors="black", linewidths=0.8,
-        zorder=6, label="Improvement path",
+        path_c[1:-1, 0],
+        path_c[1:-1, 1],
+        c="gold",
+        s=50,
+        marker="D",
+        edgecolors="black",
+        linewidths=0.8,
+        zorder=6,
+        label="Improvement path",
     )
     ax1.scatter(
-        path_c[0, 0], path_c[0, 1],
-        c="red", s=140, marker="*", edgecolors="black", linewidths=1,
-        zorder=7, label="New point (loss)",
+        path_c[0, 0],
+        path_c[0, 1],
+        c="red",
+        s=140,
+        marker="*",
+        edgecolors="black",
+        linewidths=1,
+        zorder=7,
+        label="New point (loss)",
     )
     ax1.scatter(
-        path_c[-1, 0], path_c[-1, 1],
-        c="blue", s=140, marker="*", edgecolors="black", linewidths=1,
-        zorder=7, label="Target (win)",
+        path_c[-1, 0],
+        path_c[-1, 1],
+        c="blue",
+        s=140,
+        marker="*",
+        edgecolors="black",
+        linewidths=1,
+        zorder=7,
+        label="Target (win)",
     )
 
     for i in range(0, len(path_c) - 1, max(1, len(path_c) // 5)):
         ax1.annotate(
-            "", xy=(path_c[i + 1, 0], path_c[i + 1, 1]),
+            "",
+            xy=(path_c[i + 1, 0], path_c[i + 1, 1]),
             xytext=(path_c[i, 0], path_c[i, 1]),
             arrowprops=dict(arrowstyle="->", color="black", lw=1.2),
         )
@@ -539,12 +582,19 @@ def _plot_main(win_c, loss_c, path_c, alphas, win_probs, pca, save_path):
     # --- Right: P(win) curve ---
     ax2.axhspan(0, 0.5, color="#e74c3c", alpha=0.08, label="Loss zone")
     ax2.axhspan(0.5, 1, color="#3498db", alpha=0.08, label="Win zone")
-    ax2.axhline(0.5, color="grey", linewidth=1.2, linestyle="--", label="Decision boundary")
+    ax2.axhline(
+        0.5, color="grey", linewidth=1.2, linestyle="--", label="Decision boundary"
+    )
 
     ax2.plot(alphas, win_probs, color="#27ae60", linewidth=2.5, zorder=5)
     ax2.scatter(
-        alphas, win_probs,
-        c="#27ae60", s=50, edgecolors="white", linewidths=0.8, zorder=6,
+        alphas,
+        win_probs,
+        c="#27ae60",
+        s=50,
+        edgecolors="white",
+        linewidths=0.8,
+        zorder=6,
     )
 
     ax2.set_xlim(-0.02, 1.02)
@@ -574,7 +624,9 @@ def _plot_feature_delta(delta, top_k, save_path):
     ax.set_yticklabels(names, fontsize=9)
     ax.invert_yaxis()
     ax.set_xlabel("Feature change (target - current)")
-    ax.set_title(f"Top-{top_k} Feature Deltas for Improvement", fontsize=13, fontweight="bold")
+    ax.set_title(
+        f"Top-{top_k} Feature Deltas for Improvement", fontsize=13, fontweight="bold"
+    )
     ax.axvline(0, color="grey", linewidth=0.8)
     ax.grid(True, axis="x", alpha=0.2)
     plt.tight_layout()
@@ -590,7 +642,9 @@ def _plot_feature_evolution(path_features, delta, n_top, alphas, save_path):
         ax.plot(alphas, path_features[:, idx], linewidth=2, label=FEATURE_NAMES[idx])
     ax.set_xlabel("Path progress  (0=start, 1=end)")
     ax.set_ylabel("Feature value (original scale)")
-    ax.set_title(f"Top-{n_top} Feature Evolution Along Path", fontsize=13, fontweight="bold")
+    ax.set_title(
+        f"Top-{n_top} Feature Evolution Along Path", fontsize=13, fontweight="bold"
+    )
     ax.legend(fontsize=9, loc="best")
     ax.grid(True, alpha=0.2)
     plt.tight_layout()
@@ -624,7 +678,8 @@ def _plot_three_signal_feedback(feedback: dict, save_path: str, top_k: int = 10)
     fig, axes = plt.subplots(1, 3, figsize=(18, max(4.5, top_k * 0.4)))
     fig.suptitle(
         "Three-Signal Feedback Report",
-        fontsize=15, fontweight="bold",
+        fontsize=15,
+        fontweight="bold",
     )
 
     for ax, (delta_key, lbl_key, fallback_title) in zip(axes, signals):
@@ -661,34 +716,58 @@ def main() -> None:
     )
     parser.add_argument("--model", default="output/two_stage_model.pth")
     parser.add_argument("--cache", default="data/cached_dataset_rich.pt")
-    parser.add_argument("--sample-idx", type=int, default=None,
-                        help="Index of a losing sample (default: random).")
     parser.add_argument(
-        "--strategy", choices=["linear", "gradient_kde"], default="gradient_kde",
+        "--sample-idx",
+        type=int,
+        default=None,
+        help="Index of a losing sample (default: random).",
+    )
+    parser.add_argument(
+        "--strategy",
+        choices=["linear", "gradient_kde"],
+        default="gradient_kde",
         help="Path-finding strategy: 'linear' (interpolation) "
-             "or 'gradient_kde' (gradient ascent + KDE density).",
+        "or 'gradient_kde' (gradient ascent + KDE density).",
     )
     # linear-only options
-    parser.add_argument("--method", choices=["centroid", "nearest"], default="centroid",
-                        help="Target for linear strategy: 'centroid' or 'nearest' k-NN.")
-    parser.add_argument("--k-neighbours", type=int, default=5,
-                        help="k for nearest-neighbour target (linear strategy).")
+    parser.add_argument(
+        "--method",
+        choices=["centroid", "nearest"],
+        default="centroid",
+        help="Target for linear strategy: 'centroid' or 'nearest' k-NN.",
+    )
+    parser.add_argument(
+        "--k-neighbours",
+        type=int,
+        default=5,
+        help="k for nearest-neighbour target (linear strategy).",
+    )
     # gradient_kde options
-    parser.add_argument("--ga-steps", type=int, default=500,
-                        help="Max gradient ascent steps.")
-    parser.add_argument("--ga-lr", type=float, default=0.02,
-                        help="Gradient ascent learning rate.")
-    parser.add_argument("--ga-momentum", type=float, default=0.9,
-                        help="Gradient ascent momentum.")
-    parser.add_argument("--density-weight", type=float, default=0.3,
-                        help="Weight of the KDE density gradient.")
-    parser.add_argument("--kde-bandwidth", type=float, default=0.5,
-                        help="Bandwidth for Gaussian KDE.")
+    parser.add_argument(
+        "--ga-steps", type=int, default=500, help="Max gradient ascent steps."
+    )
+    parser.add_argument(
+        "--ga-lr", type=float, default=0.02, help="Gradient ascent learning rate."
+    )
+    parser.add_argument(
+        "--ga-momentum", type=float, default=0.9, help="Gradient ascent momentum."
+    )
+    parser.add_argument(
+        "--density-weight",
+        type=float,
+        default=0.3,
+        help="Weight of the KDE density gradient.",
+    )
+    parser.add_argument(
+        "--kde-bandwidth", type=float, default=0.5, help="Bandwidth for Gaussian KDE."
+    )
     # shared
-    parser.add_argument("--n-steps", type=int, default=20,
-                        help="Number of waypoints along the path.")
-    parser.add_argument("--top-k", type=int, default=10,
-                        help="Number of top features to display.")
+    parser.add_argument(
+        "--n-steps", type=int, default=20, help="Number of waypoints along the path."
+    )
+    parser.add_argument(
+        "--top-k", type=int, default=10, help="Number of top features to display."
+    )
     parser.add_argument("--player", type=int, choices=[1, 2], default=1)
     args = parser.parse_args()
 
@@ -741,7 +820,9 @@ def main() -> None:
             print("  Target: centroid")
         else:
             target_z = _nearest_winning_target(
-                sample_z, win_latents, k=args.k_neighbours,
+                sample_z,
+                win_latents,
+                k=args.k_neighbours,
             )
             print(f"  Target: nearest (k={args.k_neighbours})")
 
@@ -752,7 +833,10 @@ def main() -> None:
         # ── P(win) ──
         print("Computing win probability along path...")
         win_probs = _opponent_aware_p_win(
-            classifier, path_z, opponent_z, player_idx,
+            classifier,
+            path_z,
+            opponent_z,
+            player_idx,
         )
         print(f"  P(win): {win_probs[0]:.3f} -> {win_probs[-1]:.3f}")
 
@@ -779,7 +863,10 @@ def main() -> None:
         print("Generating plots...")
         _plot_feature_delta(delta, args.top_k, "output/feedback_feature_delta.png")
         _plot_feature_evolution(
-            path_features, delta, min(5, args.top_k), alphas,
+            path_features,
+            delta,
+            min(5, args.top_k),
+            alphas,
             "output/feedback_feature_evolution.png",
         )
 
@@ -787,7 +874,10 @@ def main() -> None:
         # ── Path ──
         print("Running gradient ascent with KDE density regularisation...")
         path_z_np = _gradient_ascent_path(
-            vae, classifier, sample_z, opponent_z,
+            vae,
+            classifier,
+            sample_z,
+            opponent_z,
             all_latents=all_latents.numpy(),
             player_idx=player_idx,
             steps=args.ga_steps,
@@ -802,49 +892,72 @@ def main() -> None:
 
         # ── P(win) ──
         win_probs = _opponent_aware_p_win(
-            classifier, path_z, opponent_z, player_idx,
+            classifier,
+            path_z,
+            opponent_z,
+            player_idx,
         )
         print(f"  P(win): {win_probs[0]:.3f} -> {win_probs[-1]:.3f}")
 
         # ── Three-signal feedback ──
         print("Computing three-signal feedback...")
         feedback = _compute_three_signal_feedback(
-            vae, classifier, path_z_np, opponent_z, player_idx,
-            norm_mean, norm_std, FEATURE_NAMES, top_k=args.top_k,
+            vae,
+            classifier,
+            path_z_np,
+            opponent_z,
+            player_idx,
+            norm_mean,
+            norm_std,
+            FEATURE_NAMES,
+            top_k=args.top_k,
         )
         _print_feedback_report(feedback, top_k=args.top_k)
 
         # ── Plots ──
         print("\nGenerating plots...")
         _plot_three_signal_feedback(
-            feedback, "output/feedback_three_signal.png", top_k=args.top_k,
+            feedback,
+            "output/feedback_three_signal.png",
+            top_k=args.top_k,
         )
         # Also generate the feature evolution using the raw delta
         path_features = _decode_features(vae, path_z, norm_mean, norm_std)
         _plot_feature_evolution(
-            path_features, feedback["_raw_delta"],
-            min(5, args.top_k), alphas,
+            path_features,
+            feedback["_raw_delta"],
+            min(5, args.top_k),
+            alphas,
             "output/feedback_feature_evolution.png",
         )
 
     # --- Shared plots (both strategies) ---
-    all_data = np.concatenate([
-        win_latents.numpy(), loss_latents.numpy(),
-        path_z.numpy() if isinstance(path_z, torch.Tensor) else path_z,
-    ])
+    all_data = np.concatenate(
+        [
+            win_latents.numpy(),
+            loss_latents.numpy(),
+            path_z.numpy() if isinstance(path_z, torch.Tensor) else path_z,
+        ]
+    )
     pca = PCA(n_components=2)
     coords = pca.fit_transform(all_data)
     n_w, n_l = len(win_latents), len(loss_latents)
-    win_c, loss_c, path_c = coords[:n_w], coords[n_w:n_w + n_l], coords[n_w + n_l:]
+    win_c, loss_c, path_c = coords[:n_w], coords[n_w : n_w + n_l], coords[n_w + n_l :]
 
-    _plot_main(win_c, loss_c, path_c, alphas, win_probs, pca, "output/feedback_latent_path.png")
+    _plot_main(
+        win_c, loss_c, path_c, alphas, win_probs, pca, "output/feedback_latent_path.png"
+    )
 
     if isinstance(path_z, torch.Tensor):
-        _plot_distance(path_z, win_centroid, alphas, "output/feedback_distance_curve.png")
+        _plot_distance(
+            path_z, win_centroid, alphas, "output/feedback_distance_curve.png"
+        )
     else:
         _plot_distance(
             torch.tensor(path_z, dtype=torch.float32),
-            win_centroid, alphas, "output/feedback_distance_curve.png",
+            win_centroid,
+            alphas,
+            "output/feedback_distance_curve.png",
         )
 
     print("\nDone! All plots saved to output/")
