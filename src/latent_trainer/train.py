@@ -98,7 +98,11 @@ logger = logging.getLogger(__name__)
     help="MLFlow tracking URI.  Defaults to sqlite:///mlflow.db.",
 )
 @click.option(
-    "--vae-epochs", type=int, default=200, show_default=True, help="Max VAE epochs."
+    "--vae-epochs",
+    type=int,
+    default=200,
+    show_default=True,
+    help="Max VAE epochs.",
 )
 @click.option(
     "--cls-epochs",
@@ -108,7 +112,11 @@ logger = logging.getLogger(__name__)
     help="Max classifier epochs.",
 )
 @click.option(
-    "--batch-size", type=int, default=256, show_default=True, help="Default batch size."
+    "--batch-size",
+    type=int,
+    default=256,
+    show_default=True,
+    help="Default batch size.",
 )
 @click.option(
     "--latent-dim",
