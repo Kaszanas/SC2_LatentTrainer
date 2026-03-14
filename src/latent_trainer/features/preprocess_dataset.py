@@ -15,6 +15,7 @@ Usage:
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +32,7 @@ from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 
 from latent_trainer.features.rich_transform import rich_transform
+from latent_trainer.features.types import CachedDatasetFileSpec
 
 
 def _transform_single_object(
@@ -245,19 +247,21 @@ def preprocess_dataset(
     val_features_tensor = torch.stack(val_features)
     val_labels_tensor = torch.tensor(val_labels, dtype=torch.long)
 
+    file_spec = CachedDatasetFileSpec(
+        train_features=train_features_tensor,
+        train_labels=train_labels_tensor,
+        test_features=test_features_tensor,
+        test_labels=test_labels_tensor,
+        val_features=val_features_tensor,
+        val_labels=val_labels_tensor,
+        transform=transform_name,
+    )
+
     # Save
     os.makedirs(os.path.dirname(output_directory), exist_ok=True)
     path_to_save = output_directory / f"cached_dataset_{transform_name}.pt"
     torch.save(
-        {
-            "train_features": train_features_tensor,
-            "train_labels": train_labels_tensor,
-            "test_features": test_features_tensor,
-            "test_labels": test_labels_tensor,
-            "val_features": val_features_tensor,
-            "val_labels": val_labels_tensor,
-            "transform": transform_name,
-        },
+        asdict(file_spec),
         path_to_save,
     )
 
