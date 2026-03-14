@@ -78,20 +78,86 @@ logger = logging.getLogger(__name__)
     show_default=True,
     help="'single' for a default-param run, 'sweep' for Ray+Optuna HPO.",
 )
-@click.option("--n-trials", type=int, default=20, show_default=True, help="Optuna trials for sweep mode.")
-@click.option("--experiment-name", default="SC2_Latent_TwoStage", show_default=True, help="MLFlow experiment name.")
-@click.option("--mlflow-uri", default=None, show_default=False, help="MLFlow tracking URI.  Defaults to sqlite:///mlflow.db.")
-@click.option("--vae-epochs", type=int, default=200, show_default=True, help="Max VAE epochs.")
-@click.option("--cls-epochs", type=int, default=100, show_default=True, help="Max classifier epochs.")
-@click.option("--batch-size", type=int, default=256, show_default=True, help="Default batch size.")
-@click.option("--latent-dim", type=int, default=32, show_default=True, help="Default latent dimensionality.")
-@click.option("--vae-lr", type=float, default=1e-3, show_default=True, help="Default VAE learning rate.")
-@click.option("--cls-lr", type=float, default=1e-3, show_default=True, help="Default classifier learning rate.")
+@click.option(
+    "--n-trials",
+    type=int,
+    default=20,
+    show_default=True,
+    help="Optuna trials for sweep mode.",
+)
+@click.option(
+    "--experiment-name",
+    default="SC2_Latent_TwoStage",
+    show_default=True,
+    help="MLFlow experiment name.",
+)
+@click.option(
+    "--mlflow-uri",
+    default=None,
+    show_default=False,
+    help="MLFlow tracking URI.  Defaults to sqlite:///mlflow.db.",
+)
+@click.option(
+    "--vae-epochs", type=int, default=200, show_default=True, help="Max VAE epochs."
+)
+@click.option(
+    "--cls-epochs",
+    type=int,
+    default=100,
+    show_default=True,
+    help="Max classifier epochs.",
+)
+@click.option(
+    "--batch-size", type=int, default=256, show_default=True, help="Default batch size."
+)
+@click.option(
+    "--latent-dim",
+    type=int,
+    default=32,
+    show_default=True,
+    help="Default latent dimensionality.",
+)
+@click.option(
+    "--vae-lr",
+    type=float,
+    default=1e-3,
+    show_default=True,
+    help="Default VAE learning rate.",
+)
+@click.option(
+    "--cls-lr",
+    type=float,
+    default=1e-3,
+    show_default=True,
+    help="Default classifier learning rate.",
+)
 @click.option("--seed", type=int, default=42, show_default=True, help="Random seed.")
-@click.option("--gpus-per-trial", type=float, default=1.0, show_default=True, help="Fractional GPU per Ray trial.")
-@click.option("--cpus-per-trial", type=int, default=2, show_default=True, help="CPUs per Ray trial.")
-@click.option("--optuna-db", default="sqlite:///optuna_study.db", show_default=True, help="Optuna storage URL.")
-@click.option("--study-name", default="latent_trainer_hpo", show_default=True, help="Optuna study name.")
+@click.option(
+    "--gpus-per-trial",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Fractional GPU per Ray trial.",
+)
+@click.option(
+    "--cpus-per-trial",
+    type=int,
+    default=2,
+    show_default=True,
+    help="CPUs per Ray trial.",
+)
+@click.option(
+    "--optuna-db",
+    default="sqlite:///optuna_study.db",
+    show_default=True,
+    help="Optuna storage URL.",
+)
+@click.option(
+    "--study-name",
+    default="latent_trainer_hpo",
+    show_default=True,
+    help="Optuna study name.",
+)
 def main(
     pipeline: str,
     cache: str,
@@ -155,9 +221,7 @@ def main(
 def _run_two_stage(config: ExperimentConfig) -> None:
     """Dispatch between single-run and sweep for the two-stage pipeline."""
     if config.mode == "sweep":
-        logger.info(
-            "Starting Ray Tune + Optuna sweep (%d trials)…", config.n_trials
-        )
+        logger.info("Starting Ray Tune + Optuna sweep (%d trials)…", config.n_trials)
         study = run_hpo(config)
         log_best_trial(study, config)
         logger.info("Sweep complete.  Best trial: %s", study.best_trial.params)
@@ -181,17 +245,25 @@ def _run_two_stage(config: ExperimentConfig) -> None:
         }
 
         acc = run_two_stage_pipeline(
-            train_X, train_y, val_X, val_y,
-            input_dim, device, config, params,
+            train_X,
+            train_y,
+            val_X,
+            val_y,
+            input_dim,
+            device,
+            config,
+            params,
         )
         logger.info("Single run complete.  Best val accuracy: %.2f%%", acc)
+
 
 def _run_guided_vae(config: ExperimentConfig) -> None:
     """Run the guided-VAE pipeline with cached data."""
     logger.info("Running guided-VAE pipeline…")
 
     train_loader, val_loader, input_dim = _load_cached_data(
-        config.cache_path, config.batch_size,
+        config.cache_path,
+        config.batch_size,
     )
 
     train_guided(

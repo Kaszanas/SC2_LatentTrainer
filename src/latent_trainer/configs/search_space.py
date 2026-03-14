@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import optuna
 
-
 # ------------------------------------------------------------------
 # Architecture helper
 # ------------------------------------------------------------------
+
 
 def build_hidden_layers(
     trial: optuna.Trial,
@@ -57,6 +57,7 @@ def build_hidden_layers(
 # Two-stage pipeline search space
 # ------------------------------------------------------------------
 
+
 def get_two_stage_search_space(trial: optuna.Trial) -> dict:
     """Return a params dict for the two-stage (VAE → Classifier) pipeline.
 
@@ -75,12 +76,22 @@ def get_two_stage_search_space(trial: optuna.Trial) -> dict:
         "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256, 512]),
         "dropout": trial.suggest_float("dropout", 0.1, 0.5),
         "vae_hidden_dims": build_hidden_layers(
-            trial, "vae", min_layers=1, max_layers=3,
-            min_width=64, max_width=512, width_step=64,
+            trial,
+            "vae",
+            min_layers=1,
+            max_layers=3,
+            min_width=64,
+            max_width=512,
+            width_step=64,
         ),
         "cls_hidden_dims": build_hidden_layers(
-            trial, "cls", min_layers=1, max_layers=3,
-            min_width=32, max_width=256, width_step=32,
+            trial,
+            "cls",
+            min_layers=1,
+            max_layers=3,
+            min_width=32,
+            max_width=256,
+            width_step=32,
         ),
     }
 
@@ -88,6 +99,7 @@ def get_two_stage_search_space(trial: optuna.Trial) -> dict:
 # ------------------------------------------------------------------
 # Guided-VAE pipeline search space
 # ------------------------------------------------------------------
+
 
 def get_guided_vae_search_space(trial: optuna.Trial) -> dict:
     """Return a params dict for the supervised Guided-VAE pipeline.

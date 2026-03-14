@@ -13,12 +13,11 @@ Total: per player = 39*3 + 39 + 39 + 4 + 2 + 1 + 1 = 203 features
 Output shape: [2, 203] per replay
 """
 
-import numpy as np
-import torch
 from typing import Optional, Tuple
 
+import numpy as np
+import torch
 from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData
-
 
 # Race encoding: map race name to float
 RACE_MAP = {"Zerg": 0.0, "Protoss": 1.0, "Terran": 2.0}
