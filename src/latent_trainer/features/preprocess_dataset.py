@@ -188,16 +188,10 @@ def preprocess_dataset(
         else Path(output_directory).resolve()
     )
 
-    # The rich transform handles its own feature extraction from raw replay
-    # So we pass transform=None to the datamodule
-    is_raw_transform = transform_name == "rich"
-
-    print("=" * 60)
-    print(f"SC2EGSet Dataset Pre-processing ({transform_name} transform)")
-    print("=" * 60)
+    logging.info(f"SC2EGSet Dataset Pre-processing ({transform_name} transform)")
 
     # Initialize datamodule (this downloads + extracts if needed)
-    print("\n[1/3] Loading SC2EGSet datamodule (downloading if needed)...")
+    logging.info("[1/3] Loading SC2EGSet datamodule (downloading if needed)...")
 
     datamodule = SC2EGSetDataModuleSingleJSON(
         dataset_name=dataset_name,
@@ -215,12 +209,12 @@ def preprocess_dataset(
     val_dataset = datamodule.val_dataset
 
     total = len(train_dataset) + len(val_dataset)
-    print(
+    logging.info(
         f"  Total replays: {total} (train: {len(train_dataset)}, test: {len(test_dataset)}, val: {len(val_dataset)})"
     )
 
     # Process all replays
-    print("\n[2/3] Processing replays and applying transform...")
+    logging.info("[2/3] Processing replays and applying transform...")
 
     logging.info("  Processing training set...")
     train_features, train_labels, skipped_train, errors_train = process_set(
@@ -242,7 +236,7 @@ def preprocess_dataset(
     )
 
     # Stack into tensors
-    print("\n[3/3] Saving cached dataset...")
+    logging.info("\n[3/3] Saving cached dataset...")
 
     train_features_tensor = torch.stack(train_features)
     train_labels_tensor = torch.tensor(train_labels, dtype=torch.long)
@@ -269,17 +263,17 @@ def preprocess_dataset(
 
     file_size_mb = os.path.getsize(path_to_save) / (1024 * 1024)
 
-    print(f"\n{'=' * 60}")
-    print("Pre-processing complete!")
-    print(f"  Transform:        {transform_name}")
-    print(f"  Total replays:    {total}")
-    print(f"  Valid train:      {len(train_features)}")
-    print(f"  Valid val:        {len(val_features)}")
-    print(f"  Skipped (None):   {skipped_train + skipped_val + skipped_test}")
-    print(f"  Errors:           {errors_train + errors_val + errors_test}")
-    print(f"  Feature shape:    {train_features_tensor.shape}")
-    print(f"  Cache file:       {output_directory} ({file_size_mb:.1f} MB)")
-    print(f"{'=' * 60}")
+    logging.info(f"\n{'=' * 60}")
+    logging.info("Pre-processing complete!")
+    logging.info(f"  Transform:        {transform_name}")
+    logging.info(f"  Total replays:    {total}")
+    logging.info(f"  Valid train:      {len(train_features)}")
+    logging.info(f"  Valid val:        {len(val_features)}")
+    logging.info(f"  Skipped (None):   {skipped_train + skipped_val + skipped_test}")
+    logging.info(f"  Errors:           {errors_train + errors_val + errors_test}")
+    logging.info(f"  Feature shape:    {train_features_tensor.shape}")
+    logging.info(f"  Cache file:       {output_directory} ({file_size_mb:.1f} MB)")
+    logging.info(f"{'=' * 60}")
 
 
 class TransformEnumFunction(click.Choice):
