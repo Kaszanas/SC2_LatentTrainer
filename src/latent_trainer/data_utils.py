@@ -74,7 +74,7 @@ def normalize(
 # Dataset loading
 # ------------------------------------------------------------------
 def load_and_normalize(
-    cache_path: Path,
+    cache_path: Path | str,
 ) -> NormalizedDataWithLabels:
     """
     Load a cached ``.pt`` dataset and normalise features.
