@@ -39,7 +39,6 @@ Usage::
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -229,7 +228,9 @@ def log_checkpoint_artifacts(
         mlflow.log_artifacts(str(ckpt_path), artifact_path="checkpoints")
         logger.info("MLFlow: logged checkpoints from %s", checkpoint_dir)
     else:
-        logger.warning("MLFlow: checkpoint dir %s does not exist, skipping", checkpoint_dir)
+        logger.warning(
+            "MLFlow: checkpoint dir %s does not exist, skipping", checkpoint_dir
+        )
 
 
 def log_best_trial(study: optuna.Study, config: ExperimentConfig) -> None:

@@ -12,29 +12,30 @@ Usage:
     uv run python evaluate_all.py
 """
 
+import json
 import os
+
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
+    confusion_matrix,
     f1_score,
     matthews_corrcoef,
     precision_score,
     recall_score,
-    confusion_matrix,
-    classification_report,
     roc_auc_score,
 )
-import matplotlib.pyplot as plt
-import json
+from torch.utils.data import DataLoader, TensorDataset
+
+from latent_trainer.data_utils import extract_latents, load_and_normalize
+from train_transformer import SC2Transformer
 
 # --- Import models ---
-from train_two_stage import SimpleVAE, LatentClassifier
-from train_transformer import SC2Transformer
-from latent_trainer.data_utils import extract_latents, load_and_normalize
+from train_two_stage import LatentClassifier, SimpleVAE
 
 
 def load_data(cache_path="data/cached_dataset_rich.pt"):
@@ -75,20 +76,31 @@ def compute_metrics(y_true, y_pred, y_prob):
         "Recall (Sensitivity)": recall_score(y_true, y_pred),
         "Specificity": tn / (tn + fp) if (tn + fp) > 0 else 0.0,
         "ROC-AUC": roc_auc_score(y_true, y_prob),
-        "TP": int(tp), "FP": int(fp), "FN": int(fn), "TN": int(tn),
+        "TP": int(tp),
+        "FP": int(fp),
+        "FN": int(fn),
+        "TN": int(tn),
     }
 
 
 def print_metrics(name, metrics):
     """Pretty-print metrics for one model."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {name}")
-    print(f"{'='*60}")
-    for key in ["Accuracy", "Balanced Accuracy", "F1-Score", "MCC",
-                 "Precision", "Recall (Sensitivity)", "Specificity", "ROC-AUC"]:
+    print(f"{'=' * 60}")
+    for key in [
+        "Accuracy",
+        "Balanced Accuracy",
+        "F1-Score",
+        "MCC",
+        "Precision",
+        "Recall (Sensitivity)",
+        "Specificity",
+        "ROC-AUC",
+    ]:
         print(f"  {key:25s}: {metrics[key]:.4f}")
-    print(f"\n  Confusion Matrix:")
-    print(f"      Pred 0    Pred 1")
+    print("\n  Confusion Matrix:")
+    print("      Pred 0    Pred 1")
     print(f"  Actual 0:  {metrics['TN']:5d}    {metrics['FP']:5d}")
     print(f"  Actual 1:  {metrics['FN']:5d}    {metrics['TP']:5d}")
 
@@ -105,17 +117,33 @@ def build_and_train_mlp(train_X, train_y, val_X, val_y):
 
     input_dim = trX.shape[1]
     model = nn.Sequential(
-        nn.Linear(input_dim, 256), nn.ReLU(), nn.BatchNorm1d(256), nn.Dropout(0.3),
-        nn.Linear(256, 128), nn.ReLU(), nn.BatchNorm1d(128), nn.Dropout(0.3),
-        nn.Linear(128, 64), nn.ReLU(), nn.BatchNorm1d(64), nn.Dropout(0.2),
-        nn.Linear(64, 1), nn.Sigmoid(),
+        nn.Linear(input_dim, 256),
+        nn.ReLU(),
+        nn.BatchNorm1d(256),
+        nn.Dropout(0.3),
+        nn.Linear(256, 128),
+        nn.ReLU(),
+        nn.BatchNorm1d(128),
+        nn.Dropout(0.3),
+        nn.Linear(128, 64),
+        nn.ReLU(),
+        nn.BatchNorm1d(64),
+        nn.Dropout(0.2),
+        nn.Linear(64, 1),
+        nn.Sigmoid(),
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, patience=5, factor=0.5
+    )
     criterion = nn.BCELoss()
 
-    train_loader = DataLoader(TensorDataset(trX, train_y.unsqueeze(1)), batch_size=256, shuffle=True)
-    val_loader = DataLoader(TensorDataset(vaX, val_y.unsqueeze(1)), batch_size=256, shuffle=False)
+    train_loader = DataLoader(
+        TensorDataset(trX, train_y.unsqueeze(1)), batch_size=256, shuffle=True
+    )
+    val_loader = DataLoader(
+        TensorDataset(vaX, val_y.unsqueeze(1)), batch_size=256, shuffle=False
+    )
 
     best_val_acc = 0
     best_state = None
@@ -156,21 +184,21 @@ def build_and_train_mlp(train_X, train_y, val_X, val_y):
             break
 
     model.load_state_dict(best_state)
-    print(f"  Done (best val acc: {best_val_acc*100:.2f}%)")
+    print(f"  Done (best val acc: {best_val_acc * 100:.2f}%)")
     return model, val_loader
 
 
 def load_two_stage(val_X, val_y, device="cpu"):
     """Load two-stage VAE + classifier and get predictions on validation set."""
     checkpoint = torch.load("output/two_stage_model.pth", weights_only=True)
-    latent_dim = checkpoint['latent_dim']
-    input_dim = checkpoint['input_dim']
+    latent_dim = checkpoint["latent_dim"]
+    input_dim = checkpoint["input_dim"]
 
     vae = SimpleVAE(input_dim=input_dim, latent_dim=latent_dim).to(device)
-    vae.load_state_dict(checkpoint['vae_state'])
+    vae.load_state_dict(checkpoint["vae_state"])
 
     classifier = LatentClassifier(latent_dim=latent_dim).to(device)
-    classifier.load_state_dict(checkpoint['classifier_state'])
+    classifier.load_state_dict(checkpoint["classifier_state"])
 
     # Extract latents
     val_z = extract_latents(vae, val_X, device)
@@ -193,14 +221,22 @@ def load_transformer(val_X, val_y, d_model=64, n_heads=4, n_layers=3):
 
 def plot_comparison(results, save_path):
     """Create comparison bar chart of key metrics across models."""
-    metrics_to_plot = ["Accuracy", "Balanced Accuracy", "F1-Score", "MCC",
-                       "Precision", "Recall (Sensitivity)", "Specificity", "ROC-AUC"]
+    metrics_to_plot = [
+        "Accuracy",
+        "Balanced Accuracy",
+        "F1-Score",
+        "MCC",
+        "Precision",
+        "Recall (Sensitivity)",
+        "Specificity",
+        "ROC-AUC",
+    ]
 
     model_names = list(results.keys())
     n_metrics = len(metrics_to_plot)
     n_models = len(model_names)
 
-    colors = ['#3498db', '#e74c3c', '#2ecc71', '#f39c12']
+    colors = ["#3498db", "#e74c3c", "#2ecc71", "#f39c12"]
 
     fig, ax = plt.subplots(figsize=(14, 6))
     x = np.arange(n_metrics)
@@ -209,26 +245,42 @@ def plot_comparison(results, save_path):
     for i, model_name in enumerate(model_names):
         values = [results[model_name][m] for m in metrics_to_plot]
         offset = (i - n_models / 2 + 0.5) * width
-        bars = ax.bar(x + offset, values, width, label=model_name,
-                      color=colors[i % len(colors)], alpha=0.85)
+        bars = ax.bar(
+            x + offset,
+            values,
+            width,
+            label=model_name,
+            color=colors[i % len(colors)],
+            alpha=0.85,
+        )
 
         # Add value labels on bars
         for bar, val in zip(bars, values):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
-                    f'{val:.3f}', ha='center', va='bottom', fontsize=7, fontweight='bold')
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.005,
+                f"{val:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                fontweight="bold",
+            )
 
     ax.set_xticks(x)
-    ax.set_xticklabels(metrics_to_plot, rotation=25, ha='right', fontsize=10)
+    ax.set_xticklabels(metrics_to_plot, rotation=25, ha="right", fontsize=10)
     ax.set_ylabel("Score", fontsize=12)
-    ax.set_title("Classification Metrics Comparison Across All Models",
-                  fontsize=14, fontweight='bold')
-    ax.legend(fontsize=10, loc='lower left')
+    ax.set_title(
+        "Classification Metrics Comparison Across All Models",
+        fontsize=14,
+        fontweight="bold",
+    )
+    ax.legend(fontsize=10, loc="lower left")
     ax.set_ylim(0, 1.12)
-    ax.grid(True, alpha=0.2, axis='y')
-    ax.axhline(y=1.0, color='gray', linestyle=':', alpha=0.3)
+    ax.grid(True, alpha=0.2, axis="y")
+    ax.axhline(y=1.0, color="gray", linestyle=":", alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"\n  Comparison chart saved: {save_path}")
     plt.close()
 
@@ -244,28 +296,35 @@ def plot_confusion_matrices(results, save_path):
 
     for ax, name in zip(axes, model_names):
         m = results[name]
-        cm = np.array([[m['TN'], m['FP']], [m['FN'], m['TP']]])
+        cm = np.array([[m["TN"], m["FP"]], [m["FN"], m["TP"]]])
 
-        im = ax.imshow(cm, cmap='Blues', interpolation='nearest')
-        ax.set_title(name, fontsize=11, fontweight='bold')
+        im = ax.imshow(cm, cmap="Blues", interpolation="nearest")
+        ax.set_title(name, fontsize=11, fontweight="bold")
 
         for i in range(2):
             for j in range(2):
-                ax.text(j, i, f'{cm[i, j]}',
-                        ha='center', va='center', fontsize=14, fontweight='bold',
-                        color='white' if cm[i, j] > cm.max() / 2 else 'black')
+                ax.text(
+                    j,
+                    i,
+                    f"{cm[i, j]}",
+                    ha="center",
+                    va="center",
+                    fontsize=14,
+                    fontweight="bold",
+                    color="white" if cm[i, j] > cm.max() / 2 else "black",
+                )
 
-        ax.set_xlabel('Predicted')
-        ax.set_ylabel('Actual')
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("Actual")
         ax.set_xticks([0, 1])
         ax.set_yticks([0, 1])
-        ax.set_xticklabels(['Loss', 'Win'])
-        ax.set_yticklabels(['Loss', 'Win'])
+        ax.set_xticklabels(["Loss", "Win"])
+        ax.set_yticklabels(["Loss", "Win"])
         plt.colorbar(im, ax=ax, shrink=0.8)
 
-    plt.suptitle("Confusion Matrices", fontsize=14, fontweight='bold')
+    plt.suptitle("Confusion Matrices", fontsize=14, fontweight="bold")
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"  Confusion matrices saved: {save_path}")
     plt.close()
 
@@ -282,18 +341,18 @@ def main():
     results = {}
 
     # --- 1. Diagnostic MLP ---
-    print(f"\n{'#'*60}")
-    print(f"  MODEL 1: Diagnostic MLP (Combined [609])")
-    print(f"{'#'*60}")
+    print(f"\n{'#' * 60}")
+    print("  MODEL 1: Diagnostic MLP (Combined [609])")
+    print(f"{'#' * 60}")
     mlp_model, mlp_loader = build_and_train_mlp(train_X, train_y, val_X, val_y)
     probs, preds, labels = get_predictions(mlp_model, mlp_loader)
     results["Diagnostic MLP"] = compute_metrics(labels, preds, probs)
     print_metrics("Diagnostic MLP", results["Diagnostic MLP"])
 
     # --- 2. Two-Stage VAE ---
-    print(f"\n{'#'*60}")
-    print(f"  MODEL 2: Two-Stage VAE Classifier")
-    print(f"{'#'*60}")
+    print(f"\n{'#' * 60}")
+    print("  MODEL 2: Two-Stage VAE Classifier")
+    print(f"{'#' * 60}")
     if os.path.exists("output/two_stage_model.pth"):
         vae_model, vae_loader = load_two_stage(val_X, val_y, device)
         probs, preds, labels = get_predictions(vae_model, vae_loader)
@@ -304,9 +363,9 @@ def main():
         print("  Run: uv run python train_two_stage.py")
 
     # --- 3. Transformer ---
-    print(f"\n{'#'*60}")
-    print(f"  MODEL 3: Transformer Classifier")
-    print(f"{'#'*60}")
+    print(f"\n{'#' * 60}")
+    print("  MODEL 3: Transformer Classifier")
+    print(f"{'#' * 60}")
     if os.path.exists("output/transformer_best.pth"):
         tf_model, tf_loader = load_transformer(val_X, val_y)
         probs, preds, labels = get_predictions(tf_model, tf_loader)
@@ -317,9 +376,9 @@ def main():
         print("  Run: uv run python train_transformer.py")
 
     # --- Summary table ---
-    print(f"\n\n{'='*80}")
-    print(f"  SUMMARY: All Models Comparison")
-    print(f"{'='*80}")
+    print(f"\n\n{'=' * 80}")
+    print("  SUMMARY: All Models Comparison")
+    print(f"{'=' * 80}")
 
     headers = ["Model", "Acc", "Bal.Acc", "F1", "MCC", "Prec", "Recall", "Spec", "AUC"]
     row_fmt = "{:20s} {:>7s} {:>7s} {:>7s} {:>7s} {:>7s} {:>7s} {:>7s} {:>7s}"
@@ -327,17 +386,19 @@ def main():
     print("-" * 80)
 
     for name, m in results.items():
-        print(row_fmt.format(
-            name,
-            f"{m['Accuracy']:.4f}",
-            f"{m['Balanced Accuracy']:.4f}",
-            f"{m['F1-Score']:.4f}",
-            f"{m['MCC']:.4f}",
-            f"{m['Precision']:.4f}",
-            f"{m['Recall (Sensitivity)']:.4f}",
-            f"{m['Specificity']:.4f}",
-            f"{m['ROC-AUC']:.4f}",
-        ))
+        print(
+            row_fmt.format(
+                name,
+                f"{m['Accuracy']:.4f}",
+                f"{m['Balanced Accuracy']:.4f}",
+                f"{m['F1-Score']:.4f}",
+                f"{m['MCC']:.4f}",
+                f"{m['Precision']:.4f}",
+                f"{m['Recall (Sensitivity)']:.4f}",
+                f"{m['Specificity']:.4f}",
+                f"{m['ROC-AUC']:.4f}",
+            )
+        )
 
     # --- Plots ---
     plot_comparison(results, "output/metrics_comparison.png")
@@ -345,7 +406,7 @@ def main():
 
     # --- Save JSON ---
     json_path = "output/evaluation_results.json"
-    with open(json_path, 'w') as f:
+    with open(json_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"  Results saved: {json_path}")
 

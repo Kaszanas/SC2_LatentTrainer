@@ -77,7 +77,8 @@ class LitGuidedVAE(L.LightningModule):
 
     @staticmethod
     def _prepare_labels(
-        data: torch.Tensor, label: torch.Tensor,
+        data: torch.Tensor,
+        label: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
         """Normalise labels and filter out invalid (-1) entries.
 
@@ -155,7 +156,11 @@ class LitGuidedVAE(L.LightningModule):
         cls1 = self.classifier(self._slice_latent(z))
         c_loss = F.binary_cross_entropy(cls1, valid_label, reduction="sum") * self.w_cls
 
-        c_acc = (cls1 > 0.5).float().eq(valid_label).sum().item() / valid_label.numel() * 100
+        c_acc = (
+            (cls1 > 0.5).float().eq(valid_label).sum().item()
+            / valid_label.numel()
+            * 100
+        )
 
         self.log("train_c_loss", c_loss, prog_bar=True, on_step=True, on_epoch=True)
         self.log("train_c_acc", c_acc, prog_bar=True, on_step=True, on_epoch=True)
@@ -210,13 +215,19 @@ class LitGuidedVAE(L.LightningModule):
 
     def configure_optimizers(self):
         opt_vae = optim.Adam(
-            self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay,
+            self.model.parameters(),
+            lr=self.lr,
+            weight_decay=self.weight_decay,
         )
         opt_cls = optim.Adam(
-            self.classifier.parameters(), lr=self.lr_c, weight_decay=self.weight_decay_c,
+            self.classifier.parameters(),
+            lr=self.lr_c,
+            weight_decay=self.weight_decay_c,
         )
         # Adversarial optimizer (VAE params, trained adversarially)
         opt_adv = optim.Adam(
-            self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay,
+            self.model.parameters(),
+            lr=self.lr,
+            weight_decay=self.weight_decay,
         )
         return [opt_vae, opt_cls, opt_adv], []

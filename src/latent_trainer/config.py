@@ -22,9 +22,7 @@ DEFAULT_MLFLOW_URI : str
 
 from pathlib import Path
 
-LOGGING_FORMAT = (
-    "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
+LOGGING_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
 # SQLite-backed MLFlow tracking — more robust than flat-file mlruns/
 # Path.resolve() gives an absolute path so Ray workers (which change cwd)

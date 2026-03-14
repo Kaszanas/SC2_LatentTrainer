@@ -12,7 +12,7 @@ import logging
 from typing import NamedTuple, Protocol
 
 import torch
-from torch.utils.data import DataLoader, Dataset, TensorDataset
+from torch.utils.data import DataLoader, Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 # Protocol for any VAE-like encoder (LitVAE, SimpleVAE, suGuidedVAE…)
 # ------------------------------------------------------------------
+
 
 class Encoder(Protocol):
     """Structural type for any model that exposes an ``encode`` method.
@@ -48,6 +49,7 @@ class NormalizedData(NamedTuple):
 # Dataset wrapper (used by train_model.py / GuidedVAE path)
 # ------------------------------------------------------------------
 
+
 class CachedSC2Dataset(Dataset):
     """Wraps pre-processed feature and label tensors as a PyTorch Dataset."""
 
@@ -65,6 +67,7 @@ class CachedSC2Dataset(Dataset):
 # ------------------------------------------------------------------
 # Normalisation
 # ------------------------------------------------------------------
+
 
 def normalize(
     train_X: torch.Tensor,
@@ -101,6 +104,7 @@ def normalize(
 # ------------------------------------------------------------------
 # Dataset loading
 # ------------------------------------------------------------------
+
 
 def load_and_normalize(
     cache_path: str,
@@ -174,6 +178,7 @@ def load_cached_dataloaders(
 # ------------------------------------------------------------------
 # Latent extraction
 # ------------------------------------------------------------------
+
 
 def extract_latents(
     encoder: Encoder,

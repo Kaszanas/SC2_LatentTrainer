@@ -13,12 +13,14 @@ Total: per player = 39*3 + 39 + 39 + 4 + 2 + 1 + 1 = 203 features
 Output shape: [2, 203] per replay
 """
 
-import numpy as np
-import torch
 from typing import Optional, Tuple
 
-from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData
-
+import numpy as np
+import torch
+from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData, ToonPlayerDesc
+from sc2_datasets.replay_parser.tracker_events.events.player_stats.player_stats import (
+    PlayerStats,
+)
 
 # Race encoding: map race name to float
 RACE_MAP = {"Zerg": 0.0, "Protoss": 1.0, "Terran": 2.0}
@@ -29,8 +31,25 @@ def _get_stats_values(stats_obj) -> list:
     return [float(v) for v in stats_obj.__dict__.values()]
 
 
-def _get_player_stats_timeseries(sc2_replay, player_id: int):
-    """Collect all PlayerStats events for a given player, sorted by loop."""
+def _get_player_stats_timeseries(
+    sc2_replay: SC2ReplayData,
+    player_id: int,
+) -> list[PlayerStats]:
+    """
+    Collect all PlayerStats events for a given player, sorted by loop.
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed SC2 replay data containing tracker events.
+    player_id : int
+        ID of the player to extract stats for.
+
+    Returns
+    -------
+    list[PlayerStats]
+        List of PlayerStats events for the specified player, sorted by game loop.
+    """
     events = []
     for event in sc2_replay.trackerEvents:
         if type(event).__name__ == "PlayerStats" and event.playerId == player_id:
@@ -39,8 +58,29 @@ def _get_player_stats_timeseries(sc2_replay, player_id: int):
     return events
 
 
-def _temporal_snapshot(events, start_frac: float, end_frac: float) -> np.ndarray:
-    """Average stats within a fractional time window of the game."""
+def _temporal_snapshot(
+    events: list[PlayerStats],
+    start_frac: float,
+    end_frac: float,
+) -> np.ndarray:
+    """
+    Extract a temporal snapshot of player stats averaged over a fractional time window of the game.
+
+    Parameters
+    ----------
+    events : list[PlayerStats]
+        List of PlayerStats events.
+    start_frac : float
+        Fractional start time of the window.
+    end_frac : float
+        Fractional end time of the window.
+
+    Returns
+    -------
+    np.ndarray
+        Averaged stats values over the specified time window, or zeros if no events in window.
+    """
+
     if not events:
         return np.zeros(39)
 
@@ -56,8 +96,23 @@ def _temporal_snapshot(events, start_frac: float, end_frac: float) -> np.ndarray
     return np.mean(values, axis=0)
 
 
-def _count_units_born(sc2_replay, player_id: int) -> int:
-    """Count UnitBorn events for a player."""
+def _count_units_born(sc2_replay: SC2ReplayData, player_id: int) -> int:
+    """
+    Counts the UnitBorn events for a given player.
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed SC2 replay data containing tracker events.
+    player_id : int
+        ID of the player to count units for.
+
+    Returns
+    -------
+    int
+        Number of units born for the specified player.
+    """
+
     count = 0
     for event in sc2_replay.trackerEvents:
         if type(event).__name__ == "UnitBorn":
@@ -66,8 +121,22 @@ def _count_units_born(sc2_replay, player_id: int) -> int:
     return count
 
 
-def _count_units_died_by_opponent(sc2_replay, player_id: int) -> int:
-    """Count UnitDied events where opponent killed this player's units."""
+def _count_units_died_by_opponent(sc2_replay: SC2ReplayData, player_id: int) -> int:
+    """
+    Counts the UnitDied events where the opponent killed this player's units.
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed SC2 replay data containing tracker events.
+    player_id : int
+        ID of the player to count units for.
+
+    Returns
+    -------
+    int
+        Number of units killed by the opponent for the specified player.
+    """
     count = 0
     for event in sc2_replay.trackerEvents:
         if type(event).__name__ == "UnitDied":
@@ -77,8 +146,23 @@ def _count_units_died_by_opponent(sc2_replay, player_id: int) -> int:
     return count
 
 
-def _count_upgrades(sc2_replay, player_id: int) -> int:
-    """Count Upgrade events for a player."""
+def _count_upgrades(sc2_replay: SC2ReplayData, player_id: int) -> int:
+    """
+    Counts the Upgrade events for a given player.
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed SC2 replay data containing tracker events.
+    player_id : int
+        ID of the player to count upgrades for.
+
+    Returns
+    -------
+    int
+        Number of upgrades for the specified player.
+    """
+
     count = 0
     for event in sc2_replay.trackerEvents:
         if type(event).__name__ == "Upgrade" and event.playerId == player_id:
@@ -86,16 +170,46 @@ def _count_upgrades(sc2_replay, player_id: int) -> int:
     return count
 
 
-def _get_player_info(sc2_replay, player_id: int):
-    """Get ToonPlayerInfo for a specific player."""
+def _get_player_info(
+    sc2_replay: SC2ReplayData, player_id: int
+) -> ToonPlayerDesc | None:
+    """
+    Get the ToonPlayerInfo for a specific player from the replay data.
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed SC2 replay data containing player information.
+    player_id : int
+        ID of the player to retrieve info for.
+
+    Returns
+    -------
+    ToonPlayerDesc | None
+        ToonPlayerDesc object containing player information, or None if not found.
+    """
+
     for toon_desc in sc2_replay.toonPlayerDescMap:
         if str(toon_desc.toon_player_info.playerID) == str(player_id):
             return toon_desc.toon_player_info
     return None
 
 
-def _get_outcome(sc2_replay) -> Optional[int]:
-    """Get game outcome. Returns label for player 1 (0=loss, 1=win), or None for skip."""
+def _get_outcome(sc2_replay: SC2ReplayData) -> int | None:
+    """
+    Get the game outcome for player 1 (0=loss, 1=win), or None to skip if undecided/draw.
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed SC2 replay data containing player information.
+
+    Returns
+    -------
+    Optional[int]
+        Game outcome for player 1 (0=loss, 1=win), or None to skip if undecided/draw.
+    """
+
     result_map = {"Loss": 0, "Win": 1, "Victory": 1, "Defeat": 0}
     skip_results = {"Undecided", "Draw", "Tie"}
 
@@ -196,4 +310,5 @@ def rich_transform(sc2_replay: SC2ReplayData) -> Optional[Tuple[torch.Tensor, in
         player_features.append(player_feat)
 
     features = torch.tensor(np.stack(player_features), dtype=torch.float32)
+
     return features, label

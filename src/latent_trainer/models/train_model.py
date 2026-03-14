@@ -27,16 +27,21 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 
 import click
 import lightning as L
+import mlflow
 import optuna
 import torch
 from lightning.pytorch import Trainer
+from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS
+from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
+from sc2_datasets.transforms.mmr_vs_result import mmr_vs_result
+from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
+    economy_average_vs_outcome,
+)
+from sc2_datasets.transforms.utils import select_outcome_1v1
 from torch.utils.data import DataLoader, Dataset
-
-import mlflow
 
 from latent_trainer.config import DEFAULT_MLFLOW_URI
 from latent_trainer.data_utils import load_cached_dataloaders
@@ -47,14 +52,6 @@ from latent_trainer.tracking.mlflow_utils import (
     log_checkpoint_artifacts,
     start_parent_run,
 )
-
-from sc2_datasets.lightning.sc2_egset_datamodule import SC2EGSetDataModule
-from sc2_datasets.available_replaypacks import SC2EGSET_DATASET_REPLAYPACKS
-from sc2_datasets.transforms.mmr_vs_result import mmr_vs_result
-from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
-    economy_average_vs_outcome,
-)
-from sc2_datasets.transforms.utils import select_outcome_1v1
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +118,8 @@ def _load_live_data(
 ) -> tuple[DataLoader, DataLoader, int]:
     """Load data via the live ``SC2EGSetDataModule``."""
     selected_transform, input_dim = _TRANSFORM_REGISTRY.get(
-        transform, (mmr_vs_result, 2),
+        transform,
+        (mmr_vs_result, 2),
     )
     sc2_dm = SC2EGSetDataModule(
         unpack_dir="./data/unpack",
@@ -194,10 +192,13 @@ def train_guided(
         save_top_k=3,
     )
     early_stop = L.pytorch.callbacks.EarlyStopping(
-        monitor="val_vae_loss", patience=5, mode="min",
+        monitor="val_vae_loss",
+        patience=5,
+        mode="min",
     )
     tb_logger = L.pytorch.loggers.TensorBoardLogger(
-        save_dir=output_dir, name="tensorboard_logs",
+        save_dir=output_dir,
+        name="tensorboard_logs",
     )
     # Use child nesting if we have a parent run
     if parent_run_id:
@@ -272,7 +273,8 @@ def run_optuna_search(
     os.makedirs(output_dir, exist_ok=True)
 
     tb_logger = L.pytorch.loggers.TensorBoardLogger(
-        save_dir=output_dir, name="tensorboard_logs",
+        save_dir=output_dir,
+        name="tensorboard_logs",
     )
 
     # Open a parent run that all Optuna trials nest under
@@ -290,12 +292,15 @@ def run_optuna_search(
                 lr=trial.suggest_float("lr", 1e-5, 1e-3, log=True),
                 weight_decay=trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
                 lr_c=trial.suggest_float("lr_c", 1e-5, 1e-3, log=True),
-                weight_decay_c=trial.suggest_float("weight_decay_c", 1e-6, 1e-3, log=True),
+                weight_decay_c=trial.suggest_float(
+                    "weight_decay_c", 1e-6, 1e-3, log=True
+                ),
                 w_cls=trial.suggest_float("cls", 0.1, 10.0),
                 input_dim=input_dim,
             )
             pruning_cb = optuna.integration.PyTorchLightningPruningCallback(
-                trial, monitor="val_vae_loss",
+                trial,
+                monitor="val_vae_loss",
             )
             trial_tb = L.pytorch.loggers.TensorBoardLogger(
                 save_dir=os.path.join(output_dir, "tensorboard_logs", "optuna_trials"),
@@ -318,7 +323,9 @@ def run_optuna_search(
                 enable_checkpointing=False,
                 log_every_n_steps=10,
             )
-            trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+            trainer.fit(
+                model, train_dataloaders=train_loader, val_dataloaders=val_loader
+            )
             return trainer.callback_metrics["val_vae_loss"].item()
 
         study = optuna.create_study(
@@ -371,26 +378,109 @@ def run_optuna_search(
 
 
 @click.command()
-@click.option("-b", "--batch-size", default=128, type=int, show_default=True, help="Training batch size.")
-@click.option("--output", default="output", show_default=True, help="Output directory for results.")
-@click.option("--epochs", default=10, type=int, show_default=True, help="Number of training epochs.")
-@click.option("--nz", default=16, type=int, show_default=True, help="Bottleneck (latent) size.")
-@click.option("--cls", default=200.0, type=float, show_default=True, help="Classification error weight.")
-@click.option("--num-workers", default=0, type=int, show_default=True, help="DataLoader workers.")
-@click.option("--test-interval", default=1, type=int, show_default=True, help="Validation every N epochs.")
-@click.option("--lr", default=1e-4, type=float, show_default=True, help="VAE learning rate.")
-@click.option("--weight-decay", default=1e-5, type=float, show_default=True, help="VAE weight decay.")
-@click.option("--lr-c", default=1e-4, type=float, show_default=True, help="Classifier learning rate.")
-@click.option("--weight-decay-c", default=1e-4, type=float, show_default=True, help="Classifier weight decay.")
-@click.option("--transform", default="economy_average_vs_outcome", type=click.Choice(list(_TRANSFORM_REGISTRY)), show_default=True, help="SC2 transform.")
+@click.option(
+    "-b",
+    "--batch-size",
+    default=128,
+    type=int,
+    show_default=True,
+    help="Training batch size.",
+)
+@click.option(
+    "--output",
+    default="output",
+    show_default=True,
+    help="Output directory for results.",
+)
+@click.option(
+    "--epochs",
+    default=10,
+    type=int,
+    show_default=True,
+    help="Number of training epochs.",
+)
+@click.option(
+    "--nz", default=16, type=int, show_default=True, help="Bottleneck (latent) size."
+)
+@click.option(
+    "--cls",
+    default=200.0,
+    type=float,
+    show_default=True,
+    help="Classification error weight.",
+)
+@click.option(
+    "--num-workers", default=0, type=int, show_default=True, help="DataLoader workers."
+)
+@click.option(
+    "--test-interval",
+    default=1,
+    type=int,
+    show_default=True,
+    help="Validation every N epochs.",
+)
+@click.option(
+    "--lr", default=1e-4, type=float, show_default=True, help="VAE learning rate."
+)
+@click.option(
+    "--weight-decay",
+    default=1e-5,
+    type=float,
+    show_default=True,
+    help="VAE weight decay.",
+)
+@click.option(
+    "--lr-c",
+    default=1e-4,
+    type=float,
+    show_default=True,
+    help="Classifier learning rate.",
+)
+@click.option(
+    "--weight-decay-c",
+    default=1e-4,
+    type=float,
+    show_default=True,
+    help="Classifier weight decay.",
+)
+@click.option(
+    "--transform",
+    default="economy_average_vs_outcome",
+    type=click.Choice(list(_TRANSFORM_REGISTRY)),
+    show_default=True,
+    help="SC2 transform.",
+)
 @click.option("--optuna", "use_optuna", is_flag=True, help="Enable Optuna HPO.")
-@click.option("--n-trials", default=20, type=int, show_default=True, help="Optuna trial count.")
-@click.option("--optuna-epochs", default=3, type=int, show_default=True, help="Epochs per trial.")
-@click.option("--optuna-db", default="sqlite:///optuna_study.db", show_default=True, help="Optuna DB URL.")
-@click.option("--study-name", default="vae_optimization", show_default=True, help="Optuna study name.")
-@click.option("--cached", "cache_path", default=None, type=str, help="Path to cached .pt dataset.")
-@click.option("--mlflow-uri", default="mlruns", show_default=True, help="MLFlow tracking URI.")
-@click.option("--experiment-name", default="SC2_GuidedVAE", show_default=True, help="MLFlow experiment name.")
+@click.option(
+    "--n-trials", default=20, type=int, show_default=True, help="Optuna trial count."
+)
+@click.option(
+    "--optuna-epochs", default=3, type=int, show_default=True, help="Epochs per trial."
+)
+@click.option(
+    "--optuna-db",
+    default="sqlite:///optuna_study.db",
+    show_default=True,
+    help="Optuna DB URL.",
+)
+@click.option(
+    "--study-name",
+    default="vae_optimization",
+    show_default=True,
+    help="Optuna study name.",
+)
+@click.option(
+    "--cached", "cache_path", default=None, type=str, help="Path to cached .pt dataset."
+)
+@click.option(
+    "--mlflow-uri", default="mlruns", show_default=True, help="MLFlow tracking URI."
+)
+@click.option(
+    "--experiment-name",
+    default="SC2_GuidedVAE",
+    show_default=True,
+    help="MLFlow experiment name.",
+)
 def main(
     batch_size: int,
     output: str,
@@ -415,6 +505,7 @@ def main(
 ) -> None:
     """Train the supervised Guided VAE with optional Optuna HPO."""
     from latent_trainer.config import LOGGING_FORMAT
+
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     torch.manual_seed(1024)
 
@@ -425,7 +516,9 @@ def main(
     else:
         logger.info("Using live SC2EGSet dataset (transform=%s)", transform)
         train_loader, val_loader, input_dim = _load_live_data(
-            transform, batch_size, num_workers,
+            transform,
+            batch_size,
+            num_workers,
         )
 
     logger.info("Input dimension: %d", input_dim)

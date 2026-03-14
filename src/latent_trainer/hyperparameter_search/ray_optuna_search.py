@@ -28,7 +28,6 @@ from ray import tune
 from ray.tune.search.optuna import OptunaSearch
 from torch.utils.data import DataLoader, TensorDataset
 
-from latent_trainer.config import DEFAULT_MLFLOW_URI
 from latent_trainer.configs.experiment_config import ExperimentConfig
 from latent_trainer.configs.search_space import get_two_stage_search_space
 from latent_trainer.data_utils import extract_latents, load_and_normalize
@@ -47,6 +46,7 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 # Two-stage pipeline (single trial)
 # ------------------------------------------------------------------
+
 
 def run_two_stage_pipeline(
     train_X: torch.Tensor,
@@ -78,10 +78,16 @@ def run_two_stage_pipeline(
     val_flat = val_X.reshape(-1, input_dim)
 
     vae_train_dl = DataLoader(
-        TensorDataset(train_flat), batch_size=batch_size, shuffle=True, num_workers=0,
+        TensorDataset(train_flat),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
     )
     vae_val_dl = DataLoader(
-        TensorDataset(val_flat), batch_size=batch_size, shuffle=False, num_workers=0,
+        TensorDataset(val_flat),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
     )
 
     vae = LitVAE(
@@ -111,13 +117,16 @@ def run_two_stage_pipeline(
     ckpt_vae = ModelCheckpoint(
         dirpath=ckpt_dir_vae,
         filename="vae-{epoch:02d}-{val_loss:.2f}",
-        save_top_k=1, monitor="val_loss", mode="min",
+        save_top_k=1,
+        monitor="val_loss",
+        mode="min",
     )
     es_vae = EarlyStopping(monitor="val_loss", patience=20, mode="min")
 
     trainer_vae = L.Trainer(
         max_epochs=vae_epochs,
-        accelerator="auto", devices=1,
+        accelerator="auto",
+        devices=1,
         logger=mlf_vae,
         callbacks=[ckpt_vae, es_vae],
         enable_progress_bar=True,
@@ -140,11 +149,15 @@ def run_two_stage_pipeline(
     # ---- Stage 2: Classifier ------------------------------------------
     cls_train_dl = DataLoader(
         TensorDataset(train_z, train_y.unsqueeze(1)),
-        batch_size=batch_size, shuffle=True, num_workers=0,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
     )
     cls_val_dl = DataLoader(
         TensorDataset(val_z, val_y.unsqueeze(1)),
-        batch_size=batch_size, shuffle=False, num_workers=0,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
     )
 
     cls_model = LitClassifier(
@@ -173,13 +186,16 @@ def run_two_stage_pipeline(
     ckpt_cls = ModelCheckpoint(
         dirpath=ckpt_dir_cls,
         filename="cls-{epoch:02d}-{val_acc:.2f}",
-        save_top_k=1, monitor="val_acc", mode="max",
+        save_top_k=1,
+        monitor="val_acc",
+        mode="max",
     )
     es_cls = EarlyStopping(monitor="val_loss", patience=15, mode="min")
 
     trainer_cls = L.Trainer(
         max_epochs=cls_epochs,
-        accelerator="auto", devices=1,
+        accelerator="auto",
+        devices=1,
         logger=mlf_cls,
         callbacks=[ckpt_cls, es_cls],
         enable_progress_bar=True,
@@ -197,6 +213,7 @@ def run_two_stage_pipeline(
 # ------------------------------------------------------------------
 # Ray Tune HPO
 # ------------------------------------------------------------------
+
 
 def run_hpo(config: ExperimentConfig) -> optuna.Study:
     """Launch a Ray Tune sweep with Optuna as the search backend.
@@ -240,8 +257,13 @@ def run_hpo(config: ExperimentConfig) -> optuna.Study:
             L.seed_everything(config.seed)
 
             acc = run_two_stage_pipeline(
-                _train_X, _train_y, _val_X, _val_y,
-                input_dim, device, config,
+                _train_X,
+                _train_y,
+                _val_X,
+                _val_y,
+                input_dim,
+                device,
+                config,
                 params=ray_config,
                 trial_num=ray_config.get("__trial_index"),
                 parent_run_id=parent_run_id,
@@ -291,9 +313,7 @@ def run_hpo(config: ExperimentConfig) -> optuna.Study:
 
         # Log best result on the parent run
         mlflow.log_metric("best_val_acc", best.metrics["val_acc"])
-        mlflow.log_params({
-            f"best_{k}": v for k, v in best.config.items()
-        })
+        mlflow.log_params({f"best_{k}": v for k, v in best.config.items()})
 
     # Return the underlying Optuna study for further analysis / logging
     return optuna_search._ot_study

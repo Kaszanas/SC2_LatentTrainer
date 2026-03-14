@@ -1,5 +1,5 @@
-import logging
 import argparse
+import logging
 from typing import Any
 
 import lightning as L
@@ -285,7 +285,9 @@ def run_pipeline(
     trainer_vae.fit(vae_model, vae_train_loader, vae_val_loader)
 
     # Load best VAE model
-    logger.info(f"Loading best VAE checkpoint: {checkpoint_callback_vae.best_model_path}")
+    logger.info(
+        f"Loading best VAE checkpoint: {checkpoint_callback_vae.best_model_path}"
+    )
     best_vae = LitVAE.load_from_checkpoint(checkpoint_callback_vae.best_model_path)
     best_vae.eval()
     best_vae.to(device)
@@ -466,5 +468,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     from latent_trainer.config import LOGGING_FORMAT
+
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     main()
