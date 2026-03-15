@@ -1,46 +1,60 @@
 """Tests for latent_trainer.data_utils — the canonical data loading module."""
 
+from dataclasses import asdict
+from pathlib import Path
+
 import pytest
 import torch
 
 from latent_trainer.data_utils import (
     CachedSC2Dataset,
-    Encoder,
     extract_latents,
     load_and_normalize,
     load_cached_dataloaders,
     normalize,
 )
+from latent_trainer.features.type import CachedDatasetFileSpec
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
 @pytest.fixture
-def dummy_tensors():
+def dummy_tensors() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create small train/val tensors mimicking the cached dataset shape."""
     torch.manual_seed(42)
-    N_train, N_val, F = 32, 8, 10
+    N_train = 32
+    N_val = 8
+    N_test = 8
+    F = 10
+
     train_X = torch.randn(N_train, 2, F)
     val_X = torch.randn(N_val, 2, F)
-    return train_X, val_X
+    test_X = torch.randn(N_test, 2, F)
+
+    return train_X, val_X, test_X
 
 
 @pytest.fixture
-def dummy_cache(tmp_path, dummy_tensors):
+def dummy_cache(
+    tmp_path: Path, dummy_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+) -> str:
     """Write a minimal cached dataset to a temp .pt file."""
-    train_X, val_X = dummy_tensors
+    train_X, val_X, _ = dummy_tensors
     cache_path = tmp_path / "cache.pt"
-    torch.save(
-        {
-            "train_features": train_X,
-            "train_labels": torch.randint(0, 2, (train_X.shape[0],)).float(),
-            "val_features": val_X,
-            "val_labels": torch.randint(0, 2, (val_X.shape[0],)).float(),
-        },
-        cache_path,
+
+    cache_dummy = CachedDatasetFileSpec(
+        train_features=train_X,
+        train_labels=torch.randint(0, 2, (train_X.shape[0],)).float(),
+        val_features=val_X,
+        val_labels=torch.randint(0, 2, (val_X.shape[0],)).float(),
+        test_features=torch.randn(8, 2, 10),
+        test_labels=torch.randint(0, 2, (8,)).float(),
+        transform="",
     )
+
+    torch.save(asdict(cache_dummy), cache_path)
+
     return str(cache_path)
 
 
@@ -51,11 +65,11 @@ class FakeEncoder:
         self.latent_dim = latent_dim
         self._is_eval = False
 
-    def eval(self):
+    def eval(self) -> "FakeEncoder":
         self._is_eval = True
         return self
 
-    def to(self, device):
+    def to(self, device: torch.device) -> "FakeEncoder":
         return self
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -68,72 +82,92 @@ class FakeEncoder:
 # ---------------------------------------------------------------------------
 # normalize()
 # ---------------------------------------------------------------------------
-
 class TestNormalize:
-    def test_shapes_preserved(self, dummy_tensors):
-        train_X, val_X = dummy_tensors
-        normed_train, normed_val, mean, std = normalize(train_X, val_X)
-        assert normed_train.shape == train_X.shape
-        assert normed_val.shape == val_X.shape
+    def test_shapes_preserved(
+        self, dummy_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    ) -> None:
+        train_X, val_X, test_X = dummy_tensors
+        normalized_data = normalize(train_X, val_X, test_X)
+        assert normalized_data.train_X.shape == train_X.shape
+        assert normalized_data.val_X.shape == val_X.shape
+        assert normalized_data.test_X.shape == test_X.shape
 
-    def test_mean_std_shapes(self, dummy_tensors):
-        train_X, val_X = dummy_tensors
-        _, _, mean, std = normalize(train_X, val_X)
+    def test_mean_std_shapes(
+        self, dummy_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    ) -> None:
+        train_X, val_X, test_X = dummy_tensors
+        normalized_data = normalize(train_X, val_X, test_X)
         F = train_X.shape[-1]
-        assert mean.shape == (1, F)
-        assert std.shape == (1, F)
+        assert normalized_data.mean.shape == (1, F)
+        assert normalized_data.std.shape == (1, F)
 
-    def test_train_is_roughly_standardised(self, dummy_tensors):
-        train_X, val_X = dummy_tensors
-        normed_train, _, _, _ = normalize(train_X, val_X)
-        flat = normed_train.reshape(-1, train_X.shape[-1])
+    def test_train_is_roughly_standardised(
+        self, dummy_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    ) -> None:
+        train_X, val_X, test_X = dummy_tensors
+        normalized_data = normalize(train_X, val_X, test_X)
+        flat = normalized_data.train_X.reshape(-1, train_X.shape[-1])
         # After standardisation, mean should be ~0 and std ~1
         assert flat.mean(dim=0).abs().max() < 0.1
         assert (flat.std(dim=0) - 1.0).abs().max() < 0.1
 
-    def test_no_nan_or_inf(self, dummy_tensors):
-        train_X, val_X = dummy_tensors
-        normed_train, normed_val, _, _ = normalize(train_X, val_X)
-        assert torch.isfinite(normed_train).all()
-        assert torch.isfinite(normed_val).all()
+    def test_no_nan_or_inf(
+        self, dummy_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    ) -> None:
+        train_X, val_X, test_X = dummy_tensors
+        normalized_data = normalize(train_X, val_X, test_X)
+        assert torch.isfinite(normalized_data.train_X).all()
+        assert torch.isfinite(normalized_data.val_X).all()
+        assert torch.isfinite(normalized_data.test_X).all()
 
-    def test_constant_feature_handled(self):
+    def test_constant_feature_handled(self) -> None:
         """A constant feature (std=0) should not produce NaN."""
         train_X = torch.ones(16, 2, 5)
         val_X = torch.ones(4, 2, 5)
-        normed_train, normed_val, _, _ = normalize(train_X, val_X)
-        assert torch.isfinite(normed_train).all()
-        assert torch.isfinite(normed_val).all()
+        test_X = torch.ones(4, 2, 5)
+        normalized_data = normalize(train_X, val_X, test_X)
+        assert torch.isfinite(normalized_data.train_X).all()
+        assert torch.isfinite(normalized_data.val_X).all()
+        assert torch.isfinite(normalized_data.test_X).all()
 
 
 # ---------------------------------------------------------------------------
 # load_and_normalize()
 # ---------------------------------------------------------------------------
-
 class TestLoadAndNormalize:
-    def test_returns_six_tensors(self, dummy_cache):
+    def test_returns_expected_fields(self, dummy_cache: str) -> None:
         result = load_and_normalize(dummy_cache)
-        assert len(result) == 6
+        expected_fields = {
+            "train_X",
+            "train_y",
+            "val_X",
+            "val_y",
+            "test_X",
+            "test_y",
+            "mean",
+            "std",
+        }
+        assert set(result.__dict__.keys()) == expected_fields
 
-    def test_shapes(self, dummy_cache):
-        train_X, train_y, val_X, val_y, mean, std = load_and_normalize(dummy_cache)
-        assert train_X.shape[0] == train_y.shape[0]
-        assert val_X.shape[0] == val_y.shape[0]
-        assert train_X.ndim == 3  # [N, 2, F]
-        assert train_y.ndim == 1
+    def test_shapes(self, dummy_cache: str) -> None:
+        normalized_data = load_and_normalize(dummy_cache)
+        assert normalized_data.train_X.shape[0] == normalized_data.train_y.shape[0]
+        assert normalized_data.val_X.shape[0] == normalized_data.val_y.shape[0]
+        assert normalized_data.test_X.shape[0] == normalized_data.test_y.shape[0]
+        assert normalized_data.train_X.ndim == 3  # [N, 2, F]
+        assert normalized_data.train_y.ndim == 1
 
-    def test_dtype_is_float(self, dummy_cache):
-        train_X, train_y, val_X, val_y, _, _ = load_and_normalize(dummy_cache)
-        assert train_X.dtype == torch.float32
-        assert train_y.dtype == torch.float32
+    def test_dtype_is_float(self, dummy_cache: str) -> None:
+        normalized_data = load_and_normalize(dummy_cache)
+        assert normalized_data.train_X.dtype == torch.float32
+        assert normalized_data.train_y.dtype == torch.float32
 
 
 # ---------------------------------------------------------------------------
 # load_cached_dataloaders()
 # ---------------------------------------------------------------------------
-
 class TestLoadCachedDataloaders:
-    def test_returns_loaders_and_dim(self, dummy_cache):
+    def test_returns_loaders_and_dim(self, dummy_cache: str) -> None:
         train_dl, val_dl, input_dim = load_cached_dataloaders(dummy_cache, batch_size=4)
         assert input_dim == 10
         batch = next(iter(train_dl))
@@ -144,13 +178,12 @@ class TestLoadCachedDataloaders:
 # ---------------------------------------------------------------------------
 # CachedSC2Dataset
 # ---------------------------------------------------------------------------
-
 class TestCachedSC2Dataset:
-    def test_len(self):
+    def test_len(self) -> None:
         ds = CachedSC2Dataset(torch.randn(10, 5), torch.randn(10))
         assert len(ds) == 10
 
-    def test_getitem(self):
+    def test_getitem(self) -> None:
         ds = CachedSC2Dataset(torch.randn(10, 5), torch.randn(10))
         feat, label = ds[3]
         assert feat.shape == (5,)
@@ -160,9 +193,8 @@ class TestCachedSC2Dataset:
 # ---------------------------------------------------------------------------
 # extract_latents()
 # ---------------------------------------------------------------------------
-
 class TestExtractLatents:
-    def test_output_shape(self):
+    def test_output_shape(self) -> None:
         latent_dim = 4
         enc = FakeEncoder(latent_dim=latent_dim)
         data = torch.randn(16, 2, 10)
@@ -170,7 +202,7 @@ class TestExtractLatents:
         result = extract_latents(enc, data, device, batch_size=8)
         assert result.shape == (16, 2 * latent_dim)
 
-    def test_deterministic_encoding(self):
+    def test_deterministic_encoding(self) -> None:
         """extract_latents should use mu (deterministic), not sampled z."""
         latent_dim = 4
         enc = FakeEncoder(latent_dim=latent_dim)

@@ -13,8 +13,15 @@ Please make sure to install PyTorch with CUDA support before running `uv sync`.
 ```bash
 uv sync
 ```
+### Step 2: Cache the dataset
 
-### Step 2: Start the training
+Activate the new environment and run the feature extraction script to cache the dataset. Please look at the help message for details on the available options:
+
+```bash
+python ./src/latent_trainer/features/main.py --help
+```
+
+### Step 3: Start the training
 
 **Unified entrypoint (two-stage or guided VAE):**
 
@@ -35,7 +42,7 @@ uv run python -m latent_trainer --pipeline two_stage --mode sweep --n-trials 30
 uv run python -m latent_trainer.models.train_model --cached data/cached_dataset_rich.pt
 ```
 
-### Step 3: Monitor training
+### Step 4: Monitor training
 
 **TensorBoard** (in a separate terminal):
 

@@ -6,17 +6,22 @@ without requiring any training data or GPU.
 
 import pytest
 import torch
-import torch.nn as nn
+
+# REVIEW: TRAIN TWO STAGE IS OLDER CODE.
+from train_two_stage import LatentClassifier, SimpleVAE
+
+from latent_trainer.models.guided_vae import Classifier, suGuidedVAE
+from latent_trainer.models.lightning.lit_classifier import LitClassifier
+from latent_trainer.models.lightning.lit_vae import LitVAE
 
 
 # ---------------------------------------------------------------------------
 # SimpleVAE (from train_two_stage.py — kept as root-level model)
 # ---------------------------------------------------------------------------
-
 class TestSimpleVAE:
     @pytest.fixture
     def vae(self):
-        from train_two_stage import SimpleVAE
+
         return SimpleVAE(input_dim=203, latent_dim=32)
 
     def test_encode_shape(self, vae):
@@ -49,10 +54,9 @@ class TestSimpleVAE:
 # ---------------------------------------------------------------------------
 # LatentClassifier (from train_two_stage.py)
 # ---------------------------------------------------------------------------
-
 class TestLatentClassifier:
     def test_forward_shape(self):
-        from train_two_stage import LatentClassifier
+
         clf = LatentClassifier(latent_dim=32)
         z = torch.randn(4, 64)  # 2 * latent_dim
         out = clf(z)
@@ -63,11 +67,10 @@ class TestLatentClassifier:
 # ---------------------------------------------------------------------------
 # LitVAE (Lightning module)
 # ---------------------------------------------------------------------------
-
 class TestLitVAE:
     @pytest.fixture
     def lit_vae(self):
-        from latent_trainer.models.lightning.lit_vae import LitVAE
+
         return LitVAE(input_dim=203, latent_dim=16, hidden_dims=[128, 64], lr=1e-3)
 
     def test_encode_shape(self, lit_vae):
@@ -82,7 +85,7 @@ class TestLitVAE:
         assert recon.shape == (4, 203)
 
     def test_custom_hidden_dims(self):
-        from latent_trainer.models.lightning.lit_vae import LitVAE
+
         vae = LitVAE(input_dim=100, latent_dim=8, hidden_dims=[64, 32, 16])
         x = torch.randn(2, 100)
         recon, mu, logvar = vae(x)
@@ -93,10 +96,9 @@ class TestLitVAE:
 # ---------------------------------------------------------------------------
 # LitClassifier (Lightning module)
 # ---------------------------------------------------------------------------
-
 class TestLitClassifier:
     def test_forward_shape(self):
-        from latent_trainer.models.lightning.lit_classifier import LitClassifier
+
         clf = LitClassifier(latent_dim=16, hidden_dims=[64, 32], lr=1e-3, dropout=0.3)
         z = torch.randn(4, 32)  # 2 * latent_dim
         out = clf(z)
@@ -107,11 +109,10 @@ class TestLitClassifier:
 # ---------------------------------------------------------------------------
 # suGuidedVAE + Classifier (guided_vae.py)
 # ---------------------------------------------------------------------------
-
 class TestSuGuidedVAE:
     @pytest.fixture
     def model(self):
-        from latent_trainer.models.guided_vae import suGuidedVAE
+
         return suGuidedVAE(n_vae_dis=16, input_dim=39)
 
     def test_encode_2d(self, model):
@@ -141,7 +142,7 @@ class TestSuGuidedVAE:
 
 class TestAdversarialClassifier:
     def test_forward_2d(self):
-        from latent_trainer.models.guided_vae import Classifier
+
         clf = Classifier(n_vae_dis=16)
         x = torch.randn(4, 15)  # n_vae_dis - 1
         out = clf(x)
@@ -149,7 +150,7 @@ class TestAdversarialClassifier:
         assert (out >= 0).all() and (out <= 1).all()
 
     def test_forward_3d(self):
-        from latent_trainer.models.guided_vae import Classifier
+
         clf = Classifier(n_vae_dis=16)
         x = torch.randn(4, 2, 15)
         out = clf(x)

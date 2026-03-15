@@ -1,6 +1,5 @@
 """Tests for the search space definitions and architecture builder."""
 
-import pytest
 import optuna
 
 from latent_trainer.configs.search_space import (
@@ -19,9 +18,7 @@ class TestBuildHiddenLayers:
         assert all(isinstance(x, int) for x in layers)
 
     def test_single_layer(self):
-        trial = optuna.trial.FixedTrial(
-            {"hidden_n_layers": 1, "hidden_width_0": 256}
-        )
+        trial = optuna.trial.FixedTrial({"hidden_n_layers": 1, "hidden_width_0": 256})
         layers = build_hidden_layers(trial, prefix="hidden", max_layers=4)
         assert layers == [256]
 
@@ -52,7 +49,9 @@ class TestGetTwoStageSearchSpace:
                 "latent_dim": optuna.distributions.IntDistribution(8, 128, step=8),
                 "vae_lr": optuna.distributions.FloatDistribution(1e-5, 1e-2, log=True),
                 "cls_lr": optuna.distributions.FloatDistribution(1e-5, 1e-2, log=True),
-                "batch_size": optuna.distributions.CategoricalDistribution([64, 128, 256, 512]),
+                "batch_size": optuna.distributions.CategoricalDistribution(
+                    [64, 128, 256, 512]
+                ),
                 "dropout": optuna.distributions.FloatDistribution(0.1, 0.5),
                 "vae_n_hidden_layers": optuna.distributions.IntDistribution(1, 4),
                 "vae_hidden_0": optuna.distributions.IntDistribution(32, 512, step=32),

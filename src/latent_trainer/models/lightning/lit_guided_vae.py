@@ -74,7 +74,6 @@ class LitGuidedVAE(L.LightningModule):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
     @staticmethod
     def _prepare_labels(
         data: torch.Tensor,
@@ -113,7 +112,6 @@ class LitGuidedVAE(L.LightningModule):
     # ------------------------------------------------------------------
     # Forward / training / validation
     # ------------------------------------------------------------------
-
     def forward(self, x: torch.Tensor):  # noqa: D401
         return self.model(x)
 
