@@ -13,7 +13,7 @@ Total: per player = 39*3 + 39 + 39 + 4 + 2 + 1 + 1 = 203 features
 Output shape: [2, 203] per replay
 """
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 import torch
@@ -227,8 +227,9 @@ def _get_outcome(sc2_replay: SC2ReplayData) -> int | None:
     return None
 
 
-def rich_transform(sc2_replay: SC2ReplayData) -> Optional[Tuple[torch.Tensor, int]]:
-    """Extract rich features from an SC2 replay.
+def rich_transform(sc2_replay: SC2ReplayData) -> Tuple[torch.Tensor, int]:
+    """
+    Extract rich features from an SC2 replay.
 
     Returns:
         Tuple of (features_tensor [2, N_features], label) or None to skip.
