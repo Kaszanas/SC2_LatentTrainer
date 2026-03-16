@@ -47,6 +47,10 @@ uv_update:
 	uv lock --upgrade-package sc2_datasets
 	uv sync --extra $(EXTRA)
 
+.PHONY: process_features
+process_features:
+	python src/latent_trainer/features/main.py
+
 
 # Docker commands
 .PHONY: docker-build
