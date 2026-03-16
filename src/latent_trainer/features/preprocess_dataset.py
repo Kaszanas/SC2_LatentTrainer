@@ -152,6 +152,42 @@ def process_replay(
     return features, label
 
 
+def check_split(
+    train_dataset: DataLoader,
+    test_dataset: DataLoader,
+    val_dataset: DataLoader,
+) -> None:
+
+    total = len(train_dataset) + len(test_dataset) + len(val_dataset)
+    logging.info(
+        f"  Total replays: {total} (train: {len(train_dataset)}, test: {len(test_dataset)}, val: {len(val_dataset)})"
+    )
+    if total == 0:
+        logging.warning("Dataset is empty! No replays found.")
+        return
+
+    train_frac = len(train_dataset) / total
+    test_frac = len(test_dataset) / total
+    val_frac = len(val_dataset) / total
+
+    # Check if within 1.5% of target
+    if (
+        abs(train_frac - 0.8) > 0.015
+        or abs(test_frac - 0.1) > 0.015
+        or abs(val_frac - 0.1) > 0.015
+    ):
+        logging.warning(
+            f"Dataset split deviates from 80/10/10! "
+            f"Got: Train={train_frac:.2%}, Test={test_frac:.2%}, Val={val_frac:.2%}"
+        )
+        raise ValueError(
+            f"Dataset split deviates from 80/10/10! "
+            f"Got: Train={train_frac:.2%}, Test={test_frac:.2%}, Val={val_frac:.2%}"
+        )
+
+    return total
+
+
 def preprocess_dataset(
     transform_name: str,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
@@ -206,9 +242,10 @@ def preprocess_dataset(
     test_dataset = datamodule.test_dataset
     val_dataset = datamodule.val_dataset
 
-    total = len(train_dataset) + len(val_dataset)
-    logging.info(
-        f"  Total replays: {total} (train: {len(train_dataset)}, test: {len(test_dataset)}, val: {len(val_dataset)})"
+    total = check_split(
+        train_dataset=train_dataset,
+        test_dataset=test_dataset,
+        val_dataset=val_dataset,
     )
 
     # Process all replays
