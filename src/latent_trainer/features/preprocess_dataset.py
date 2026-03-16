@@ -155,10 +155,7 @@ def process_replay(
 def preprocess_dataset(
     transform_name: str,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
-    dataset_name: str = "sc2egset_merged",
-    single_json_dataset_path: Path | str = Path(
-        "H:/sc2egset_merged/sc2egset_merged.json"
-    ).resolve(),
+    single_json_dataset_path: Path | str,
     output_directory: Path | str = Path("./data").resolve(),
     n_workers: int = 24,
 ) -> None:
@@ -196,7 +193,6 @@ def preprocess_dataset(
     logging.info("[1/3] Loading SC2EGSet datamodule (downloading if needed)...")
 
     datamodule = SC2EGSetDataModuleSingleJSON(
-        dataset_name=dataset_name,
         json_path=single_json_dataset_path,
         download=False,
     )
