@@ -63,8 +63,5 @@ RUN mkdir -p /workspace/output/tensorboard_logs \
     /workspace/data/download \
     /workspace/data/unpack
 
-# Expose ports for TensorBoard, Optuna Dashboard, and MLFlow
-EXPOSE 5000 6006 8080
-
 # Set the entrypoint
 CMD ["/bin/bash"]
