@@ -48,13 +48,13 @@ dev = [
 # Dependencies for the CPU build (installed with uv sync --extra cpu)
 cpu = ["torch>=2.7.0", "torchvision>=0.22.0"]
 
-# Dependencies for the CUDA 12.8 build (installed with uv sync --extra cu128)
-cu128 = ["torch>=2.7.0", "torchvision>=0.22.0"]
+# Dependencies for the CUDA build (installed with uv sync --extra cuda)
+cuda = ["torch>=2.7.0", "torchvision>=0.22.0"]
 
 # --- uv-specific configuration ---
 [tool.uv]
 # This prevents installing both CPU and CUDA builds simultaneously
-conflicts = [[{ extra = "cpu" }, { extra = "cu128" }]]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]
 
 [tool.ruff]
 exclude = [".venv"]
@@ -71,11 +71,11 @@ build-backend = "uv_build"
 sc2-datasets = { git = "https://github.com/Kaszanas/SC2_Datasets", branch = "dev" }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
-    { index = "pytorch-cu128", extra = "cu128" },
+    { index = "pytorch-cuda", extra = "cuda" },
 ]
 torchvision = [
     { index = "pytorch-cpu", extra = "cpu" },
-    { index = "pytorch-cu128", extra = "cu128" },
+    { index = "pytorch-cuda", extra = "cuda" },
 ]
 
 
@@ -87,6 +87,6 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
+name = "pytorch-cuda"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true

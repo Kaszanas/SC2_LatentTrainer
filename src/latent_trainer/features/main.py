@@ -27,7 +27,15 @@ from latent_trainer.features.preprocess_dataset import (
         path_type=Path,
         resolve_path=True,
     ),
+    default=Path("data").resolve(),
+    show_default=True,
     help="Output directory for cached dataset (default: data/)",
+)
+@click.option(
+    "--single_json_dataset_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path, resolve_path=True),
+    default=Path("H:/sc2egset_merged/sc2egset_merged.json").resolve(),
+    help="Path to the single JSON dataset file.",
 )
 @click.option(
     "--n-workers",
@@ -36,13 +44,19 @@ from latent_trainer.features.preprocess_dataset import (
     show_default=True,
     help="Number of parallel workers for processing replays.",
 )
-def main(transform: Callable, output_directory: Path, n_workers: int) -> None:
+def main(
+    transform: Callable,
+    output_directory: Path,
+    single_json_dataset_path: Path,
+    n_workers: int,
+) -> None:
     """Pre-process Single JSON SC2_Dataset and cache the transformed tensors to drive."""
     transform_name = TransformEnumFunction._TRANSFORM_NAMES[transform]
     output_path = output_directory or Path("data")
 
     preprocess_dataset(
         output_directory=output_path,
+        single_json_dataset_path=single_json_dataset_path,
         transform_fn=transform,
         transform_name=transform_name,
         n_workers=n_workers,
