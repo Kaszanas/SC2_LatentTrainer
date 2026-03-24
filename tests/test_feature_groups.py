@@ -12,7 +12,9 @@ class TestFeatureGroups:
         """Feature groups should tile [0, 203) with no gaps or overlaps."""
         prev_end = 0
         for name, start, end in FEATURE_GROUPS:
-            assert start == prev_end, f"Gap or overlap before {name}: expected {prev_end}, got {start}"
+            assert start == prev_end, (
+                f"Gap or overlap before {name}: expected {prev_end}, got {start}"
+            )
             assert end > start, f"{name} has non-positive width"
             prev_end = end
 
