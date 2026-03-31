@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 
-class LitClassifier(L.LightningModule):
+class LatentClassifier(L.LightningModule):
     """Binary classifier on frozen latent representations.
 
     Parameters
