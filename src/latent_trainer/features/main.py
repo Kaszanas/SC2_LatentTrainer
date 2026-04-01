@@ -1,12 +1,15 @@
+import logging
 from pathlib import Path
 from typing import Callable
 
 import click
+import lightning as pl
 
 from latent_trainer.features.preprocess_dataset import (
     TransformEnumFunction,
-    preprocess_dataset,
+    preprocess_dataset_chunked_profile,
 )
+from latent_trainer.settings import SEED
 
 
 @click.command(
@@ -53,14 +56,35 @@ def main(
     """Pre-process Single JSON SC2_Dataset and cache the transformed tensors to drive."""
     transform_name = TransformEnumFunction._TRANSFORM_NAMES[transform]
     output_path = output_directory or Path("data")
+    # profiler = cProfile.Profile()
+    # profiler.enable()
 
-    preprocess_dataset(
-        output_directory=output_path,
-        single_json_dataset_path=single_json_dataset_path,
-        transform_fn=transform,
-        transform_name=transform_name,
-        n_workers=n_workers,
-    )
+    pl.seed_everything(SEED)
+
+    try:
+        preprocess_dataset_chunked_profile(
+            output_directory=output_path,
+            single_json_dataset_path=single_json_dataset_path,
+            transform_fn=transform,
+            transform_name=transform_name,
+            n_workers=n_workers,
+        )
+    except Exception as e:
+        logging.error(f"Error during dataset preprocessing: {e}")
+    # finally:
+    # profiler.disable()
+
+    # profile_output = Path("preprocess_dataset_profile_no_chunk.prof").resolve()
+
+    # if profile_output is not None:
+    #     profiler.dump_stats(str(profile_output))
+    #     click.echo(f"Saved cProfile stats to: {profile_output}")
+
+    # stats_output = io.StringIO()
+    # stats = pstats.Stats(profiler, stream=stats_output).sort_stats("cumulative")
+    # stats.print_stats(30)
+    # click.echo("cProfile results (top 30 by cumulative time):")
+    # click.echo(stats_output.getvalue())
 
 
 if __name__ == "__main__":
