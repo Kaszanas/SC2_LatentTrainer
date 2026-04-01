@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from latent_trainer.data_utils import (
+from latent_trainer.features.data_utils import (
     CachedSC2Dataset,
     extract_latents,
     load_and_normalize,
