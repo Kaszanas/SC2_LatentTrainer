@@ -139,7 +139,10 @@ def _load_cached_data(
     batch_size: int,
 ) -> tuple[DataLoader, DataLoader, int]:
     """Load data from a pre-processed ``.pt`` cache file."""
-    train_dl, val_dl, input_dim = load_cached_dataloaders(cache_path, batch_size)
+    train_dl, val_dl, input_dim = load_cached_dataloaders(
+        cache_path=cache_path,
+        batch_size=batch_size,
+    )
     return train_dl, val_dl, input_dim
 
 
@@ -220,7 +223,11 @@ def train_guided(
         check_val_every_n_epoch=test_interval,
         log_every_n_steps=10,
     )
-    trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    trainer.fit(
+        model=model,
+        train_dataloaders=train_loader,
+        val_dataloaders=val_loader,
+    )
 
     # Save final model in PyTorch format
     final_model_path = os.path.join(output_dir, "final_model.pth")
@@ -319,7 +326,9 @@ def run_optuna_search(
                 log_every_n_steps=10,
             )
             trainer.fit(
-                model, train_dataloaders=train_loader, val_dataloaders=val_loader
+                model=model,
+                train_dataloaders=train_loader,
+                val_dataloaders=val_loader,
             )
             return trainer.callback_metrics["val_vae_loss"].item()
 
