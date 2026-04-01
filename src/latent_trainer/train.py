@@ -41,7 +41,7 @@ from __future__ import annotations
 import logging
 
 import click
-import lightning as L
+import lightning as pl
 import torch
 
 from latent_trainer.config import DEFAULT_MLFLOW_URI, LOGGING_FORMAT
@@ -215,7 +215,7 @@ def main(
         study_name=study_name,
     )
 
-    L.seed_everything(config.seed)
+    pl.seed_everything(config.seed)
     setup_mlflow(config)
 
     if pipeline == "two_stage":
@@ -239,10 +239,8 @@ def _run_two_stage(config: ExperimentConfig) -> None:
         logger.info("Running single two-stage training run…")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        train_X, train_y, val_X, val_y, _mean, _std = load_and_normalize(
-            config.cache_path
-        )
-        input_dim = train_X.shape[-1]
+        data = load_and_normalize(config.cache_path)
+        input_dim = data.train_X.shape[-1]
 
         params = {
             "latent_dim": config.latent_dim,
@@ -253,14 +251,16 @@ def _run_two_stage(config: ExperimentConfig) -> None:
         }
 
         acc = run_two_stage_pipeline(
-            train_X,
-            train_y,
-            val_X,
-            val_y,
-            input_dim,
-            device,
-            config,
-            params,
+            train_X=data.train_X,
+            train_y=data.train_y,
+            val_X=data.val_X,
+            val_y=data.val_y,
+            input_dim=input_dim,
+            device=device,
+            config=config,
+            params=params,
+            norm_mean=data.mean,
+            norm_std=data.std,
         )
         logger.info("Single run complete.  Best val accuracy: %.2f%%", acc)
 
@@ -270,8 +270,8 @@ def _run_guided_vae(config: ExperimentConfig) -> None:
     logger.info("Running guided-VAE pipeline…")
 
     train_loader, val_loader, input_dim = _load_cached_data(
-        config.cache_path,
-        config.batch_size,
+        cache_path=config.cache_path,
+        batch_size=config.batch_size,
     )
 
     train_guided(

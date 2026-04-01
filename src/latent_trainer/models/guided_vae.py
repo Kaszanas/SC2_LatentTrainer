@@ -44,7 +44,7 @@ class suGuidedVAE(nn.Module):
             nn.Linear(64, input_dim),  # Back to original input dimension
         )
 
-        self.cls_sq = nn.Sequential(
+        self.classifier = nn.Sequential(
             nn.Linear(1, 32),
             nn.LayerNorm(32),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
@@ -109,7 +109,7 @@ class suGuidedVAE(nn.Module):
 
         # Extract first dimension for classification
         z = z[:, 0:1]  # Shape: [batch, 1] or [batch*num_players, 1]
-        output = self.cls_sq(z)
+        output = self.classifier(z)
 
         # Reshape back to 3D if input was 3D
         if len(original_shape) == 3:

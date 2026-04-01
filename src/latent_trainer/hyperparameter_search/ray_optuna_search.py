@@ -18,7 +18,7 @@ import logging
 import os
 from typing import Any
 
-import lightning as L
+import lightning as pl
 import mlflow
 import optuna
 import ray
@@ -31,7 +31,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from latent_trainer.configs.experiment_config import ExperimentConfig
 from latent_trainer.configs.search_space import get_two_stage_search_space
 from latent_trainer.data_utils import extract_latents, load_and_normalize
-from latent_trainer.models.lightning.lit_classifier import LitClassifier
+from latent_trainer.models.lightning.lit_classifier import LatentClassifier
 from latent_trainer.models.lightning.lit_vae import LitVAE
 from latent_trainer.tracking.mlflow_utils import (
     create_child_mlflow_logger,
@@ -57,6 +57,8 @@ def run_two_stage_pipeline(
     device: torch.device,
     config: ExperimentConfig,
     params: dict[str, Any],
+    norm_mean: torch.Tensor | None = None,
+    norm_std: torch.Tensor | None = None,
     trial_num: int | None = None,
     parent_run_id: str | None = None,
 ) -> float:
@@ -123,7 +125,7 @@ def run_two_stage_pipeline(
     )
     es_vae = EarlyStopping(monitor="val_loss", patience=20, mode="min")
 
-    trainer_vae = L.Trainer(
+    trainer_vae = pl.Trainer(
         max_epochs=vae_epochs,
         accelerator="auto",
         devices=1,
@@ -160,7 +162,7 @@ def run_two_stage_pipeline(
         num_workers=0,
     )
 
-    cls_model = LitClassifier(
+    cls_model = LatentClassifier(
         latent_dim=latent_dim,
         hidden_dims=cls_hidden_dims,
         lr=cls_lr,
@@ -192,7 +194,7 @@ def run_two_stage_pipeline(
     )
     es_cls = EarlyStopping(monitor="val_loss", patience=15, mode="min")
 
-    trainer_cls = L.Trainer(
+    trainer_cls = pl.Trainer(
         max_epochs=cls_epochs,
         accelerator="auto",
         devices=1,
@@ -206,6 +208,22 @@ def run_two_stage_pipeline(
     if mlf_cls.run_id:
         with mlflow.start_run(run_id=mlf_cls.run_id):
             log_checkpoint_artifacts(ckpt_dir_cls, config.mlflow_tracking_uri)
+
+    # Save a combined pointer file for the path-charting CLI.
+    # Only written on single runs (trial_num is None) to avoid overwriting
+    # the file on every HPO trial.
+    if trial_num is None and norm_mean is not None and norm_std is not None:
+        os.makedirs("output", exist_ok=True)
+        torch.save(
+            {
+                "vae_ckpt_path": ckpt_vae.best_model_path,
+                "cls_ckpt_path": ckpt_cls.best_model_path,
+                "latent_dim": latent_dim,
+                "input_dim": input_dim,
+                "normalization": {"mean": norm_mean, "std": norm_std},
+            },
+            "output/two_stage_model.pth",
+        )
 
     return ckpt_cls.best_model_score.item()
 
@@ -254,7 +272,7 @@ def run_hpo(config: ExperimentConfig) -> optuna.Study:
             _val_y = ray.get(val_y_ref)
 
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            L.seed_everything(config.seed)
+            pl.seed_everything(config.seed)
 
             acc = run_two_stage_pipeline(
                 _train_X,

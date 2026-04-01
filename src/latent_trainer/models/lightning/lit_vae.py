@@ -6,14 +6,14 @@ architecture search over the number of layers and their widths.
 
 from typing import Any
 
-import lightning as L
+import lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
 
-class LitVAE(L.LightningModule):
+class LitVAE(pl.LightningModule):
     """Variational Auto-Encoder with configurable hidden-layer architecture.
 
     Parameters
@@ -70,7 +70,6 @@ class LitVAE(L.LightningModule):
     # ------------------------------------------------------------------
     # Forward pass helpers
     # ------------------------------------------------------------------
-
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         h = self.encoder(x)
         return self.fc_mu(h), self.fc_logvar(h)
@@ -94,7 +93,6 @@ class LitVAE(L.LightningModule):
     # ------------------------------------------------------------------
     # Lightning steps
     # ------------------------------------------------------------------
-
     def _common_step(
         self, batch: tuple[torch.Tensor], batch_idx: int, stage: str
     ) -> torch.Tensor:
