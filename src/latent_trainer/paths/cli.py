@@ -2,11 +2,23 @@
 # CLI group + sub-commands
 # ---------------------------------------------------------------------------
 import os
+from functools import partial
 
 import click
 import torch
 
+from latent_trainer.paths.data import (
+    _encode_player,
+    _load_model_and_data,
+    _nearest_winning_target,
+    _opponent_aware_logit,
+    _opponent_aware_score,
+)
+from latent_trainer.paths.pipeline import _run_pipeline
 from latent_trainer.paths.strategies import path_linear
+from latent_trainer.paths.strategies.geodesic import path_geodesic
+from latent_trainer.paths.strategies.gradient_ascent import path_gradient_ascent
+from latent_trainer.paths.strategies.optimal_transport import path_optimal_transport
 
 _GLOBAL_OPTIONS = [
     click.option("--model", default="output/two_stage_model.pth", show_default=True),
