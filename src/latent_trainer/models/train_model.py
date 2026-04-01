@@ -505,7 +505,6 @@ def main(
     """Train the supervised Guided VAE with optional Optuna HPO."""
 
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
-    torch.manual_seed(1024)
 
     # Load data
     if cache_path and os.path.exists(cache_path):
