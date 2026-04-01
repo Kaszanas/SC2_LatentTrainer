@@ -16,33 +16,37 @@ from torch import nn
 # REVIEW: left as a PyTorch module. Why is that?
 # REVIEW: No type hints are applied here.
 class suGuidedVAE(nn.Module):
-    def __init__(self, n_vae_dis: int = 16, input_dim: int = 39):
+    def __init__(
+        self,
+        n_vae_dis: int = 16,
+        input_dim: int = 39,
+        encoder_hidden_dims: list[int] | None = None,
+    ):
         super().__init__()
 
         self.n_vae_dis = n_vae_dis
         self.input_dim = input_dim
 
-        # Simple encoder for input data with shape [batch, input_dim]
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(True),
-            nn.Linear(64, 128),
-            nn.ReLU(True),
-            nn.Linear(128, 256),
-            nn.ReLU(True),
-            nn.Linear(256, n_vae_dis * 2),  # mu and logvar
-        )
+        if encoder_hidden_dims is None:
+            encoder_hidden_dims = [64, 128, 256]
 
-        # Simple decoder to reconstruct input data
-        self.decoder = nn.Sequential(
-            nn.Linear(n_vae_dis, 256),
-            nn.ReLU(True),
-            nn.Linear(256, 128),
-            nn.ReLU(True),
-            nn.Linear(128, 64),
-            nn.ReLU(True),
-            nn.Linear(64, input_dim),  # Back to original input dimension
-        )
+        # Encoder: input_dim → hidden_dims → n_vae_dis*2 (mu and logvar)
+        enc_layers: list[nn.Module] = []
+        in_dim = input_dim
+        for h in encoder_hidden_dims:
+            enc_layers += [nn.Linear(in_dim, h), nn.ReLU(True)]
+            in_dim = h
+        enc_layers.append(nn.Linear(in_dim, n_vae_dis * 2))
+        self.encoder = nn.Sequential(*enc_layers)
+
+        # Decoder: n_vae_dis → reversed(hidden_dims) → input_dim
+        dec_layers: list[nn.Module] = []
+        in_dim = n_vae_dis
+        for h in reversed(encoder_hidden_dims):
+            dec_layers += [nn.Linear(in_dim, h), nn.ReLU(True)]
+            in_dim = h
+        dec_layers.append(nn.Linear(in_dim, input_dim))
+        self.decoder = nn.Sequential(*dec_layers)
 
         self.classifier = nn.Sequential(
             nn.Linear(1, 32),

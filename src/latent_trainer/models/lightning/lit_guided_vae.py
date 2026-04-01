@@ -34,6 +34,7 @@ class LitGuidedVAE(pl.LightningModule):
         weight_decay_c: float = 1e-4,
         w_cls: float = 50_000.0,
         input_dim: int = 2,
+        encoder_hidden_dims: list[int] | None = None,
     ) -> None:
         """Initialise the LitGuidedVAE module.
 
@@ -53,6 +54,9 @@ class LitGuidedVAE(pl.LightningModule):
             Weight for the classification loss.
         input_dim:
             Input feature dimension (depends on the transform used).
+        encoder_hidden_dims:
+            Hidden layer widths for the encoder.  The decoder mirrors these in
+            reverse order.  Defaults to ``[64, 128, 256]``.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -60,7 +64,11 @@ class LitGuidedVAE(pl.LightningModule):
         # Manual optimisation (3 optimizers)
         self.automatic_optimization = False
 
-        self.model = suGuidedVAE(n_vae_dis=n_vae_dis, input_dim=input_dim)
+        self.model = suGuidedVAE(
+            n_vae_dis=n_vae_dis,
+            input_dim=input_dim,
+            encoder_hidden_dims=encoder_hidden_dims,
+        )
         self.classifier = Classifier(n_vae_dis=n_vae_dis)
 
         self.lr = lr
