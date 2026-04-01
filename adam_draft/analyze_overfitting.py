@@ -11,42 +11,51 @@ Usage:
     uv run python analyze_overfitting.py --folds 5 --epochs 60
 """
 
-import os
 import argparse
+import os
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import numpy as np
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.metrics import f1_score, matthews_corrcoef, balanced_accuracy_score
+from sklearn.metrics import balanced_accuracy_score, f1_score, matthews_corrcoef
 from sklearn.model_selection import StratifiedKFold
+from torch.utils.data import DataLoader, TensorDataset
 
+from latent_trainer.features.data_utils import normalize
 from latent_trainer.features.feature_groups import FEATURE_GROUPS
-
-from latent_trainer.data_utils import normalize
 
 
 def load_all_data(cache_path="data/cached_dataset_rich.pt"):
     """Load and combine train+val for k-fold, return raw (unnormalized)."""
     cached = torch.load(cache_path, weights_only=True)
     # Combine train and val for proper k-fold
-    all_X = torch.cat([cached['train_features'].float(),
-                       cached['val_features'].float()], dim=0)
-    all_y = torch.cat([cached['train_labels'].float(),
-                       cached['val_labels'].float()], dim=0)
+    all_X = torch.cat(
+        [cached["train_features"].float(), cached["val_features"].float()], dim=0
+    )
+    all_y = torch.cat(
+        [cached["train_labels"].float(), cached["val_labels"].float()], dim=0
+    )
     return all_X, all_y
-
-
-
 
 
 def build_mlp(input_dim):
     """Build diagnostic MLP."""
     return nn.Sequential(
-        nn.Linear(input_dim, 256), nn.ReLU(), nn.BatchNorm1d(256), nn.Dropout(0.3),
-        nn.Linear(256, 128), nn.ReLU(), nn.BatchNorm1d(128), nn.Dropout(0.3),
-        nn.Linear(128, 64), nn.ReLU(), nn.BatchNorm1d(64), nn.Dropout(0.2),
-        nn.Linear(64, 1), nn.Sigmoid(),
+        nn.Linear(input_dim, 256),
+        nn.ReLU(),
+        nn.BatchNorm1d(256),
+        nn.Dropout(0.3),
+        nn.Linear(256, 128),
+        nn.ReLU(),
+        nn.BatchNorm1d(128),
+        nn.Dropout(0.3),
+        nn.Linear(128, 64),
+        nn.ReLU(),
+        nn.BatchNorm1d(64),
+        nn.Dropout(0.2),
+        nn.Linear(64, 1),
+        nn.Sigmoid(),
     )
 
 
@@ -56,12 +65,16 @@ def train_and_eval(model, train_X, train_y, val_X, val_y, epochs=60, batch_size=
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
     criterion = nn.BCELoss()
 
-    train_loader = DataLoader(TensorDataset(train_X, train_y.unsqueeze(1)),
-                              batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(val_X, val_y.unsqueeze(1)),
-                            batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(
+        TensorDataset(train_X, train_y.unsqueeze(1)),
+        batch_size=batch_size,
+        shuffle=True,
+    )
+    val_loader = DataLoader(
+        TensorDataset(val_X, val_y.unsqueeze(1)), batch_size=batch_size, shuffle=False
+    )
 
-    best_val_loss = float('inf')
+    best_val_loss = float("inf")
     best_state = None
     no_improve = 0
 
@@ -129,9 +142,9 @@ def prepare_features(X, strategy="combined"):
 # ═══════════════════════════════════════════════════════════
 def run_kfold(all_X, all_y, n_folds=5, epochs=60):
     """K-fold cross-validation to check stability."""
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"  ANALYSIS 1: {n_folds}-Fold Cross-Validation")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
     fold_results = []
@@ -148,21 +161,27 @@ def run_kfold(all_X, all_y, n_folds=5, epochs=60):
         val_feat = prepare_features(val_X)
 
         model = build_mlp(train_feat.shape[1])
-        metrics = train_and_eval(model, train_feat, train_y, val_feat, val_y, epochs=epochs)
+        metrics = train_and_eval(
+            model, train_feat, train_y, val_feat, val_y, epochs=epochs
+        )
         fold_results.append(metrics)
 
-        print(f"  Fold {fold+1}: Acc={metrics['accuracy']:.4f}, "
-              f"Bal.Acc={metrics['balanced_accuracy']:.4f}, "
-              f"F1={metrics['f1']:.4f}, MCC={metrics['mcc']:.4f}")
+        print(
+            f"  Fold {fold + 1}: Acc={metrics['accuracy']:.4f}, "
+            f"Bal.Acc={metrics['balanced_accuracy']:.4f}, "
+            f"F1={metrics['f1']:.4f}, MCC={metrics['mcc']:.4f}"
+        )
 
     # Summary
-    print(f"\n  {'-'*50}")
-    for metric in ['accuracy', 'balanced_accuracy', 'f1', 'mcc']:
+    print(f"\n  {'-' * 50}")
+    for metric in ["accuracy", "balanced_accuracy", "f1", "mcc"]:
         values = [r[metric] for r in fold_results]
         mean = np.mean(values)
         std = np.std(values)
-        print(f"  {metric:20s}: {mean:.4f} ± {std:.4f}  "
-              f"(range: {min(values):.4f} - {max(values):.4f})")
+        print(
+            f"  {metric:20s}: {mean:.4f} ± {std:.4f}  "
+            f"(range: {min(values):.4f} - {max(values):.4f})"
+        )
 
     return fold_results
 
@@ -172,19 +191,23 @@ def run_kfold(all_X, all_y, n_folds=5, epochs=60):
 # ═══════════════════════════════════════════════════════════
 def run_ablation(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
     """Remove each feature group and measure impact."""
-    print(f"\n{'='*70}")
-    print(f"  ANALYSIS 2: Feature Group Ablation")
-    print(f"  (remove one group at a time → measure accuracy drop)")
-    print(f"{'='*70}")
+    print(f"\n{'=' * 70}")
+    print("  ANALYSIS 2: Feature Group Ablation")
+    print("  (remove one group at a time → measure accuracy drop)")
+    print(f"{'=' * 70}")
 
     # Baseline with all features
     train_X_norm, val_X_norm = normalize(train_X_raw.clone(), val_X_raw.clone())[:2]
     train_feat = prepare_features(train_X_norm)
     val_feat = prepare_features(val_X_norm)
     model = build_mlp(train_feat.shape[1])
-    baseline = train_and_eval(model, train_feat, train_y, val_feat, val_y, epochs=epochs)
-    print(f"\n  Baseline (all features): Acc={baseline['accuracy']:.4f}, "
-          f"F1={baseline['f1']:.4f}, MCC={baseline['mcc']:.4f}")
+    baseline = train_and_eval(
+        model, train_feat, train_y, val_feat, val_y, epochs=epochs
+    )
+    print(
+        f"\n  Baseline (all features): Acc={baseline['accuracy']:.4f}, "
+        f"F1={baseline['f1']:.4f}, MCC={baseline['mcc']:.4f}"
+    )
 
     ablation_results = {}
 
@@ -199,15 +222,19 @@ def run_ablation(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
         train_feat = prepare_features(train_X_norm)
         val_feat = prepare_features(val_X_norm)
         model = build_mlp(train_feat.shape[1])
-        metrics = train_and_eval(model, train_feat, train_y, val_feat, val_y, epochs=epochs)
+        metrics = train_and_eval(
+            model, train_feat, train_y, val_feat, val_y, epochs=epochs
+        )
 
-        drop = baseline['accuracy'] - metrics['accuracy']
+        drop = baseline["accuracy"] - metrics["accuracy"]
         ablation_results[group_name] = metrics
-        ablation_results[group_name]['accuracy_drop'] = drop
+        ablation_results[group_name]["accuracy_drop"] = drop
 
-        print(f"  Remove {group_name:18s} ({end-start:3d} feats): "
-              f"Acc={metrics['accuracy']:.4f} (Δ={drop:+.4f}), "
-              f"F1={metrics['f1']:.4f}, MCC={metrics['mcc']:.4f}")
+        print(
+            f"  Remove {group_name:18s} ({end - start:3d} feats): "
+            f"Acc={metrics['accuracy']:.4f} (Δ={drop:+.4f}), "
+            f"F1={metrics['f1']:.4f}, MCC={metrics['mcc']:.4f}"
+        )
 
     return baseline, ablation_results
 
@@ -217,21 +244,21 @@ def run_ablation(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
 # ═══════════════════════════════════════════════════════════
 def run_progressive(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
     """Remove feature groups from most to least 'leaky' (post-game first)."""
-    print(f"\n{'='*70}")
-    print(f"  ANALYSIS 3: Progressive Feature Removal")
-    print(f"  (cumulative removal, most post-game → most pre-game)")
-    print(f"{'='*70}")
+    print(f"\n{'=' * 70}")
+    print("  ANALYSIS 3: Progressive Feature Removal")
+    print("  (cumulative removal, most post-game → most pre-game)")
+    print(f"{'=' * 70}")
 
     # Order from most post-game (leaky) to most pre-game (fair)
     removal_order = [
-        ("final_state",    117, 156, "End-game economy snapshot"),
-        ("late_economy",    78, 117, "Late-game economy (frames 15000+)"),
-        ("economy_delta",  156, 195, "Economy rate of change"),
-        ("unit_activity",  199, 201, "Units born/killed totals"),
-        ("game_info",      201, 203, "Upgrades + duration"),
-        ("mid_economy",     39,  78, "Mid-game economy (frames 5000-15000)"),
-        ("meta_stats",     195, 199, "APM, MMR, SQ, supplyCapped%"),
-        ("early_economy",    0,  39, "Early-game economy (frames 0-5000)"),
+        ("final_state", 117, 156, "End-game economy snapshot"),
+        ("late_economy", 78, 117, "Late-game economy (frames 15000+)"),
+        ("economy_delta", 156, 195, "Economy rate of change"),
+        ("unit_activity", 199, 201, "Units born/killed totals"),
+        ("game_info", 201, 203, "Upgrades + duration"),
+        ("mid_economy", 39, 78, "Mid-game economy (frames 5000-15000)"),
+        ("meta_stats", 195, 199, "APM, MMR, SQ, supplyCapped%"),
+        ("early_economy", 0, 39, "Early-game economy (frames 0-5000)"),
     ]
 
     removed_so_far = []
@@ -248,11 +275,15 @@ def run_progressive(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
         train_feat = prepare_features(train_norm)
         val_feat = prepare_features(val_norm)
         model = build_mlp(train_feat.shape[1])
-        metrics = train_and_eval(model, train_feat, train_y, val_feat, val_y, epochs=epochs)
+        metrics = train_and_eval(
+            model, train_feat, train_y, val_feat, val_y, epochs=epochs
+        )
 
         remaining = len(FEATURE_GROUPS) - len(removed_so_far)
-        print(f"  Removed: {group_name:18s} → {remaining} groups left: "
-              f"Acc={metrics['accuracy']:.4f}, F1={metrics['f1']:.4f}, MCC={metrics['mcc']:.4f}")
+        print(
+            f"  Removed: {group_name:18s} → {remaining} groups left: "
+            f"Acc={metrics['accuracy']:.4f}, F1={metrics['f1']:.4f}, MCC={metrics['mcc']:.4f}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════
@@ -260,18 +291,21 @@ def run_progressive(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
 # ═══════════════════════════════════════════════════════════
 def run_early_only(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
     """Use ONLY early + meta features (no post-game info)."""
-    print(f"\n{'='*70}")
-    print(f"  ANALYSIS 4: Early-Game + Meta Only")
-    print(f"  (only features available BEFORE game outcome is known)")
-    print(f"{'='*70}")
+    print(f"\n{'=' * 70}")
+    print("  ANALYSIS 4: Early-Game + Meta Only")
+    print("  (only features available BEFORE game outcome is known)")
+    print(f"{'=' * 70}")
 
     configs = {
         "Meta stats only (APM, MMR, SQ)": [("meta_stats", 195, 199)],
         "Early economy only": [("early_economy", 0, 39)],
         "Early + meta": [("early_economy", 0, 39), ("meta_stats", 195, 199)],
         "Early + mid economy": [("early_economy", 0, 39), ("mid_economy", 39, 78)],
-        "Early + mid + meta": [("early_economy", 0, 39), ("mid_economy", 39, 78),
-                                ("meta_stats", 195, 199)],
+        "Early + mid + meta": [
+            ("early_economy", 0, 39),
+            ("mid_economy", 39, 78),
+            ("meta_stats", 195, 199),
+        ],
     }
 
     for name, groups in configs.items():
@@ -288,11 +322,15 @@ def run_early_only(train_X_raw, train_y, val_X_raw, val_y, epochs=60):
         train_feat = prepare_features(train_norm)
         val_feat = prepare_features(val_norm)
         model = build_mlp(train_feat.shape[1])
-        metrics = train_and_eval(model, train_feat, train_y, val_feat, val_y, epochs=epochs)
+        metrics = train_and_eval(
+            model, train_feat, train_y, val_feat, val_y, epochs=epochs
+        )
 
-        print(f"  {name:35s} ({len(selected):3d} feats): "
-              f"Acc={metrics['accuracy']:.4f}, F1={metrics['f1']:.4f}, "
-              f"MCC={metrics['mcc']:.4f}")
+        print(
+            f"  {name:35s} ({len(selected):3d} feats): "
+            f"Acc={metrics['accuracy']:.4f}, F1={metrics['f1']:.4f}, "
+            f"MCC={metrics['mcc']:.4f}"
+        )
 
 
 def main():
@@ -312,10 +350,10 @@ def main():
 
     # Use original train/val split for ablation analyses
     cached = torch.load(args.cache, weights_only=True)
-    train_X = cached['train_features'].float()
-    train_y = cached['train_labels'].float()
-    val_X = cached['val_features'].float()
-    val_y = cached['val_labels'].float()
+    train_X = cached["train_features"].float()
+    train_y = cached["train_labels"].float()
+    val_X = cached["val_features"].float()
+    val_y = cached["val_labels"].float()
 
     # Run all analyses
     run_kfold(all_X, all_y, n_folds=args.folds, epochs=args.epochs)
@@ -323,9 +361,9 @@ def main():
     run_progressive(train_X, train_y, val_X, val_y, epochs=args.epochs)
     run_early_only(train_X, train_y, val_X, val_y, epochs=args.epochs)
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("  INTERPRETATION GUIDE")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print("""
   If k-fold scores are tight (low std), the model is NOT overfitting
   the specific train/val split.
