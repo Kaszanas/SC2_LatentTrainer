@@ -4,7 +4,7 @@
 import numpy as np
 import torch
 
-from latent_trainer.data_utils import load_and_normalize
+from latent_trainer.features.data_utils import load_and_normalize
 from latent_trainer.models.lightning.lit_classifier import LatentClassifier
 from latent_trainer.models.lightning.lit_vae import LitVAE
 
@@ -70,14 +70,14 @@ def _build_feature_names() -> list[str]:
 FEATURE_NAMES: list[str] = _build_feature_names()
 
 
-def _nearest_winning_target(sample_z, win_latents, k=5) -> torch.Tensor:
+def nearest_winning_target(sample_z, win_latents, k=5) -> torch.Tensor:
     dists = torch.cdist(sample_z.unsqueeze(0), win_latents.unsqueeze(0)).squeeze(0)
     _, indices = dists.topk(k, largest=False)
     return win_latents[indices.squeeze()].mean(dim=0)
 
 
 @torch.no_grad()
-def _encode_player(vae, data: torch.Tensor) -> torch.Tensor:
+def encode_player(vae, data: torch.Tensor) -> torch.Tensor:
     mus = []
     for i in range(0, len(data), 256):
         mu, _ = vae.encode(data[i : i + 256])
@@ -86,12 +86,12 @@ def _encode_player(vae, data: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
-def _decode_features(vae, z, norm_mean, norm_std) -> np.ndarray:
+def decode_features(vae, z, norm_mean, norm_std) -> np.ndarray:
     recon_norm = vae.decode(z)
     return (recon_norm * norm_std + norm_mean).cpu().numpy()
 
 
-def _load_model_and_data(model_path: str, cache_path: str) -> tuple:
+def load_model_and_data(model_path: str, cache_path: str) -> tuple:
     info = torch.load(model_path, weights_only=False)
 
     vae = LitVAE.load_from_checkpoint(info["vae_ckpt_path"])
@@ -113,7 +113,7 @@ def _load_model_and_data(model_path: str, cache_path: str) -> tuple:
 # These closures adapt the two-stage (player_z, opponent_z) classifier
 # into the generic callable interface expected by path strategies.
 # ---------------------------------------------------------------------------
-def _opponent_aware_score(
+def opponent_aware_score(
     z: torch.Tensor,
     *,
     classifier: LatentClassifier,
@@ -131,7 +131,7 @@ def _opponent_aware_score(
         return 1.0 - classifier(combined).squeeze(-1)
 
 
-def _opponent_aware_logit(
+def opponent_aware_logit(
     z: torch.Tensor,
     *,
     classifier: LatentClassifier,
