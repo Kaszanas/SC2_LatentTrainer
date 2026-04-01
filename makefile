@@ -5,6 +5,15 @@ DOCKER_DIRECTORY = ./docker
 DOCKERFILE = $(DOCKER_DIRECTORY)/Dockerfile
 DOCKER_COMPOSE_FILE = $(DOCKER_DIRECTORY)/docker-compose.yml
 
+# Training configuration (override on the CLI):
+DATASET       ?= cached_dataset_rich.pt
+N_TRIALS      ?= 100
+
+TS_STUDY      ?= SC2_TwoStage
+TS_EXPERIMENT ?= SC2_TwoStage_ArchSearch
+
+GV_STUDY      ?= SC2_GuidedVAE
+GV_EXPERIMENT ?= SC2_GuidedVAE_ArchSearch
 
 .PHONY: test
 test: format lint unittest
@@ -39,6 +48,12 @@ clean:
 	rm -rf .tox dist site
 	rm -rf coverage.xml .coverage
 
+.PHONY: clean_runs
+clean_runs:
+	rm -f mlflow.db optuna_study.db
+	rm -rf mlruns ray_results ray_tmp
+	rm -rf output checkpoints
+
 # Usage: make uv_update EXTRA=cpu (default: cuda)
 EXTRA ?= cuda
 
@@ -47,10 +62,62 @@ uv_update:
 	uv lock --upgrade-package sc2_datasets
 	uv sync --extra $(EXTRA)
 
-.PHONY: process_features
-process_features:
-	python src/latent_trainer/features/main.py
+.PHONY: process_features_rich
+process_features_rich:
+	uv run python src/latent_trainer/features/main.py
 
+.PHONY: process_features_averaged
+process_features_averaged:
+	uv run python src/latent_trainer/features/main.py --transform averaged_economy
+
+# Two-stage pipeline 
+.PHONY: two_stage_sweep
+two_stage_sweep:
+	python src/latent_trainer/train.py \
+		--pipeline two_stage \
+		--dataset-filename $(DATASET) \
+		--mode sweep \
+		--n-trials $(N_TRIALS) \
+		--study-name $(TS_STUDY) \
+		--experiment-name $(TS_EXPERIMENT)
+
+.PHONY: two_stage_train
+two_stage_train:
+	python src/latent_trainer/train.py \
+		--pipeline two_stage \
+		--dataset-filename $(DATASET) \
+		--mode best \
+		--study-name $(TS_STUDY) \
+		--experiment-name $(TS_EXPERIMENT)
+
+# Guided-VAE pipeline
+.PHONY: guided_vae_sweep
+guided_vae_sweep:
+	python src/latent_trainer/train.py \
+		--pipeline guided_vae \
+		--dataset-filename $(DATASET) \
+		--mode sweep \
+		--n-trials $(N_TRIALS) \
+		--study-name $(GV_STUDY) \
+		--experiment-name $(GV_EXPERIMENT)
+
+.PHONY: guided_vae_train
+guided_vae_train:
+	python src/latent_trainer/train.py \
+		--pipeline guided_vae \
+		--dataset-filename $(DATASET) \
+		--mode best \
+		--study-name $(GV_STUDY) \
+		--experiment-name $(GV_EXPERIMENT)
+
+# Dashboards
+.PHONY: mlflow
+mlflow:
+	uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
+
+.PHONY: optuna
+optuna:
+	uv run optuna-dashboard sqlite:///optuna_study.db
 
 # Docker commands
 .PHONY: docker-build

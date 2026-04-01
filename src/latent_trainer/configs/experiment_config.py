@@ -73,8 +73,8 @@ class ExperimentConfig:
 
     # ── Pipeline selection ──────────────────────────────────────────
     pipeline: str = "two_stage"
-    cache_path: str = "data/cached_dataset_rich.pt"
-    mode: str = "single"
+    dataset_filename: str = "cached_dataset_rich.pt"
+    mode: str = "sweep"
 
     # ── MLFlow tracking ─────────────────────────────────────────────
     experiment_name: str = "SC2_Latent_TwoStage"
@@ -87,10 +87,6 @@ class ExperimentConfig:
     vae_epochs: int = 200
     cls_epochs: int = 100
     guided_vae_epochs: int = 10
-    batch_size: int = 256
-    latent_dim: int = 32
-    vae_lr: float = 1e-3
-    cls_lr: float = 1e-3
 
     # ── Ray resource allocation ─────────────────────────────────────
     gpus_per_trial: float = 1.0

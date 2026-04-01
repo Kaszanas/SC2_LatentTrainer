@@ -9,7 +9,7 @@ from latent_trainer.features.preprocess_dataset import (
     TransformEnumFunction,
     preprocess_dataset_chunked_profile,
 )
-from latent_trainer.settings import SEED
+from latent_trainer.settings import DATA_DIR, SEED
 
 
 @click.command(
@@ -21,18 +21,6 @@ from latent_trainer.settings import SEED
     default="rich",
     show_default=True,
     help="Transform to use: 'rich' (temporal+meta+units, 204 features) or 'averaged_economy' (averaged economy, 39 features)",
-)
-@click.option(
-    "--output-directory",
-    type=click.Path(
-        file_okay=False,
-        writable=True,
-        path_type=Path,
-        resolve_path=True,
-    ),
-    default=Path("data").resolve(),
-    show_default=True,
-    help="Output directory for cached dataset (default: data/)",
 )
 @click.option(
     "--single_json_dataset_path",
@@ -49,13 +37,12 @@ from latent_trainer.settings import SEED
 )
 def main(
     transform: Callable,
-    output_directory: Path,
     single_json_dataset_path: Path,
     n_workers: int,
 ) -> None:
     """Pre-process Single JSON SC2_Dataset and cache the transformed tensors to drive."""
     transform_name = TransformEnumFunction._TRANSFORM_NAMES[transform]
-    output_path = output_directory or Path("data")
+
     # profiler = cProfile.Profile()
     # profiler.enable()
 
@@ -63,7 +50,7 @@ def main(
 
     try:
         preprocess_dataset_chunked_profile(
-            output_directory=output_path,
+            output_directory=DATA_DIR,
             single_json_dataset_path=single_json_dataset_path,
             transform_fn=transform,
             transform_name=transform_name,

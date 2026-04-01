@@ -1,7 +1,6 @@
 # ---------------------------------------------------------------------------
 # Shared pipeline
 # ---------------------------------------------------------------------------
-import os
 from functools import partial
 
 import numpy as np
@@ -10,22 +9,23 @@ from sklearn.decomposition import PCA
 
 from latent_trainer.paths.data import (
     FEATURE_NAMES,
-    _decode_features,
-    _encode_player,
-    _load_model_and_data,
-    _opponent_aware_score,
+    decode_features,
+    encode_player,
+    load_model_and_data,
+    opponent_aware_score,
 )
 from latent_trainer.paths.feedback import compute_feedback, print_feedback_report
 from latent_trainer.paths.plot import (
-    _plot_distance,
-    _plot_feature_delta,
-    _plot_feature_evolution,
-    _plot_main,
-    _plot_three_signal_feedback,
+    plot_distance,
+    plot_feature_delta,
+    plot_feature_evolution,
+    plot_main,
+    plot_three_signal_feedback,
 )
+from latent_trainer.settings import OUTPUT_DIR, PLOTS_DIR
 
 
-def _run_pipeline(
+def run_path_charting_pipeline(
     *,
     model: str,
     cache: str,
@@ -37,16 +37,15 @@ def _run_pipeline(
     path_z_np: "np.ndarray",
 ) -> None:
     """Common post-path logic: P(win) curve, feedback, plots."""
-    os.makedirs("output", exist_ok=True)
 
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
+    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model, cache
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
 
-    latents_p0 = _encode_player(vae, val_X[:, 0, :])
-    latents_p1 = _encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae, val_X[:, 0, :])
+    latents_p1 = encode_player(vae, val_X[:, 1, :])
 
     # Win cloud: for each game, the winner's latent.
     # label=1 → p0 won; label=0 → p1 won.
@@ -60,7 +59,7 @@ def _run_pipeline(
     opponent_z = latents_p0[chosen] if opponent_idx == 0 else latents_p1[chosen]
 
     score_fn = partial(
-        _opponent_aware_score,
+        opponent_aware_score,
         classifier=classifier,
         opponent_z=opponent_z,
         player_idx=player_idx,
@@ -85,29 +84,29 @@ def _run_pipeline(
         top_k=top_k,
         method_name=strategy.upper(),
     )
-    print_feedback_report(feedback, top_k=top_k)
+    print_feedback_report(feedback=feedback, top_k=top_k)
 
     print("\nGenerating plots...")
-    _plot_three_signal_feedback(
-        feedback,
-        FEATURE_NAMES,
-        f"output/feedback_{strategy}_three_signal.png",
+    plot_three_signal_feedback(
+        feedback=feedback,
+        feature_names=FEATURE_NAMES,
+        save_path=OUTPUT_DIR / f"feedback_{strategy}_three_signal.png",
         top_k=top_k,
     )
-    path_features = _decode_features(vae, path_z_tensor, norm_mean, norm_std)
-    _plot_feature_evolution(
-        path_features,
-        feedback["_raw_delta"],
-        FEATURE_NAMES,
-        min(5, top_k),
-        alphas,
-        f"output/feedback_{strategy}_feature_evolution.png",
+    path_features = decode_features(vae, path_z_tensor, norm_mean, norm_std)
+    plot_feature_evolution(
+        path_features=path_features,
+        delta=feedback["_raw_delta"],
+        feature_names=FEATURE_NAMES,
+        top_k=min(5, top_k),
+        alphas=alphas,
+        save_path=PLOTS_DIR / f"feedback_{strategy}_feature_evolution.png",
     )
-    _plot_feature_delta(
-        feedback["_raw_delta"],
-        FEATURE_NAMES,
-        top_k,
-        f"output/feedback_{strategy}_feature_delta.png",
+    plot_feature_delta(
+        delta=feedback["_raw_delta"],
+        feature_names=FEATURE_NAMES,
+        top_k=top_k,
+        save_path=PLOTS_DIR / f"feedback_{strategy}_feature_delta.png",
     )
 
     Z_win_np = win_latents.detach().cpu().numpy()
@@ -121,19 +120,19 @@ def _run_pipeline(
     loss_c = coords[n_w : n_w + n_l]
     path_c = coords[n_w + n_l :]
 
-    _plot_main(
+    plot_main(
         win_c=win_c,
         loss_c=loss_c,
         path_c=path_c,
         alphas=alphas,
         win_probs=win_probs,
         pca=pca,
-        save_path=f"output/feedback_{strategy}_latent_path.png",
+        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_path.png",
     )
-    _plot_distance(
+    plot_distance(
         path_z=path_z_tensor,
         win_centroid=win_centroid,
         alphas=alphas,
-        save_path=f"output/feedback_{strategy}_distance_curve.png",
+        save_path=PLOTS_DIR / f"feedback_{strategy}_distance_curve.png",
     )
-    print(f"\nDone! All plots saved to output/ (strategy={strategy})")
+    print(f"\nDone! All plots saved to {PLOTS_DIR}/ (strategy={strategy})")

@@ -1,28 +1,37 @@
 # ---------------------------------------------------------------------------
 # CLI group + sub-commands
 # ---------------------------------------------------------------------------
-import os
 from functools import partial
 
 import click
 import torch
 
 from latent_trainer.paths.data import (
-    _encode_player,
-    _load_model_and_data,
-    _nearest_winning_target,
-    _opponent_aware_logit,
-    _opponent_aware_score,
+    encode_player,
+    load_model_and_data,
+    nearest_winning_target,
+    opponent_aware_logit,
+    opponent_aware_score,
 )
-from latent_trainer.paths.pipeline import _run_pipeline
+from latent_trainer.paths.pipeline import run_path_charting_pipeline
 from latent_trainer.paths.strategies import path_linear
 from latent_trainer.paths.strategies.geodesic import path_geodesic
 from latent_trainer.paths.strategies.gradient_ascent import path_gradient_ascent
 from latent_trainer.paths.strategies.optimal_transport import path_optimal_transport
 
-_GLOBAL_OPTIONS = [
-    click.option("--model", default="output/two_stage_model.pth", show_default=True),
-    click.option("--cache", default="data/cached_dataset_rich.pt", show_default=True),
+_PATH_CHARTING_CLI_COMMON_OPTIONS = [
+    click.option(
+        "--model",
+        default="two_stage_model.pth",
+        show_default=True,
+        help="Filename of the trained model.",
+    ),
+    click.option(
+        "--cache",
+        default="cached_dataset_rich.pt",
+        show_default=True,
+        help="Filename of the cached dataset.",
+    ),
     click.option(
         "--sample-idx",
         type=int,
@@ -46,9 +55,9 @@ _GLOBAL_OPTIONS = [
 ]
 
 
-def _global_options(fn):
+def global_options(fn):
     """Decorator that attaches all global options to a sub-command."""
-    for option in reversed(_GLOBAL_OPTIONS):
+    for option in reversed(_PATH_CHARTING_CLI_COMMON_OPTIONS):
         fn = option(fn)
     return fn
 
@@ -72,7 +81,7 @@ def cli() -> None:
 
 
 @cli.command("linear")
-@_global_options
+@global_options
 @click.option(
     "--method",
     type=click.Choice(["centroid", "nearest"]),
@@ -89,10 +98,9 @@ def cli() -> None:
 )
 def cmd_linear(model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
     """Linear interpolation toward a winning target."""
-    os.makedirs("output", exist_ok=True)
 
     print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
+    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model_path=model,
         cache_path=cache,
     )
@@ -101,8 +109,8 @@ def cmd_linear(model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
     print(f"  Validation: {len(val_X)}")
 
     print("Encoding into latent space...")
-    latents_p0 = _encode_player(vae, val_X[:, 0, :])
-    latents_p1 = _encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae, val_X[:, 0, :])
+    latents_p1 = encode_player(vae, val_X[:, 1, :])
 
     # Win cloud: label=1 → p0 won; label=0 → p1 won.
     win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
@@ -124,9 +132,7 @@ def cmd_linear(model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
         target_z = win_centroid.numpy()
         print("  Target: centroid")
     else:
-        target_z = _nearest_winning_target(
-            sample_z, win_latents, k=k_neighbours
-        ).numpy()
+        target_z = nearest_winning_target(sample_z, win_latents, k=k_neighbours).numpy()
         print(f"  Target: nearest (k={k_neighbours})")
 
     path_z_np = path_linear(
@@ -134,7 +140,7 @@ def cmd_linear(model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
         target_z=target_z,
         n_waypoints=n_steps,
     )
-    _run_pipeline(
+    run_path_charting_pipeline(
         model=model,
         cache=cache,
         chosen=int(chosen),
@@ -147,7 +153,7 @@ def cmd_linear(model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
 
 
 @cli.command("gradient-ascent")
-@_global_options
+@global_options
 @click.option(
     "--ga-steps",
     type=int,
@@ -196,10 +202,9 @@ def cmd_gradient_ascent(
     convergence_threshold,
 ):
     """Gradient ascent on P(win) regularised by a KDE density prior."""
-    os.makedirs("output", exist_ok=True)
 
     print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
+    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model, cache
     )
     labels = val_y.numpy()
@@ -207,8 +212,8 @@ def cmd_gradient_ascent(
     print(f"  Validation: {len(val_X)}")
 
     print("Encoding into latent space...")
-    latents_p0 = _encode_player(vae, val_X[:, 0, :])
-    latents_p1 = _encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae, val_X[:, 0, :])
+    latents_p1 = encode_player(vae, val_X[:, 1, :])
 
     n = len(labels)
     chosen = (
@@ -229,13 +234,13 @@ def cmd_gradient_ascent(
     )
 
     score_fn = partial(
-        _opponent_aware_score,
+        opponent_aware_score,
         classifier=classifier,
         opponent_z=opponent_z,
         player_idx=player_idx,
     )
     logit_fn = partial(
-        _opponent_aware_logit,
+        opponent_aware_logit,
         classifier=classifier,
         opponent_z=opponent_z,
         player_idx=player_idx,
@@ -255,7 +260,7 @@ def cmd_gradient_ascent(
         n_waypoints=n_steps,
         convergence_threshold=convergence_threshold,
     )
-    _run_pipeline(
+    run_path_charting_pipeline(
         model=model,
         cache=cache,
         chosen=int(chosen),
@@ -268,7 +273,7 @@ def cmd_gradient_ascent(
 
 
 @cli.command("optimal-transport")
-@_global_options
+@global_options
 @click.option(
     "--ot-reg",
     type=float,
@@ -278,10 +283,9 @@ def cmd_gradient_ascent(
 )
 def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
     """Wasserstein-barycentric path into the winning distribution."""
-    os.makedirs("output", exist_ok=True)
 
     print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
+    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model, cache
     )
     labels = val_y.numpy()
@@ -289,8 +293,8 @@ def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
     print(f"  Validation: {len(val_X)}")
 
     print("Encoding into latent space...")
-    latents_p0 = _encode_player(vae, val_X[:, 0, :])
-    latents_p1 = _encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae, val_X[:, 0, :])
+    latents_p1 = encode_player(vae, val_X[:, 1, :])
 
     # Win cloud: label=1 → p0 won; label=0 → p1 won.
     win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
@@ -314,7 +318,7 @@ def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
         reg=ot_reg,
         n_waypoints=n_steps,
     )
-    _run_pipeline(
+    run_path_charting_pipeline(
         model=model,
         cache=cache,
         chosen=int(chosen),
@@ -327,7 +331,7 @@ def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
 
 
 @cli.command("geodesic")
-@_global_options
+@global_options
 @click.option(
     "--geodesic-k",
     type=int,
@@ -337,10 +341,9 @@ def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
 )
 def cmd_geodesic(model, cache, sample_idx, n_steps, top_k, geodesic_k):
     """Shortest path on a kNN latent-space graph."""
-    os.makedirs("output", exist_ok=True)
 
     print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
+    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model, cache
     )
     labels = val_y.numpy()
@@ -348,8 +351,8 @@ def cmd_geodesic(model, cache, sample_idx, n_steps, top_k, geodesic_k):
     print(f"  Validation: {len(val_X)}")
 
     print("Encoding into latent space...")
-    latents_p0 = _encode_player(vae, val_X[:, 0, :])
-    latents_p1 = _encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae, val_X[:, 0, :])
+    latents_p1 = encode_player(vae, val_X[:, 1, :])
 
     # Win cloud: label=1 → p0 won; label=0 → p1 won.
     win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
@@ -376,7 +379,7 @@ def cmd_geodesic(model, cache, sample_idx, n_steps, top_k, geodesic_k):
         k=geodesic_k,
         n_waypoints=n_steps,
     )
-    _run_pipeline(
+    run_path_charting_pipeline(
         model=model,
         cache=cache,
         chosen=int(chosen),

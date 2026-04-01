@@ -14,9 +14,10 @@ Usage:
 
 import logging
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, as_completed, wait
 from dataclasses import asdict
 from pathlib import Path
+from time import perf_counter
 from typing import Callable
 
 import click
@@ -28,11 +29,13 @@ from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData
 from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
     economy_average_vs_outcome,
 )
+from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 
 from latent_trainer.features.rich_transform import rich_transform
 from latent_trainer.features.type import CachedDatasetFileSpec
+from latent_trainer.settings import DATA_DIR
 
 
 def _transform_single_object(
@@ -55,6 +58,52 @@ def _transform_single_object(
         return e
 
     return result
+
+
+def process_batch(
+    n_workers: int,
+    dataset_object: Dataset,
+    transform_fn: Callable,
+    start_index: int,
+    end_index: int,
+) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
+    set_features = []
+    set_labels = []
+    skipped = 0
+    errors = 0
+
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = [
+            executor.submit(
+                _transform_single_object,
+                dataset_object=dataset_object,
+                index=i,
+                transform_fn=transform_fn,
+            )
+            for i in range(start_index, end_index)
+        ]
+
+        for future in tqdm(
+            as_completed(futures),
+            desc=f"  Batch {start_index}:{end_index} (parallel)",
+            total=len(futures),
+        ):
+            result = future.result()
+
+            if isinstance(result, Exception):
+                errors += 1
+            elif result is None:
+                skipped += 1
+            else:
+                features, label = result
+                set_features.append(
+                    features
+                    if isinstance(features, torch.Tensor)
+                    else torch.tensor(features, dtype=torch.float32)
+                )
+                set_labels.append(label)
+
+    return set_features, set_labels, skipped, errors
 
 
 def process_set(
@@ -91,41 +140,23 @@ def process_set(
     set_features = []
     set_labels = []
 
-    # Process training set
-    logging.info("  Processing training set...")
-    # for i in tqdm(range(len(dataset_object)), desc="  Train"):
-    with ProcessPoolExecutor(max_workers=n_workers) as executor:
-        futures = [
-            executor.submit(
-                _transform_single_object,
-                dataset_object=dataset_object,
-                index=i,
-                transform_fn=transform_fn,
-            )
-            for i in range(len(dataset_object))
-        ]
+    batch_size = 20_000
+    total_size = len(dataset_object)
 
-        for future in tqdm(
-            as_completed(futures),
-            desc="  Train (parallel)",
-            total=len(futures),
-        ):
-            result = future.result()
+    for start_index in range(0, total_size, batch_size):
+        end_index = min(start_index + batch_size, total_size)
+        batch_features, batch_labels, batch_skipped, batch_errors = process_batch(
+            n_workers=n_workers,
+            dataset_object=dataset_object,
+            transform_fn=transform_fn,
+            start_index=start_index,
+            end_index=end_index,
+        )
 
-            if isinstance(result, Exception):
-                errors += 1
-                if errors <= 5:
-                    logging.info(f"    Error: {type(result).__name__}: {result}")
-            elif result is None:
-                skipped += 1
-            else:
-                features, label = result
-                set_features.append(
-                    features
-                    if isinstance(features, torch.Tensor)
-                    else torch.tensor(features, dtype=torch.float32)
-                )
-                set_labels.append(label)
+        set_features.extend(batch_features)
+        set_labels.extend(batch_labels)
+        skipped += batch_skipped
+        errors += batch_errors
 
     return set_features, set_labels, skipped, errors
 
@@ -192,7 +223,7 @@ def preprocess_dataset(
     transform_name: str,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
     single_json_dataset_path: Path | str,
-    output_directory: Path | str = Path("./data").resolve(),
+    output_directory: Path | str = DATA_DIR,
     n_workers: int = 24,
 ) -> None:
     """
@@ -217,12 +248,6 @@ def preprocess_dataset(
         Number of worker processes for parallel replay processing, by default 24.
     """
 
-    output_directory = (
-        output_directory
-        if isinstance(output_directory, Path)
-        else Path(output_directory).resolve()
-    )
-
     logging.info(f"SC2EGSet Dataset Pre-processing ({transform_name} transform)")
 
     # Initialize datamodule (this downloads + extracts if needed)
@@ -241,6 +266,10 @@ def preprocess_dataset(
     train_dataset = datamodule.train_dataset
     test_dataset = datamodule.test_dataset
     val_dataset = datamodule.val_dataset
+
+    train_dataset.indices = sorted(train_dataset.indices)
+    test_dataset.indices = sorted(test_dataset.indices)
+    val_dataset.indices = sorted(val_dataset.indices)
 
     total = check_split(
         train_dataset=train_dataset,
@@ -329,3 +358,238 @@ class TransformEnumFunction(click.Choice):
                 return economy_average_vs_outcome
             case _:
                 raise click.BadParameter(f"Invalid transform choice: {value}")
+
+
+def _transform_index_chunk(
+    dataset_object: DataLoader,
+    indices: list[int],
+    transform_fn: Callable,
+) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
+    """Process a contiguous chunk of replay indices in one worker call."""
+    # profiler = cProfile.Profile()
+    # profiler.enable()
+
+    set_features: list[torch.Tensor] = []
+    set_labels: list[torch.Tensor] = []
+    skipped = 0
+    errors = 0
+
+    for index in indices:
+        result = _transform_single_object(
+            dataset_object=dataset_object,
+            index=index,
+            transform_fn=transform_fn,
+        )
+
+        if isinstance(result, Exception):
+            errors += 1
+        elif result is None:
+            skipped += 1
+        else:
+            features, label = result
+            set_features.append(
+                features
+                if isinstance(features, torch.Tensor)
+                else torch.tensor(features, dtype=torch.float32)
+            )
+            set_labels.append(label)
+
+    # profiler.disable()
+    # profile_output = Path(
+    #     f"E:/Projects/1_Python/latent_trainer_fresh/SCI_SC2_LatentTrainer/{next_chunk}_preprocess_dataset_profile_no_chunk.prof"
+    # ).resolve()
+
+    # profiler.dump_stats(str(profile_output))
+    # click.echo(f"Saved cProfile stats to: {profile_output}")
+
+    return set_features, set_labels, skipped, errors
+
+
+def process_set_chunked_single_pool(
+    dataset_object: DataLoader,
+    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]] = None,
+    n_workers: int = 8,
+    chunk_size: int = 256,
+    max_inflight_tasks: int | None = None,
+    set_name: str = "train",
+) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
+    """Alternative fast path: chunked index tasks with one persistent process pool.
+
+    This function is meant for profiling/benchmarking against ``process_set``.
+    It avoids recreating process pools and reduces scheduling overhead by
+    submitting chunks of indices as single tasks.
+    """
+    if max_inflight_tasks is None:
+        max_inflight_tasks = max(2, int(n_workers * 1.1))
+
+    total_size = len(dataset_object)
+    chunks: list[list[int]] = [
+        list(range(start, min(start + chunk_size, total_size)))
+        for start in range(0, total_size, chunk_size)
+    ]
+
+    set_features: list[torch.Tensor] = []
+    set_labels: list[torch.Tensor] = []
+    skipped = 0
+    errors = 0
+
+    pending_futures = set()
+    next_chunk = 0
+
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        with tqdm(total=total_size, desc=f"{set_name} (chunked-single-pool)") as pbar:
+            while (
+                next_chunk < len(chunks) and len(pending_futures) < max_inflight_tasks
+            ):
+                future = executor.submit(
+                    _transform_index_chunk,
+                    dataset_object=dataset_object,
+                    indices=chunks[next_chunk],
+                    transform_fn=transform_fn,
+                )
+                pending_futures.add(future)
+                next_chunk += 1
+
+            while pending_futures:
+                done, _ = wait(pending_futures, return_when=FIRST_COMPLETED)
+
+                for future in done:
+                    pending_futures.remove(future)
+
+                    chunk_features, chunk_labels, chunk_skipped, chunk_errors = (
+                        future.result()
+                    )
+                    set_features.extend(chunk_features)
+                    set_labels.extend(chunk_labels)
+                    skipped += chunk_skipped
+                    errors += chunk_errors
+
+                    pbar.update(len(chunk_features) + chunk_skipped + chunk_errors)
+
+                    if next_chunk < len(chunks):
+                        new_future = executor.submit(
+                            _transform_index_chunk,
+                            dataset_object=dataset_object,
+                            indices=chunks[next_chunk],
+                            transform_fn=transform_fn,
+                        )
+                        pending_futures.add(new_future)
+                        next_chunk += 1
+
+    return set_features, set_labels, skipped, errors
+
+
+def preprocess_dataset_chunked_profile(
+    transform_name: str,
+    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
+    single_json_dataset_path: Path | str,
+    output_directory: Path | str = DATA_DIR,
+    n_workers: int = 8,
+    chunk_size: int = 64,
+    max_inflight_tasks: int | None = None,
+) -> None:
+    """Alternative preprocess entrypoint for performance profiling.
+
+    This leaves ``preprocess_dataset`` unchanged and writes a separate cache file
+    with ``_chunked`` suffix for side-by-side comparison.
+    """
+
+    logging.info(
+        "SC2EGSet Dataset Pre-processing (chunked profile path): "
+        f"transform={transform_name}, n_workers={n_workers}, "
+        f"chunk_size={chunk_size}, max_inflight_tasks={max_inflight_tasks}"
+    )
+
+    datamodule = SC2EGSetDataModuleSingleJSON(
+        json_path=single_json_dataset_path,
+        download=False,
+    )
+    datamodule.prepare_data()
+    datamodule.setup("fit")
+
+    train_dataset = datamodule.train_dataset
+    test_dataset = datamodule.test_dataset
+    val_dataset = datamodule.val_dataset
+
+    train_dataset.indices = sorted(train_dataset.indices)
+    test_dataset.indices = sorted(test_dataset.indices)
+    val_dataset.indices = sorted(val_dataset.indices)
+
+    total = check_split(
+        train_dataset=train_dataset,
+        test_dataset=test_dataset,
+        val_dataset=val_dataset,
+    )
+
+    t0 = perf_counter()
+    train_features, train_labels, skipped_train, errors_train = (
+        process_set_chunked_single_pool(
+            dataset_object=train_dataset,
+            transform_fn=transform_fn,
+            n_workers=n_workers,
+            chunk_size=chunk_size,
+            max_inflight_tasks=max_inflight_tasks,
+            set_name="train",
+        )
+    )
+    t1 = perf_counter()
+    logging.info(f"  train done in {(t1 - t0):.1f}s")
+
+    test_features, test_labels, skipped_test, errors_test = (
+        process_set_chunked_single_pool(
+            dataset_object=test_dataset,
+            transform_fn=transform_fn,
+            n_workers=n_workers,
+            chunk_size=chunk_size,
+            max_inflight_tasks=max_inflight_tasks,
+            set_name="test",
+        )
+    )
+    t2 = perf_counter()
+    logging.info(f"  test done in {(t2 - t1):.1f}s")
+
+    val_features, val_labels, skipped_val, errors_val = process_set_chunked_single_pool(
+        dataset_object=val_dataset,
+        transform_fn=transform_fn,
+        n_workers=n_workers,
+        chunk_size=chunk_size,
+        max_inflight_tasks=max_inflight_tasks,
+        set_name="val",
+    )
+    t3 = perf_counter()
+    logging.info(f"  val done in {(t3 - t2):.1f}s")
+
+    train_features_tensor = torch.stack(train_features)
+    train_labels_tensor = torch.tensor(train_labels, dtype=torch.long)
+    test_features_tensor = torch.stack(test_features)
+    test_labels_tensor = torch.tensor(test_labels, dtype=torch.long)
+    val_features_tensor = torch.stack(val_features)
+    val_labels_tensor = torch.tensor(val_labels, dtype=torch.long)
+
+    file_spec = CachedDatasetFileSpec(
+        train_features=train_features_tensor,
+        train_labels=train_labels_tensor,
+        test_features=test_features_tensor,
+        test_labels=test_labels_tensor,
+        val_features=val_features_tensor,
+        val_labels=val_labels_tensor,
+        transform=transform_name,
+    )
+
+    os.makedirs(os.path.dirname(output_directory), exist_ok=True)
+    path_to_save = output_directory / f"cached_dataset_{transform_name}_chunked.pt"
+    torch.save(asdict(file_spec), path_to_save)
+
+    total_elapsed = t3 - t0
+    logging.info(f"\n{'=' * 60}")
+    logging.info("Chunked profile pre-processing complete!")
+    logging.info(f"  Transform:        {transform_name}")
+    logging.info(f"  Total replays:    {total}")
+    logging.info(f"  Total time (s):   {total_elapsed:.1f}")
+    logging.info(f"  Valid train:      {len(train_features)}")
+    logging.info(f"  Valid val:        {len(val_features)}")
+    logging.info(f"  Skipped (None):   {skipped_train + skipped_val + skipped_test}")
+    logging.info(f"  Errors:           {errors_train + errors_val + errors_test}")
+    logging.info(f"  Feature shape:    {train_features_tensor.shape}")
+    logging.info(f"  Cache file:       {path_to_save}")
+    logging.info(f"{'=' * 60}")
