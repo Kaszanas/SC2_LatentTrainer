@@ -29,7 +29,7 @@ import logging
 import os
 
 import click
-import lightning as L
+import lightning as pl
 import mlflow
 import optuna
 import torch
@@ -139,7 +139,10 @@ def _load_cached_data(
     batch_size: int,
 ) -> tuple[DataLoader, DataLoader, int]:
     """Load data from a pre-processed ``.pt`` cache file."""
-    train_dl, val_dl, input_dim = load_cached_dataloaders(cache_path, batch_size)
+    train_dl, val_dl, input_dim = load_cached_dataloaders(
+        cache_path=cache_path,
+        batch_size=batch_size,
+    )
     return train_dl, val_dl, input_dim
 
 
@@ -178,7 +181,7 @@ def train_guided(
         input_dim=input_dim,
     )
 
-    checkpoint_cb = L.pytorch.callbacks.ModelCheckpoint(
+    checkpoint_cb = pl.pytorch.callbacks.ModelCheckpoint(
         dirpath=os.path.join(output_dir, "checkpoints"),
         filename="model-{epoch:02d}-{val_vae_loss:.4f}",
         monitor="val_vae_loss",
@@ -186,12 +189,12 @@ def train_guided(
         save_last=True,
         save_top_k=3,
     )
-    early_stop = L.pytorch.callbacks.EarlyStopping(
+    early_stop = pl.pytorch.callbacks.EarlyStopping(
         monitor="val_vae_loss",
         patience=5,
         mode="min",
     )
-    tb_logger = L.pytorch.loggers.TensorBoardLogger(
+    tb_logger = pl.pytorch.loggers.TensorBoardLogger(
         save_dir=output_dir,
         name="tensorboard_logs",
     )
@@ -220,7 +223,11 @@ def train_guided(
         check_val_every_n_epoch=test_interval,
         log_every_n_steps=10,
     )
-    trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    trainer.fit(
+        model=model,
+        train_dataloaders=train_loader,
+        val_dataloaders=val_loader,
+    )
 
     # Save final model in PyTorch format
     final_model_path = os.path.join(output_dir, "final_model.pth")
@@ -267,7 +274,7 @@ def run_optuna_search(
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    tb_logger = L.pytorch.loggers.TensorBoardLogger(
+    tb_logger = pl.pytorch.loggers.TensorBoardLogger(
         save_dir=output_dir,
         name="tensorboard_logs",
     )
@@ -297,7 +304,7 @@ def run_optuna_search(
                 trial,
                 monitor="val_vae_loss",
             )
-            trial_tb = L.pytorch.loggers.TensorBoardLogger(
+            trial_tb = pl.pytorch.loggers.TensorBoardLogger(
                 save_dir=os.path.join(output_dir, "tensorboard_logs", "optuna_trials"),
                 name=f"trial_{trial.number}",
             )
@@ -319,7 +326,9 @@ def run_optuna_search(
                 log_every_n_steps=10,
             )
             trainer.fit(
-                model, train_dataloaders=train_loader, val_dataloaders=val_loader
+                model=model,
+                train_dataloaders=train_loader,
+                val_dataloaders=val_loader,
             )
             return trainer.callback_metrics["val_vae_loss"].item()
 
@@ -496,7 +505,6 @@ def main(
     """Train the supervised Guided VAE with optional Optuna HPO."""
 
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
-    torch.manual_seed(1024)
 
     # Load data
     if cache_path and os.path.exists(cache_path):

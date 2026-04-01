@@ -7,13 +7,13 @@ to support architecture search.
 
 from typing import Any
 
-import lightning as L
+import lightning as pl
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 
-class LitClassifier(L.LightningModule):
+class LatentClassifier(pl.LightningModule):
     """Binary classifier on frozen latent representations.
 
     Parameters

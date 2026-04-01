@@ -13,7 +13,7 @@ Lightning module with three-optimizer manual optimization:
 
 from __future__ import annotations
 
-import lightning as L
+import lightning as pl
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -22,7 +22,7 @@ from latent_trainer.models.guided_vae import Classifier, suGuidedVAE
 from latent_trainer.models.losses import loss_supervised
 
 
-class LitGuidedVAE(L.LightningModule):
+class LitGuidedVAE(pl.LightningModule):
     """Lightning module for supervised Guided VAE training with adversarial classifier."""
 
     def __init__(

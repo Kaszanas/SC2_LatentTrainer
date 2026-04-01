@@ -28,3 +28,5 @@ LOGGING_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 # Path.resolve() gives an absolute path so Ray workers (which change cwd)
 # still write to the same database.
 DEFAULT_MLFLOW_URI = f"sqlite:///{Path('mlflow.db').resolve().as_posix()}"
+
+SEED = 42

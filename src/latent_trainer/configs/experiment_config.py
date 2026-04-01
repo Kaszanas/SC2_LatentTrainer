@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from latent_trainer.config import DEFAULT_MLFLOW_URI
+from latent_trainer.settings import DEFAULT_MLFLOW_URI
 
 
 @dataclass
@@ -91,7 +91,6 @@ class ExperimentConfig:
     latent_dim: int = 32
     vae_lr: float = 1e-3
     cls_lr: float = 1e-3
-    seed: int = 42
 
     # ── Ray resource allocation ─────────────────────────────────────
     gpus_per_trial: float = 1.0
