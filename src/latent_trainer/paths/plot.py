@@ -1,15 +1,20 @@
 # ---------------------------------------------------------------------------
 # Visualisation
 # ---------------------------------------------------------------------------
+from __future__ import annotations
 
+from pathlib import Path
 
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
 
 
-def _plot_main(win_c, loss_c, path_c, alphas, win_probs, pca, save_path):
+def _plot_main(
+    win_c, loss_c, path_c, alphas, win_probs, pca, save_path: Path | str
+) -> None:
     """Two-panel figure: latent space + P(win) curve."""
+    save_path = Path(save_path)
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
     fig.suptitle(
         "Latent Space — Counterfactual Improvement Path",
@@ -100,7 +105,10 @@ def _plot_main(win_c, loss_c, path_c, alphas, win_probs, pca, save_path):
     print(f"  Saved -> {save_path}")
 
 
-def _plot_feature_delta(delta, feature_names, top_k, save_path):
+def _plot_feature_delta(
+    delta, feature_names, top_k, save_path: Path | str
+) -> None:
+    save_path = Path(save_path)
     order = np.argsort(np.abs(delta))[::-1][:top_k]
     names = [feature_names[i] for i in order]
     values = delta[order]
@@ -125,8 +133,9 @@ def _plot_feature_delta(delta, feature_names, top_k, save_path):
 
 
 def _plot_feature_evolution(
-    path_features, delta, feature_names, n_top, alphas, save_path
-):
+    path_features, delta, feature_names, n_top, alphas, save_path: Path | str
+) -> None:
+    save_path = Path(save_path)
     order = np.argsort(np.abs(delta))[::-1][:n_top]
     fig, ax = plt.subplots(figsize=(10, 5.5))
     for idx in order:
@@ -144,7 +153,10 @@ def _plot_feature_evolution(
     print(f"  Saved -> {save_path}")
 
 
-def _plot_distance(path_z, win_centroid, alphas, save_path):
+def _plot_distance(
+    path_z, win_centroid, alphas, save_path: Path | str
+) -> None:
+    save_path = Path(save_path)
     dists = torch.norm(path_z - win_centroid.unsqueeze(0), dim=1).numpy()
     fig, ax = plt.subplots(figsize=(8, 4.5))
     ax.plot(alphas, dists, color="#8e44ad", linewidth=2.5, marker="o", markersize=5)
@@ -162,10 +174,11 @@ def _plot_distance(path_z, win_centroid, alphas, save_path):
 def _plot_three_signal_feedback(
     feedback: dict,
     feature_names,
-    save_path: str,
+    save_path: Path | str,
     top_k: int = 10,
-):
+) -> None:
     """Three-panel horizontal bar chart — one per signal."""
+    save_path = Path(save_path)
     signals = [
         ("_raw_delta", "raw_label", "Full path delta"),
         ("_mv_delta", "mv_label", "Minimum-viable delta"),

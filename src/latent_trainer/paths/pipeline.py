@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
 # Shared pipeline
 # ---------------------------------------------------------------------------
-import os
 from functools import partial
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -27,17 +27,18 @@ from latent_trainer.paths.plot import (
 
 def _run_pipeline(
     *,
-    model: str,
-    cache: str,
+    model: Path,
+    cache: Path,
     chosen: int,
     player_idx: int,
     n_steps: int,
     top_k: int,
     strategy: str,
     path_z_np: "np.ndarray",
+    output_dir: Path = Path("output"),
 ) -> None:
     """Common post-path logic: P(win) curve, feedback, plots."""
-    os.makedirs("output", exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
         model, cache
@@ -91,7 +92,7 @@ def _run_pipeline(
     _plot_three_signal_feedback(
         feedback,
         FEATURE_NAMES,
-        f"output/feedback_{strategy}_three_signal.png",
+        output_dir / f"feedback_{strategy}_three_signal.png",
         top_k=top_k,
     )
     path_features = _decode_features(vae, path_z_tensor, norm_mean, norm_std)
@@ -101,13 +102,13 @@ def _run_pipeline(
         FEATURE_NAMES,
         min(5, top_k),
         alphas,
-        f"output/feedback_{strategy}_feature_evolution.png",
+        output_dir / f"feedback_{strategy}_feature_evolution.png",
     )
     _plot_feature_delta(
         feedback["_raw_delta"],
         FEATURE_NAMES,
         top_k,
-        f"output/feedback_{strategy}_feature_delta.png",
+        output_dir / f"feedback_{strategy}_feature_delta.png",
     )
 
     Z_win_np = win_latents.detach().cpu().numpy()
@@ -128,12 +129,12 @@ def _run_pipeline(
         alphas=alphas,
         win_probs=win_probs,
         pca=pca,
-        save_path=f"output/feedback_{strategy}_latent_path.png",
+        save_path=output_dir / f"feedback_{strategy}_latent_path.png",
     )
     _plot_distance(
         path_z=path_z_tensor,
         win_centroid=win_centroid,
         alphas=alphas,
-        save_path=f"output/feedback_{strategy}_distance_curve.png",
+        save_path=output_dir / f"feedback_{strategy}_distance_curve.png",
     )
-    print(f"\nDone! All plots saved to output/ (strategy={strategy})")
+    print(f"\nDone! All plots saved to {output_dir} (strategy={strategy})")

@@ -26,7 +26,7 @@ Usage examples::
 from __future__ import annotations
 
 import logging
-import os
+from pathlib import Path
 
 import click
 import lightning as pl
@@ -119,8 +119,8 @@ def _load_live_data(
         (mmr_vs_result, 2),
     )
     sc2_dm = SC2EGSetDataModule(
-        unpack_dir="./data/unpack",
-        download_dir="./data/download",
+        unpack_dir=str(Path("data/unpack")),
+        download_dir=str(Path("data/download")),
         download=True,
         replaypacks=SC2EGSET_DATASET_REPLAYPACKS,
         transform=selected_transform,
@@ -154,7 +154,7 @@ def train_guided(
     train_loader: DataLoader,
     val_loader: DataLoader,
     input_dim: int,
-    output_dir: str = "output",
+    output_dir: Path = Path("output"),
     epochs: int = 10,
     nz: int = 16,
     w_cls: float = 200.0,
@@ -169,7 +169,8 @@ def train_guided(
     parent_run_id: str | None = None,
 ) -> LitGuidedVAE:
     """Run a single guided-VAE training run and return the trained model."""
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     model = LitGuidedVAE(
         n_vae_dis=nz,
@@ -182,7 +183,7 @@ def train_guided(
     )
 
     checkpoint_cb = pl.pytorch.callbacks.ModelCheckpoint(
-        dirpath=os.path.join(output_dir, "checkpoints"),
+        dirpath=str(output_dir / "checkpoints"),
         filename="model-{epoch:02d}-{val_vae_loss:.4f}",
         monitor="val_vae_loss",
         mode="min",
@@ -195,7 +196,7 @@ def train_guided(
         mode="min",
     )
     tb_logger = pl.pytorch.loggers.TensorBoardLogger(
-        save_dir=output_dir,
+        save_dir=str(output_dir),
         name="tensorboard_logs",
     )
     # Use child nesting if we have a parent run
@@ -230,7 +231,7 @@ def train_guided(
     )
 
     # Save final model in PyTorch format
-    final_model_path = os.path.join(output_dir, "final_model.pth")
+    final_model_path = output_dir / "final_model.pth"
     torch.save(
         {
             "epoch": epochs,
@@ -242,12 +243,12 @@ def train_guided(
     )
 
     # Log checkpoints as MLFlow artifacts
-    ckpt_dir = os.path.join(output_dir, "checkpoints")
+    ckpt_dir = output_dir / "checkpoints"
     if mlf_logger.run_id:
         mlflow.set_tracking_uri(mlflow_uri)
         with mlflow.start_run(run_id=mlf_logger.run_id):
-            log_checkpoint_artifacts(ckpt_dir, mlflow_uri)
-            mlflow.log_artifact(final_model_path)
+            log_checkpoint_artifacts(str(ckpt_dir), mlflow_uri)
+            mlflow.log_artifact(str(final_model_path))
 
     logger.info("Training complete.  Model saved to %s", final_model_path)
 
@@ -259,7 +260,7 @@ def run_optuna_search(
     train_loader: DataLoader,
     val_loader: DataLoader,
     input_dim: int,
-    output_dir: str = "output",
+    output_dir: Path = Path("output"),
     n_trials: int = 20,
     optuna_epochs: int = 3,
     optuna_db: str = "sqlite:///optuna_study.db",
@@ -272,10 +273,11 @@ def run_optuna_search(
 
     All trials are nested under a parent MLFlow run for grouped UI display.
     """
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     tb_logger = pl.pytorch.loggers.TensorBoardLogger(
-        save_dir=output_dir,
+        save_dir=str(output_dir),
         name="tensorboard_logs",
     )
 
@@ -305,7 +307,7 @@ def run_optuna_search(
                 monitor="val_vae_loss",
             )
             trial_tb = pl.pytorch.loggers.TensorBoardLogger(
-                save_dir=os.path.join(output_dir, "tensorboard_logs", "optuna_trials"),
+                save_dir=str(output_dir / "tensorboard_logs" / "optuna_trials"),
                 name=f"trial_{trial.number}",
             )
             trial_mlf = create_child_mlflow_logger(
@@ -507,7 +509,7 @@ def main(
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
 
     # Load data
-    if cache_path and os.path.exists(cache_path):
+    if cache_path and Path(cache_path).exists():
         logger.info("Using cached dataset: %s", cache_path)
         train_loader, val_loader, input_dim = _load_cached_data(cache_path, batch_size)
     else:

@@ -15,7 +15,7 @@ Usage (from ``train.py`` entrypoint)::
 from __future__ import annotations
 
 import logging
-import os
+from pathlib import Path
 from typing import Any
 
 import lightning as pl
@@ -115,9 +115,9 @@ def run_two_stage_pipeline(
             config.mlflow_tracking_uri,
         )
 
-    ckpt_dir_vae = f"output/checkpoints_vae/{run_prefix}"
+    ckpt_dir_vae = Path("output") / "checkpoints_vae" / run_prefix
     ckpt_vae = ModelCheckpoint(
-        dirpath=ckpt_dir_vae,
+        dirpath=str(ckpt_dir_vae),
         filename="vae-{epoch:02d}-{val_loss:.2f}",
         save_top_k=1,
         monitor="val_loss",
@@ -138,7 +138,7 @@ def run_two_stage_pipeline(
     # Log VAE checkpoints as artifacts
     if mlf_vae.run_id:
         with mlflow.start_run(run_id=mlf_vae.run_id):
-            log_checkpoint_artifacts(ckpt_dir_vae, config.mlflow_tracking_uri)
+            log_checkpoint_artifacts(str(ckpt_dir_vae), config.mlflow_tracking_uri)
 
     best_vae = LitVAE.load_from_checkpoint(ckpt_vae.best_model_path)
     best_vae.eval()
@@ -184,9 +184,9 @@ def run_two_stage_pipeline(
             config.mlflow_tracking_uri,
         )
 
-    ckpt_dir_cls = f"output/checkpoints_cls/{run_prefix}"
+    ckpt_dir_cls = Path("output") / "checkpoints_cls" / run_prefix
     ckpt_cls = ModelCheckpoint(
-        dirpath=ckpt_dir_cls,
+        dirpath=str(ckpt_dir_cls),
         filename="cls-{epoch:02d}-{val_acc:.2f}",
         save_top_k=1,
         monitor="val_acc",
@@ -207,13 +207,14 @@ def run_two_stage_pipeline(
     # Log classifier checkpoints as artifacts
     if mlf_cls.run_id:
         with mlflow.start_run(run_id=mlf_cls.run_id):
-            log_checkpoint_artifacts(ckpt_dir_cls, config.mlflow_tracking_uri)
+            log_checkpoint_artifacts(str(ckpt_dir_cls), config.mlflow_tracking_uri)
 
     # Save a combined pointer file for the path-charting CLI.
     # Only written on single runs (trial_num is None) to avoid overwriting
     # the file on every HPO trial.
     if trial_num is None and norm_mean is not None and norm_std is not None:
-        os.makedirs("output", exist_ok=True)
+        output_dir = Path("output")
+        output_dir.mkdir(parents=True, exist_ok=True)
         torch.save(
             {
                 "vae_ckpt_path": ckpt_vae.best_model_path,
@@ -222,7 +223,7 @@ def run_two_stage_pipeline(
                 "input_dim": input_dim,
                 "normalization": {"mean": norm_mean, "std": norm_std},
             },
-            "output/two_stage_model.pth",
+            str(output_dir / "two_stage_model.pth"),
         )
 
     return ckpt_cls.best_model_score.item()
@@ -303,7 +304,7 @@ def run_hpo(config: ExperimentConfig) -> optuna.Study:
             ray.init(
                 ignore_reinit_error=True,
                 log_to_driver=False,
-                _temp_dir=os.path.join(os.getcwd(), "ray_tmp"),
+                _temp_dir=str(Path.cwd() / "ray_tmp"),
             )
 
         tuner = tune.Tuner(
@@ -319,7 +320,7 @@ def run_hpo(config: ExperimentConfig) -> optuna.Study:
             ),
             run_config=ray.train.RunConfig(
                 name=config.study_name,
-                storage_path="output/ray_results",
+                storage_path=str(Path("output") / "ray_results"),
             ),
         )
 

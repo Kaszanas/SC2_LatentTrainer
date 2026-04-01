@@ -13,7 +13,6 @@ Usage:
 """
 
 import logging
-import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
@@ -291,14 +290,14 @@ def preprocess_dataset(
     )
 
     # Save
-    os.makedirs(os.path.dirname(output_directory), exist_ok=True)
+    output_directory.parent.mkdir(parents=True, exist_ok=True)
     path_to_save = output_directory / f"cached_dataset_{transform_name}.pt"
     torch.save(
         asdict(file_spec),
         path_to_save,
     )
 
-    file_size_mb = os.path.getsize(path_to_save) / (1024 * 1024)
+    file_size_mb = path_to_save.stat().st_size / (1024 * 1024)
 
     logging.info(f"\n{'=' * 60}")
     logging.info("Pre-processing complete!")

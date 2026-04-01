@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
 # CLI group + sub-commands
 # ---------------------------------------------------------------------------
-import os
 from functools import partial
+from pathlib import Path
 
 import click
 import torch
@@ -21,8 +21,18 @@ from latent_trainer.paths.strategies.gradient_ascent import path_gradient_ascent
 from latent_trainer.paths.strategies.optimal_transport import path_optimal_transport
 
 _GLOBAL_OPTIONS = [
-    click.option("--model", default="output/two_stage_model.pth", show_default=True),
-    click.option("--cache", default="data/cached_dataset_rich.pt", show_default=True),
+    click.option(
+        "--model",
+        type=click.Path(path_type=Path),
+        default=Path("output/two_stage_model.pth"),
+        show_default=True,
+    ),
+    click.option(
+        "--cache",
+        type=click.Path(path_type=Path),
+        default=Path("data/cached_dataset_rich.pt"),
+        show_default=True,
+    ),
     click.option(
         "--sample-idx",
         type=int,
@@ -54,7 +64,15 @@ def _global_options(fn):
 
 
 @click.group()
-def cli() -> None:
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    default=Path("output"),
+    show_default=True,
+    help="Directory for all output files.",
+)
+@click.pass_context
+def cli(ctx, output_dir: Path) -> None:
     """Latent-space improvement path finder for SC2 players.
 
     Choose a sub-command for the path-finding strategy:
@@ -69,6 +87,8 @@ def cli() -> None:
     must be placed BEFORE the sub-command name.
     The losing player is detected automatically from the game label.
     """
+    ctx.ensure_object(dict)
+    ctx.obj["output_dir"] = output_dir
 
 
 @cli.command("linear")
@@ -87,9 +107,11 @@ def cli() -> None:
     show_default=True,
     help="k for nearest-neighbour target.",
 )
-def cmd_linear(model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
+@click.pass_context
+def cmd_linear(ctx, model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
     """Linear interpolation toward a winning target."""
-    os.makedirs("output", exist_ok=True)
+    output_dir: Path = ctx.obj["output_dir"]
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading model and data...")
     vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
@@ -143,6 +165,7 @@ def cmd_linear(model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
         top_k=top_k,
         strategy="linear",
         path_z_np=path_z_np,
+        output_dir=output_dir,
     )
 
 
@@ -182,7 +205,9 @@ def cmd_linear(model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
     show_default=True,
     help="P(win) threshold for early stopping.",
 )
+@click.pass_context
 def cmd_gradient_ascent(
+    ctx,
     model,
     cache,
     sample_idx,
@@ -196,7 +221,8 @@ def cmd_gradient_ascent(
     convergence_threshold,
 ):
     """Gradient ascent on P(win) regularised by a KDE density prior."""
-    os.makedirs("output", exist_ok=True)
+    output_dir: Path = ctx.obj["output_dir"]
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading model and data...")
     vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
@@ -264,6 +290,7 @@ def cmd_gradient_ascent(
         top_k=top_k,
         strategy="gradient_ascent",
         path_z_np=path_z_np,
+        output_dir=output_dir,
     )
 
 
@@ -276,9 +303,11 @@ def cmd_gradient_ascent(
     show_default=True,
     help="Entropic regularisation (0 = exact EMD).",
 )
-def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
+@click.pass_context
+def cmd_optimal_transport(ctx, model, cache, sample_idx, n_steps, top_k, ot_reg):
     """Wasserstein-barycentric path into the winning distribution."""
-    os.makedirs("output", exist_ok=True)
+    output_dir: Path = ctx.obj["output_dir"]
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading model and data...")
     vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
@@ -323,6 +352,7 @@ def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
         top_k=top_k,
         strategy="optimal_transport",
         path_z_np=path_z_np,
+        output_dir=output_dir,
     )
 
 
@@ -335,9 +365,11 @@ def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
     show_default=True,
     help="Number of neighbours for the kNN graph.",
 )
-def cmd_geodesic(model, cache, sample_idx, n_steps, top_k, geodesic_k):
+@click.pass_context
+def cmd_geodesic(ctx, model, cache, sample_idx, n_steps, top_k, geodesic_k):
     """Shortest path on a kNN latent-space graph."""
-    os.makedirs("output", exist_ok=True)
+    output_dir: Path = ctx.obj["output_dir"]
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading model and data...")
     vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
@@ -385,4 +417,5 @@ def cmd_geodesic(model, cache, sample_idx, n_steps, top_k, geodesic_k):
         top_k=top_k,
         strategy="geodesic",
         path_z_np=path_z_np,
+        output_dir=output_dir,
     )
