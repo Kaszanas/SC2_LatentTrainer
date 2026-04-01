@@ -29,7 +29,7 @@ import logging
 import os
 
 import click
-import lightning as L
+import lightning as pl
 import mlflow
 import optuna
 import torch
@@ -181,7 +181,7 @@ def train_guided(
         input_dim=input_dim,
     )
 
-    checkpoint_cb = L.pytorch.callbacks.ModelCheckpoint(
+    checkpoint_cb = pl.pytorch.callbacks.ModelCheckpoint(
         dirpath=os.path.join(output_dir, "checkpoints"),
         filename="model-{epoch:02d}-{val_vae_loss:.4f}",
         monitor="val_vae_loss",
@@ -189,12 +189,12 @@ def train_guided(
         save_last=True,
         save_top_k=3,
     )
-    early_stop = L.pytorch.callbacks.EarlyStopping(
+    early_stop = pl.pytorch.callbacks.EarlyStopping(
         monitor="val_vae_loss",
         patience=5,
         mode="min",
     )
-    tb_logger = L.pytorch.loggers.TensorBoardLogger(
+    tb_logger = pl.pytorch.loggers.TensorBoardLogger(
         save_dir=output_dir,
         name="tensorboard_logs",
     )
@@ -274,7 +274,7 @@ def run_optuna_search(
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    tb_logger = L.pytorch.loggers.TensorBoardLogger(
+    tb_logger = pl.pytorch.loggers.TensorBoardLogger(
         save_dir=output_dir,
         name="tensorboard_logs",
     )
@@ -304,7 +304,7 @@ def run_optuna_search(
                 trial,
                 monitor="val_vae_loss",
             )
-            trial_tb = L.pytorch.loggers.TensorBoardLogger(
+            trial_tb = pl.pytorch.loggers.TensorBoardLogger(
                 save_dir=os.path.join(output_dir, "tensorboard_logs", "optuna_trials"),
                 name=f"trial_{trial.number}",
             )

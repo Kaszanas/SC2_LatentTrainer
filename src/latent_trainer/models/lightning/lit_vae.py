@@ -6,14 +6,14 @@ architecture search over the number of layers and their widths.
 
 from typing import Any
 
-import lightning as L
+import lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
 
-class LitVAE(L.LightningModule):
+class LitVAE(pl.LightningModule):
     """Variational Auto-Encoder with configurable hidden-layer architecture.
 
     Parameters
