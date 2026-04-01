@@ -41,7 +41,7 @@ from __future__ import annotations
 import logging
 
 import click
-import lightning as L
+import lightning as pl
 import torch
 
 from latent_trainer.config import DEFAULT_MLFLOW_URI, LOGGING_FORMAT
@@ -215,7 +215,7 @@ def main(
         study_name=study_name,
     )
 
-    L.seed_everything(config.seed)
+    pl.seed_everything(config.seed)
     setup_mlflow(config)
 
     if pipeline == "two_stage":
