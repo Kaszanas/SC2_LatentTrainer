@@ -1,10 +1,12 @@
 # ---------------------------------------------------------------------------
 # Model loading and encoding
 # ---------------------------------------------------------------------------
+import numpy as np
 import torch
 
 from latent_trainer.data_utils import load_and_normalize
 from latent_trainer.models.lightning.lit_classifier import LatentClassifier
+from latent_trainer.models.lightning.lit_vae import LitVAE
 
 # ---------------------------------------------------------------------------
 # Feature names -- 203 per player
@@ -68,6 +70,12 @@ def _build_feature_names() -> list[str]:
 FEATURE_NAMES: list[str] = _build_feature_names()
 
 
+def _nearest_winning_target(sample_z, win_latents, k=5) -> torch.Tensor:
+    dists = torch.cdist(sample_z.unsqueeze(0), win_latents.unsqueeze(0)).squeeze(0)
+    _, indices = dists.topk(k, largest=False)
+    return win_latents[indices.squeeze()].mean(dim=0)
+
+
 @torch.no_grad()
 def _encode_player(vae, data: torch.Tensor) -> torch.Tensor:
     mus = []
@@ -84,23 +92,19 @@ def _decode_features(vae, z, norm_mean, norm_std) -> np.ndarray:
 
 
 def _load_model_and_data(model_path: str, cache_path: str) -> tuple:
-    checkpoint = torch.load(model_path, weights_only=False)
-    latent_dim = checkpoint["latent_dim"]
-    input_dim = checkpoint["input_dim"]
+    info = torch.load(model_path, weights_only=False)
 
-    vae = SimpleVAE(input_dim=input_dim, latent_dim=latent_dim)
-    vae.load_state_dict(checkpoint["vae_state"])
+    vae = LitVAE.load_from_checkpoint(info["vae_ckpt_path"])
     vae.eval()
 
-    classifier = LatentClassifier(latent_dim=latent_dim)
-    classifier.load_state_dict(checkpoint["classifier_state"])
+    classifier = LatentClassifier.load_from_checkpoint(info["cls_ckpt_path"])
     classifier.eval()
 
-    norm_mean = checkpoint["normalization"]["mean"]
-    norm_std = checkpoint["normalization"]["std"]
-    _, _, val_X, val_y, _, _ = load_and_normalize(cache_path)
+    norm_mean = info["normalization"]["mean"]
+    norm_std = info["normalization"]["std"]
+    data = load_and_normalize(cache_path)
 
-    return vae, classifier, val_X, val_y, norm_mean, norm_std, latent_dim
+    return vae, classifier, data.val_X, data.val_y, norm_mean, norm_std, vae.latent_dim
 
 
 # ---------------------------------------------------------------------------

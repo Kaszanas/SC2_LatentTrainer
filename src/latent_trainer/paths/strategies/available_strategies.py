@@ -39,14 +39,6 @@ from __future__ import annotations
 
 import enum
 
-import torch
-
-
-def _nearest_winning_target(sample_z, win_latents, k=5) -> torch.Tensor:
-    dists = torch.cdist(sample_z.unsqueeze(0), win_latents.unsqueeze(0)).squeeze(0)
-    _, indices = dists.topk(k, largest=False)
-    return win_latents[indices.squeeze()].mean(dim=0)
-
 
 class PathStrategy(enum.Enum):
     """Available path-finding strategies."""
