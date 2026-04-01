@@ -9,10 +9,10 @@ from sklearn.decomposition import PCA
 
 from latent_trainer.paths.data import (
     FEATURE_NAMES,
-    _decode_features,
-    _encode_player,
-    _load_model_and_data,
-    _opponent_aware_score,
+    decode_features,
+    encode_player,
+    load_model_and_data,
+    opponent_aware_score,
 )
 from latent_trainer.paths.feedback import compute_feedback, print_feedback_report
 from latent_trainer.paths.plot import (
@@ -38,14 +38,14 @@ def run_path_charting_pipeline(
 ) -> None:
     """Common post-path logic: P(win) curve, feedback, plots."""
 
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = _load_model_and_data(
+    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model, cache
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
 
-    latents_p0 = _encode_player(vae, val_X[:, 0, :])
-    latents_p1 = _encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae, val_X[:, 0, :])
+    latents_p1 = encode_player(vae, val_X[:, 1, :])
 
     # Win cloud: for each game, the winner's latent.
     # label=1 → p0 won; label=0 → p1 won.
@@ -59,7 +59,7 @@ def run_path_charting_pipeline(
     opponent_z = latents_p0[chosen] if opponent_idx == 0 else latents_p1[chosen]
 
     score_fn = partial(
-        _opponent_aware_score,
+        opponent_aware_score,
         classifier=classifier,
         opponent_z=opponent_z,
         player_idx=player_idx,
@@ -93,7 +93,7 @@ def run_path_charting_pipeline(
         save_path=OUTPUT_DIR / f"feedback_{strategy}_three_signal.png",
         top_k=top_k,
     )
-    path_features = _decode_features(vae, path_z_tensor, norm_mean, norm_std)
+    path_features = decode_features(vae, path_z_tensor, norm_mean, norm_std)
     plot_feature_evolution(
         path_features=path_features,
         delta=feedback["_raw_delta"],
