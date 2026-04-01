@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING
 import mlflow
 from lightning.pytorch.loggers import MLFlowLogger
 
-from latent_trainer.config import DEFAULT_MLFLOW_URI
+from latent_trainer.settings import DEFAULT_MLFLOW_URI
 
 if TYPE_CHECKING:
     import optuna
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def setup_mlflow(config: ExperimentConfig) -> str:
+def setup_mlflow(mlflow_tracking_uri: str, experiment_name: str) -> str:
     """Configure the global MLFlow tracking URI and create the experiment.
 
     Returns
@@ -63,13 +63,10 @@ def setup_mlflow(config: ExperimentConfig) -> str:
     str
         The experiment ID (useful for downstream queries).
     """
-    mlflow.set_tracking_uri(config.mlflow_tracking_uri)
-    experiment = mlflow.set_experiment(config.experiment_name)
+    mlflow.set_tracking_uri(mlflow_tracking_uri)
+    experiment = mlflow.set_experiment(experiment_name)
     logger.info(
-        "MLFlow: tracking_uri=%s  experiment=%s (id=%s)",
-        config.mlflow_tracking_uri,
-        config.experiment_name,
-        experiment.experiment_id,
+        f"MLFlow: tracking_uri={mlflow_tracking_uri}  experiment={experiment_name} (id={experiment.experiment_id})"
     )
     return experiment.experiment_id
 
@@ -111,8 +108,6 @@ def create_mlflow_logger(
 # and lets you log aggregate results (best params, best metric) on
 # the parent run itself.
 # ------------------------------------------------------------------
-
-
 def start_parent_run(
     experiment_name: str,
     run_name: str,
@@ -205,10 +200,8 @@ def create_child_mlflow_logger(
 # uploaded to MLFlow as artifacts.  This makes them browsable and
 # downloadable from the MLFlow UI without needing filesystem access.
 # ------------------------------------------------------------------
-
-
 def log_checkpoint_artifacts(
-    checkpoint_dir: str,
+    checkpoint_dir: Path,
     tracking_uri: str = DEFAULT_MLFLOW_URI,
 ) -> None:
     """Log a checkpoint directory as MLFlow artifacts on the active run.
@@ -223,13 +216,12 @@ def log_checkpoint_artifacts(
         MLFlow tracking URI (set before logging).
     """
     mlflow.set_tracking_uri(tracking_uri)
-    ckpt_path = Path(checkpoint_dir)
-    if ckpt_path.exists():
-        mlflow.log_artifacts(str(ckpt_path), artifact_path="checkpoints")
-        logger.info("MLFlow: logged checkpoints from %s", checkpoint_dir)
+    if checkpoint_dir.exists():
+        mlflow.log_artifacts(str(checkpoint_dir), artifact_path="checkpoints")
+        logger.info(f"MLFlow: logged checkpoints from {checkpoint_dir}")
     else:
         logger.warning(
-            "MLFlow: checkpoint dir %s does not exist, skipping", checkpoint_dir
+            f"MLFlow: checkpoint dir {checkpoint_dir} does not exist, skipping"
         )
 
 
@@ -250,7 +242,5 @@ def log_best_trial(study: optuna.Study, config: ExperimentConfig) -> None:
         mlflow.set_tag("source", "optuna_best_trial")
 
     logger.info(
-        "MLFlow: logged best trial #%d (value=%.4f) as summary run",
-        best.number,
-        best.value,
+        f"MLFlow: logged best trial #{best.number} (value={best.value:.4f}) as summary run"
     )
