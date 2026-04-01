@@ -24,6 +24,14 @@ from pathlib import Path
 
 LOGGING_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
+OUTPUT_DIR = Path("./output").resolve()
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+DATA_DIR = Path("./data").resolve()
+
+PLOTS_DIR = OUTPUT_DIR / "plots"
+PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+
 # SQLite-backed MLFlow tracking — more robust than flat-file mlruns/
 # Path.resolve() gives an absolute path so Ray workers (which change cwd)
 # still write to the same database.
