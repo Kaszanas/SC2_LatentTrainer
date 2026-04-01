@@ -1,10 +1,14 @@
 # ---------------------------------------------------------------------------
 # Model loading and encoding
 # ---------------------------------------------------------------------------
+from __future__ import annotations
+
+from pathlib import Path
+
 import numpy as np
 import torch
 
-from latent_trainer.data_utils import load_and_normalize
+from latent_trainer.features.data_utils import load_and_normalize
 from latent_trainer.models.lightning.lit_classifier import LatentClassifier
 from latent_trainer.models.lightning.lit_vae import LitVAE
 
@@ -91,7 +95,9 @@ def _decode_features(vae, z, norm_mean, norm_std) -> np.ndarray:
     return (recon_norm * norm_std + norm_mean).cpu().numpy()
 
 
-def _load_model_and_data(model_path: str, cache_path: str) -> tuple:
+def _load_model_and_data(model_path: Path | str, cache_path: Path | str) -> tuple:
+    model_path = Path(model_path)
+    cache_path = Path(cache_path)
     info = torch.load(model_path, weights_only=False)
 
     vae = LitVAE.load_from_checkpoint(info["vae_ckpt_path"])
