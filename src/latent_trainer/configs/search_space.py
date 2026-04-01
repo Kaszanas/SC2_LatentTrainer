@@ -10,10 +10,6 @@ from __future__ import annotations
 
 import optuna
 
-# ------------------------------------------------------------------
-# Architecture helper
-# ------------------------------------------------------------------
-
 
 def build_hidden_layers(
     trial: optuna.Trial,
@@ -53,21 +49,16 @@ def build_hidden_layers(
     return dims
 
 
-# ------------------------------------------------------------------
-# Two-stage pipeline search space
-# ------------------------------------------------------------------
-
-
 def get_two_stage_search_space(trial: optuna.Trial) -> dict:
     """Return a params dict for the two-stage (VAE → Classifier) pipeline.
 
     Searched parameters:
-    - ``latent_dim``: 8–64
+    - ``latent_dim``: 8-64
     - ``vae_lr`` / ``cls_lr``: log-uniform 1e-4 … 1e-2
     - ``batch_size``: categorical {64, 128, 256, 512}
-    - ``dropout``: uniform 0.1–0.5
-    - ``vae_hidden_dims``: 1–3 layers, 64–512 wide
-    - ``cls_hidden_dims``: 1–3 layers, 32–256 wide
+    - ``dropout``: uniform 0.1-0.5
+    - ``vae_hidden_dims``: 1-3 layers, 64-512 wide
+    - ``cls_hidden_dims``: 1-3 layers, 32-256 wide
     """
     return {
         "latent_dim": trial.suggest_int("latent_dim", 8, 64),
@@ -96,25 +87,56 @@ def get_two_stage_search_space(trial: optuna.Trial) -> dict:
     }
 
 
-# ------------------------------------------------------------------
-# Guided-VAE pipeline search space
-# ------------------------------------------------------------------
-
-
 def get_guided_vae_search_space(trial: optuna.Trial) -> dict:
     """Return a params dict for the supervised Guided-VAE pipeline.
 
     Searched parameters:
-    - ``nz`` (latent dim): 8–64
-    - ``cls`` (classification weight): log-uniform 1–100 000
-    - ``lr`` / ``lr_c``: log-uniform 1e-5 … 1e-3
-    - ``weight_decay`` / ``weight_decay_c``: log-uniform 1e-6 … 1e-3
+    - ``nz`` (latent dim): 8-64
+    - ``batch_size``: categorical {64, 128, 256, 512}
+    - ``cls`` (classification weight): log-uniform 1-100 000
+    - ``lr`` / ``lr_c``: log-uniform 1e-5 ... 1e-3
+    - ``weight_decay`` / ``weight_decay_c``: log-uniform 1e-6 ... 1e-3
     """
     return {
         "nz": trial.suggest_int("nz", 8, 64),
+        "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256, 512]),
         "cls": trial.suggest_float("cls", 1.0, 100_000.0, log=True),
         "lr": trial.suggest_float("lr", 1e-5, 1e-3, log=True),
         "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
         "lr_c": trial.suggest_float("lr_c", 1e-5, 1e-3, log=True),
         "weight_decay_c": trial.suggest_float("weight_decay_c", 1e-6, 1e-3, log=True),
+        "encoder_hidden_dims": build_hidden_layers(
+            trial,
+            "enc",
+            min_layers=2,
+            max_layers=16,
+            min_width=32,
+            max_width=512,
+            width_step=32,
+        ),
     }
+
+
+def reconstruct_hidden_dims(params: dict, prefix: str) -> list[int]:
+    """Reconstruct a hidden-dims list from flat Optuna trial params.
+
+    :func:`build_hidden_layers` stores architecture as individual Optuna
+    parameters (``{prefix}_n_layers``, ``{prefix}_width_0``, …).  After a
+    sweep this helper reads those flat params back into the ``list[int]``
+    expected by ``LitVAE`` and ``LatentClassifier``.
+
+    Parameters
+    ----------
+    params:
+        Flat ``trial.params`` dict from a completed Optuna trial.
+    prefix:
+        The same prefix used when the search space was built (e.g. ``"vae"``
+        or ``"cls"``).
+
+    Returns
+    -------
+    list[int]
+        Ordered hidden-layer widths, e.g. ``[256, 128]``.
+    """
+    n_layers: int = params[f"{prefix}_n_layers"]
+    return [params[f"{prefix}_width_{i}"] for i in range(n_layers)]
