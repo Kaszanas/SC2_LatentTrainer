@@ -55,13 +55,13 @@ def train_two_stage_pipeline(
         TensorDataset(train_flat),
         batch_size=batch_size,
         shuffle=True,
-        num_workers=0,
+        num_workers=7,
     )
     vae_val_dl = DataLoader(
         TensorDataset(val_flat),
         batch_size=batch_size,
         shuffle=False,
-        num_workers=0,
+        num_workers=7,
     )
 
     vae = LitVAE(
@@ -140,13 +140,13 @@ def train_two_stage_pipeline(
         dataset=TensorDataset(train_z, train_y.unsqueeze(1)),
         batch_size=batch_size,
         shuffle=True,
-        num_workers=0,
+        num_workers=7,
     )
     cls_val_dl = DataLoader(
         dataset=TensorDataset(val_z, val_y.unsqueeze(1)),
         batch_size=batch_size,
         shuffle=False,
-        num_workers=0,
+        num_workers=7,
     )
 
     cls_model = LatentClassifier(
