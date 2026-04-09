@@ -1137,7 +1137,7 @@ def visualise_feedback(all_feedback: dict, out_prefix="latent_paths"):
             y=0.97,
         )
 
-        out = f"plots/{out_prefix}_feedback_{method_name}.png"
+        out = str(PROJECT_ROOT / "plots" / f"{out_prefix}_feedback_{method_name}.png")
         fig.savefig(out, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close(fig)
         print(f"  Saved → {out}")
@@ -1379,7 +1379,7 @@ def visualise_all(
         y=1.01,
     )
     fig1.tight_layout()
-    out1 = f"plots/{out_prefix}_projections.png"
+    out1 = str(PROJECT_ROOT / "plots" / f"{out_prefix}_projections.png")
     fig1.savefig(out1, dpi=150, bbox_inches="tight", facecolor=fig1.get_facecolor())
     plt.close(fig1)
     print(f"  Saved → {out1}")
@@ -1492,7 +1492,7 @@ def visualise_all(
         fontweight="bold",
         y=0.97,
     )
-    out2 = f"plots/{out_prefix}_analytics.png"
+    out2 = str(PROJECT_ROOT / "plots" / f"{out_prefix}_analytics.png")
     fig2.savefig(out2, dpi=150, bbox_inches="tight", facecolor=fig2.get_facecolor())
     plt.close(fig2)
     print(f"  Saved → {out2}")
