@@ -56,25 +56,19 @@ HAS_UMAP = True
 # CONFIGURATION
 # ══════════════════════════════════════════════════════════════
 
-INPUT_DIM = 203
+INPUT_DIM = 80
+N_SAMPLES = 10000
 SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-# Real dataset settings
-DATA_CACHE_PATH = PROJECT_ROOT / "data" / "cached_dataset_rich.pt"
-# "diff"   -> player0 - player1  (203 dims for rich transform)
-# "concat" -> [player0, player1]  (406 dims for rich transform)
-PLAYER_REPRESENTATION = "diff"
 
 # Provide real names here — must be length INPUT_DIM
 FEATURE_NAMES = [f"feature_{i:02d}" for i in range(INPUT_DIM)]
 
-FINAL_EPOCHS = 5
+FINAL_EPOCHS = 500
 
-TUNE_NUM_SAMPLES = 2
-TUNE_MAX_EPOCHS = 5
-TUNE_GRACE_PERIOD = 2
+TUNE_NUM_SAMPLES = 30
+TUNE_MAX_EPOCHS = 80
+TUNE_GRACE_PERIOD = 10
 
 OT_REG = 0.0
 GRAD_STEPS = 500
@@ -86,10 +80,10 @@ GEODESIC_K = 12
 N_WAYPOINTS = 10
 
 MLFLOW_EXPERIMENT = "latent_vae_search"
-TUNE_LOG_DIR = str(PROJECT_ROOT / "ray_results")  # trial logs
-RAY_TEMP_DIR = str(PROJECT_ROOT / "ray_tmp")  # session/actor temp files
-os.makedirs(PROJECT_ROOT / "plots", exist_ok=True)
-os.makedirs(PROJECT_ROOT / "mlruns", exist_ok=True)
+TUNE_LOG_DIR = os.path.join(os.getcwd(), "ray_results")  # trial logs
+RAY_TEMP_DIR = os.path.join(os.getcwd(), "ray_tmp")  # session/actor temp files
+os.makedirs("plots", exist_ok=True)
+os.makedirs("mlruns", exist_ok=True)
 os.makedirs(TUNE_LOG_DIR, exist_ok=True)
 os.makedirs(RAY_TEMP_DIR, exist_ok=True)
 
@@ -105,74 +99,26 @@ def set_seed(seed=SEED):
     pl.seed_everything(seed, workers=True)
 
 
-def _build_feature_names(input_dim: int, mode: str) -> list[str]:
-    if mode == "diff":
-        prefix = "p0_minus_p1"
-    elif mode == "concat":
-        prefix = "p0_p1_concat"
-    else:
-        prefix = "feature"
-    return [f"{prefix}_{i:03d}" for i in range(input_dim)]
-
-
-def _project_player_features(X: np.ndarray, mode: str) -> np.ndarray:
-    """
-    Convert [N, 2, F] player features into [N, D] model inputs.
-    """
-    if X.ndim != 3 or X.shape[1] != 2:
-        raise ValueError(
-            f"Expected cached features with shape [N, 2, F], got {tuple(X.shape)}"
-        )
-
-    if mode == "diff":
-        return (X[:, 0, :] - X[:, 1, :]).astype(np.float32)
-    if mode == "concat":
-        return X.reshape(X.shape[0], -1).astype(np.float32)
-
-    raise ValueError(
-        f"Unsupported PLAYER_REPRESENTATION='{mode}'. Use 'diff' or 'concat'."
+def make_data(n=N_SAMPLES, input_dim=INPUT_DIM):
+    offset = np.random.choice([-1, 1], size=input_dim) * np.linspace(
+        1.5, 2.5, input_dim
     )
+    X_loss = np.random.randn(n // 2, input_dim) + (-offset)
+    X_win = np.random.randn(n // 2, input_dim) + (offset)
+    X = np.vstack([X_loss, X_win]).astype(np.float32)
+    y = np.array([0] * (n // 2) + [1] * (n // 2), dtype=np.float32)
+    idx = np.random.permutation(len(X))
+    return X[idx], y[idx]
 
 
-def prepare_data(cache_path=DATA_CACHE_PATH, representation=PLAYER_REPRESENTATION):
+def prepare_data(input_dim=INPUT_DIM):
     set_seed()
-
-    if not cache_path.exists():
-        raise FileNotFoundError(
-            f"Cached dataset not found at '{cache_path}'. "
-            "Generate it first (src/latent_trainer/features/main.py)."
-        )
-
-    cached = torch.load(cache_path, weights_only=True)
-    X_train_raw = cached["train_features"].float().cpu().numpy()
-    y_train = cached["train_labels"].float().cpu().numpy()
-    X_val_raw = cached["val_features"].float().cpu().numpy()
-    y_val = cached["val_labels"].float().cpu().numpy()
-    X_test_raw = cached["test_features"].float().cpu().numpy()
-    y_test = cached["test_labels"].float().cpu().numpy()
-
-    X_train_flat = _project_player_features(X_train_raw, representation)
-    X_val_flat = _project_player_features(X_val_raw, representation)
-    X_test_flat = _project_player_features(X_test_raw, representation)
-
-    scaler = StandardScaler().fit(X_train_flat)
-    X_train = scaler.transform(X_train_flat).astype(np.float32)
-    X_val = scaler.transform(X_val_flat).astype(np.float32)
-    X_test = scaler.transform(X_test_flat).astype(np.float32)
-
-    # Keep labels in float32 for BCE loss.
-    y_train = y_train.astype(np.float32)
-    y_val = y_val.astype(np.float32)
-    y_test = y_test.astype(np.float32)
-
-    global FEATURE_NAMES
-    FEATURE_NAMES = _build_feature_names(X_train.shape[1], representation)
-
-    print(
-        f"Loaded cached dataset from '{cache_path}' | rep='{representation}' | "
-        f"train={X_train.shape}, val={X_val.shape}, test={X_test.shape}"
-    )
-
+    X_all, y_all = make_data(input_dim=input_dim)
+    scaler = StandardScaler().fit(X_all)
+    X_scaled = scaler.transform(X_all).astype(np.float32)
+    X_train, y_train = X_scaled[:-150], y_all[:-150]
+    X_val, y_val = X_scaled[-300:-150], y_all[-300:-150]
+    X_test, y_test = X_scaled[-150:], y_all[-150:]
     return X_train, y_train, X_val, y_val, X_test, y_test, scaler
 
 
@@ -560,9 +506,6 @@ def _train_tune(
 
 
 def run_hyperparameter_search(X_train, y_train, X_val, y_val, tracking_uri=None):
-    if tracking_uri is not None:
-        mlflow.set_tracking_uri(tracking_uri)
-
     print("=" * 60)
     print("HPARAM SEARCH  —  Ray Tune + Optuna")
     print(f"  Trials : {TUNE_NUM_SAMPLES}   Max epochs/trial : {TUNE_MAX_EPOCHS}")
@@ -665,9 +608,6 @@ def run_hyperparameter_search(X_train, y_train, X_val, y_val, tracking_uri=None)
 
 
 def train_final_model(config, X_train, y_train, X_val, y_val, tracking_uri=None):
-    if tracking_uri is not None:
-        mlflow.set_tracking_uri(tracking_uri)
-
     config = {**config, "epochs": FINAL_EPOCHS}
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
 
@@ -1137,7 +1077,7 @@ def visualise_feedback(all_feedback: dict, out_prefix="latent_paths"):
             y=0.97,
         )
 
-        out = str(PROJECT_ROOT / "plots" / f"{out_prefix}_feedback_{method_name}.png")
+        out = f"plots/{out_prefix}_feedback_{method_name}.png"
         fig.savefig(out, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close(fig)
         print(f"  Saved → {out}")
@@ -1175,23 +1115,16 @@ def fit_projections(Z_train):
 
     if HAS_UMAP:
         print("  Fitting UMAP …", flush=True)
-        try:
-            reducer = umap.UMAP(
-                n_components=2,
-                n_neighbors=15,
-                min_dist=0.1,
-                random_state=SEED,
-                verbose=False,
-            )
-            reducer.fit(Z_train)
-            projections["_umap_train"] = reducer.transform(Z_train)
-            projections["UMAP"] = reducer.transform
-        except Exception as e:
-            warnings.warn(
-                "UMAP fit failed; continuing with PCA and t-SNE only. "
-                f"Reason: {type(e).__name__}: {e}"
-            )
-            projections["UMAP"] = None
+        reducer = umap.UMAP(
+            n_components=2,
+            n_neighbors=15,
+            min_dist=0.1,
+            random_state=SEED,
+            verbose=False,
+        )
+        reducer.fit(Z_train)
+        projections["_umap_train"] = reducer.transform(Z_train)
+        projections["UMAP"] = reducer.transform
     else:
         projections["UMAP"] = None
 
@@ -1379,7 +1312,7 @@ def visualise_all(
         y=1.01,
     )
     fig1.tight_layout()
-    out1 = str(PROJECT_ROOT / "plots" / f"{out_prefix}_projections.png")
+    out1 = f"plots/{out_prefix}_projections.png"
     fig1.savefig(out1, dpi=150, bbox_inches="tight", facecolor=fig1.get_facecolor())
     plt.close(fig1)
     print(f"  Saved → {out1}")
@@ -1492,7 +1425,7 @@ def visualise_all(
         fontweight="bold",
         y=0.97,
     )
-    out2 = str(PROJECT_ROOT / "plots" / f"{out_prefix}_analytics.png")
+    out2 = f"plots/{out_prefix}_analytics.png"
     fig2.savefig(out2, dpi=150, bbox_inches="tight", facecolor=fig2.get_facecolor())
     plt.close(fig2)
     print(f"  Saved → {out2}")
@@ -1505,26 +1438,14 @@ def visualise_all(
 
 
 def run_pipeline():
-    X_train, y_train, X_val, y_val, X_test, y_test, scaler = prepare_data()
-    input_dim = X_train.shape[1]
-
-    # Keep Ray search-space input_dim aligned with the selected dataset representation.
-    SEARCH_SPACE["input_dim"] = input_dim
-
     print(f"\n{'═' * 60}")
-    print(f"  Latent OT Pipeline  ·  input={input_dim}d  ·  device={DEVICE}")
+    print(f"  Latent OT Pipeline  ·  input={INPUT_DIM}d  ·  device={DEVICE}")
     print(f"{'═' * 60}\n")
 
+    X_train, y_train, X_val, y_val, X_test, y_test, scaler = prepare_data()
     # 1. Define SQLite DB path (for metrics/params)
-    db_path = PROJECT_ROOT / "mlflow.db"
+    db_path = Path(os.getcwd()) / "mlflow.db"
     tracking_uri = f"sqlite:///{db_path.as_posix()}"
-
-    # Keep fluent MLflow API and Lightning MLFlowLogger on the same backend.
-    mlflow.set_tracking_uri(tracking_uri)
-
-    # Defensive cleanup in case a previous failed run left an active context.
-    if mlflow.active_run() is not None:
-        mlflow.end_run()
 
     print(f"  Tracking URI : {tracking_uri}")
 
