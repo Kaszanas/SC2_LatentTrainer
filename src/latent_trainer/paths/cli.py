@@ -318,6 +318,12 @@ def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
         reg=ot_reg,
         n_waypoints=n_steps,
     )
+    if not torch.isfinite(torch.as_tensor(path_z_np)).all():
+        raise click.ClickException(
+            "Optimal transport produced non-finite values (NaN/Inf). "
+            "Try '--ot-reg 0.0' for exact EMD or a larger regularization "
+            "such as '--ot-reg 0.05' or '--ot-reg 0.1'."
+        )
     run_path_charting_pipeline(
         model=model,
         cache=cache,
