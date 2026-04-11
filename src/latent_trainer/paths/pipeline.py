@@ -98,7 +98,7 @@ def run_path_charting_pipeline(
         path_features=path_features,
         delta=feedback["_raw_delta"],
         feature_names=FEATURE_NAMES,
-        top_k=min(5, top_k),
+        n_top=min(5, top_k),
         alphas=alphas,
         save_path=PLOTS_DIR / f"feedback_{strategy}_feature_evolution.png",
     )
