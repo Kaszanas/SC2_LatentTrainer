@@ -77,11 +77,11 @@ PLAYER_REPRESENTATION = "diff"
 # Provide real names here — must be length INPUT_DIM
 FEATURE_NAMES = [f"feature_{i:02d}" for i in range(INPUT_DIM)]
 
-FINAL_EPOCHS = 100
+FINAL_EPOCHS = 5
 
-TUNE_NUM_SAMPLES = 30
-TUNE_MAX_EPOCHS = 80
-TUNE_GRACE_PERIOD = 10
+TUNE_NUM_SAMPLES = 2
+TUNE_MAX_EPOCHS = 5
+TUNE_GRACE_PERIOD = 2
 
 OT_REG = 0.0
 GRAD_STEPS = 500
@@ -92,7 +92,7 @@ GRAD_KDE_BW = 0.5
 GEODESIC_K = 12
 N_WAYPOINTS = 10
 
-MLFLOW_EXPERIMENT = "latent_vae_search2"
+MLFLOW_EXPERIMENT = "1latent_vae_search"
 TUNE_LOG_DIR = str(PROJECT_ROOT / "ray_results")  # trial logs
 RAY_TEMP_DIR = str(PROJECT_ROOT / "ray_tmp")  # session/actor temp files
 DEFAULT_MODEL_PATH = PROJECT_ROOT / "output" / "final_model.pth"
