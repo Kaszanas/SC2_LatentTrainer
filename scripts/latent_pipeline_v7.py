@@ -53,6 +53,14 @@ from sklearn.neighbors import KernelDensity, NearestNeighbors, kneighbors_graph
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
+try:
+    from openTSNE import TSNE as OpenTSNE
+
+    HAS_OPENTSNE = True
+except Exception:
+    OpenTSNE = None
+    HAS_OPENTSNE = False
+
 warnings.filterwarnings("ignore")
 HAS_UMAP = True
 
@@ -84,13 +92,14 @@ TUNE_MAX_EPOCHS = 5
 TUNE_GRACE_PERIOD = 2
 
 OT_REG = 0.0
-GRAD_STEPS = 500
+GRAD_STEPS = 1000
 GRAD_LR = 0.02
-GRAD_MOMENTUM = 0.9
+GRAD_MOMENTUM = 1.0
 GRAD_DENSITY_WEIGHT = 0.3
 GRAD_KDE_BW = 0.5
 GEODESIC_K = 12
 N_WAYPOINTS = 10
+TSNE_MAX_SAMPLES = 5000
 
 MLFLOW_EXPERIMENT = "1latent_vae_search"
 TUNE_LOG_DIR = str(PROJECT_ROOT / "ray_results")  # trial logs
@@ -748,6 +757,32 @@ def embed_training_data(model, X_train, y_train):
     return Z_train, Z_train[y_train == 1], Z_train[y_train == 0]
 
 
+def report_latent_health(Z_train: np.ndarray, label: str = "train") -> None:
+    """Print compact latent-space diagnostics and warn on collapse."""
+    if Z_train.size == 0:
+        warnings.warn("Latent health check skipped: empty latent array.")
+        return
+
+    dim_std = np.std(Z_train, axis=0)
+    overall_std = float(np.std(Z_train))
+    active_dims = int((dim_std > 1e-8).sum())
+    total_dims = int(dim_std.shape[0])
+
+    print("=" * 60)
+    print(f"Latent health check ({label})")
+    print("=" * 60)
+    print(
+        f"  overall std : {overall_std:.6e} | active dims : {active_dims}/{total_dims} "
+        f"| dim-std min/med/max : {dim_std.min():.3e}/{np.median(dim_std):.3e}/{dim_std.max():.3e}"
+    )
+
+    if overall_std < 1e-3 or active_dims < max(2, int(0.05 * total_dims)):
+        warnings.warn(
+            "Latent space appears collapsed (very low variance). "
+            "Counterfactual paths and feature deltas may be near-constant."
+        )
+
+
 def pick_subject(model, X_test, y_test):
     print("=" * 60)
     print("STEP  —  Embedding new (unseen) point")
@@ -910,7 +945,7 @@ def _load_model_config(config_path, checkpoint_obj, input_dim: int) -> dict:
         hp = checkpoint_obj.get("hyper_parameters", None)
         if isinstance(hp, dict):
             cfg = hp.get("config", hp)
-            if isinstance(cfg, dict):
+            if isinstance(cfg, dict) and "latent_dim" in cfg:
                 cfg = dict(cfg)
                 cfg["input_dim"] = int(input_dim)
                 return cfg
@@ -947,6 +982,38 @@ class LegacyGuidedModelAdapter(nn.Module):
         p = self.p_win(z)
         p = torch.clamp(p, 1e-6, 1.0 - 1e-6)
         return torch.log(p / (1.0 - p))
+
+
+def _extract_legacy_bundle_from_lit_guided_checkpoint(ckpt: dict) -> dict | None:
+    """
+    Convert LitGuidedVAE Lightning checkpoint payload into legacy bundle keys.
+    """
+    if not isinstance(ckpt, dict) or "state_dict" not in ckpt:
+        return None
+
+    hp = ckpt.get("hyper_parameters", None)
+    if not isinstance(hp, dict) or "n_vae_dis" not in hp:
+        return None
+
+    state_dict = ckpt.get("state_dict", None)
+    if not isinstance(state_dict, dict):
+        return None
+
+    model_sd = {}
+    cls_sd = {}
+    for k, v in state_dict.items():
+        if k.startswith("model."):
+            model_sd[k[len("model.") :]] = v
+        elif k.startswith("classifier."):
+            cls_sd[k[len("classifier.") :]] = v
+
+    if not model_sd or not cls_sd:
+        return None
+
+    return {
+        "model_state_dict": model_sd,
+        "classifier_state_dict": cls_sd,
+    }
 
 
 def _build_legacy_adapter_from_bundle(
@@ -1024,6 +1091,10 @@ def load_saved_model(model_path, input_dim: int, config_path=None):
         and "classifier_state_dict" in ckpt
     ):
         return _build_legacy_adapter_from_bundle(ckpt, input_dim=input_dim)
+
+    lit_guided_bundle = _extract_legacy_bundle_from_lit_guided_checkpoint(ckpt)
+    if lit_guided_bundle is not None:
+        return _build_legacy_adapter_from_bundle(lit_guided_bundle, input_dim=input_dim)
 
     config = _load_model_config(config_path, ckpt, input_dim=input_dim)
     model = VAEClassifierLightning(config)
@@ -1314,21 +1385,45 @@ def fit_projections(Z_train):
     projections["_pca_obj"] = pca
 
     print("  Fitting t-SNE …", flush=True)
-    tsne_full = TSNE(
-        n_components=2,
-        perplexity=min(30, len(Z_train) // 4),
-        random_state=SEED,
-        max_iter=600,
-        init="pca",
-        learning_rate="auto",
-    ).fit_transform(Z_train)
-    projections["_tsne_train"] = tsne_full
+    if len(Z_train) > TSNE_MAX_SAMPLES:
+        rng = np.random.default_rng(SEED)
+        tsne_ref_idx = np.sort(
+            rng.choice(len(Z_train), size=TSNE_MAX_SAMPLES, replace=False)
+        )
+    else:
+        tsne_ref_idx = np.arange(len(Z_train))
+
+    Z_tsne_ref = np.asarray(Z_train[tsne_ref_idx], dtype=np.float64)
+    perplexity = max(5, min(30, len(Z_tsne_ref) // 4))
+
+    if HAS_OPENTSNE:
+        tsne_ref = np.asarray(
+            OpenTSNE(
+                n_components=2,
+                perplexity=perplexity,
+                initialization="pca",
+                random_state=SEED,
+                n_jobs=1,
+                verbose=False,
+            ).fit(Z_tsne_ref)
+        )
+    else:
+        tsne_ref = TSNE(
+            n_components=2,
+            perplexity=perplexity,
+            random_state=SEED,
+            max_iter=600,
+            init="pca",
+            learning_rate="auto",
+        ).fit_transform(Z_tsne_ref)
+    projections["_tsne_train"] = tsne_ref
     tsne_nn = NearestNeighbors(n_neighbors=1)
-    tsne_nn.fit(Z_train)
+    tsne_nn.fit(Z_tsne_ref)
 
     def tsne_project(Z_query):
+        Z_query = np.asarray(Z_query, dtype=np.float64)
         idx = tsne_nn.kneighbors(Z_query, return_distance=False).squeeze(axis=1)
-        return tsne_full[idx]
+        return tsne_ref[idx]
 
     projections["tSNE"] = tsne_project
 
@@ -1677,6 +1772,7 @@ def run_charts_only(
     latent_dim = int(model.config["latent_dim"])
 
     Z_train, Z_win, Z_loss = embed_training_data(model, X_train, y_train)
+    report_latent_health(Z_train, label="charts_only")
     z_new, _ = pick_subject(model, X_test, y_test)
 
     print("=" * 60)
@@ -1797,6 +1893,7 @@ def run_pipeline():
     latent_dim = best_config["latent_dim"]
 
     Z_train, Z_win, Z_loss = embed_training_data(model, X_train, y_train)
+    report_latent_health(Z_train, label="pipeline")
     z_new, x_new_raw = pick_subject(model, X_test, y_test)
 
     print("=" * 60)
