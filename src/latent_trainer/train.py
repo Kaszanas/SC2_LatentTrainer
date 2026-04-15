@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
     is_flag=True,
     default=False,
     show_default=True,
-    help="--sweep runs Ray+Optuna HPO; --best (default) retrains using the best Optuna trial.",
+    help="--sweep runs Ray+Optuna hyperparameter search; Otherwise trains using the best Optuna trial.",
 )
 @click.option(
     "--n_trials",
