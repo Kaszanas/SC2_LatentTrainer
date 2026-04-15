@@ -100,11 +100,6 @@ logger = logging.getLogger(__name__)
     show_default=True,
     help="Optuna storage URL.",
 )
-@click.option(
-    "--study_name",
-    help="Optuna study name.",
-    required=True,
-)
 def main(
     pipeline: str,
     dataset_filename: str,
@@ -115,7 +110,6 @@ def main(
     gpus_per_trial: float,
     cpus_per_trial: int,
     optuna_db: str,
-    study_name: str,
 ) -> None:
     """SC2 Latent Trainer — unified training & HPO entrypoint."""
     logging.basicConfig(
@@ -138,7 +132,6 @@ def main(
         gpus_per_trial=gpus_per_trial,
         cpus_per_trial=cpus_per_trial,
         optuna_db=optuna_db,
-        study_name=study_name,
     )
 
     setup_mlflow(
