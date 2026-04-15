@@ -38,11 +38,16 @@ def train_two_stage_pipeline(
     vae_lr = params["vae_lr"]
     cls_lr = params["cls_lr"]
     batch_size = params["batch_size"]
-    dropout = params.get("dropout", 0.3)
-    vae_epochs = params.get("vae_epochs", config.vae_epochs)
-    cls_epochs = params.get("cls_epochs", config.cls_epochs)
+    dropout = params["dropout"]
+    vae_epochs = config.vae_epochs
+    cls_epochs = config.cls_epochs
     vae_hidden_dims = params.get("vae_hidden_dims", None)
     cls_hidden_dims = params.get("cls_hidden_dims", None)
+
+    if not vae_hidden_dims or not cls_hidden_dims:
+        raise ValueError(
+            "Hidden dims must be provided in params for both VAE and Classifier."
+        )
 
     run_prefix = f"trial_{trial_num}" if trial_num is not None else "run"
     is_sweep = sweep_mode
@@ -141,6 +146,7 @@ def train_two_stage_pipeline(
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
+        drop_last=config.drop_last,  # BatchNorm1d requires >1 sample per batch
     )
     cls_val_dl = DataLoader(
         dataset=TensorDataset(val_z, val_y.unsqueeze(1)),
