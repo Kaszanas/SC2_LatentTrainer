@@ -78,7 +78,7 @@ class ExperimentConfig:
     cls_epochs: int = 100
 
     # Guided VAE
-    guided_vae_epochs: int = 10
+    guided_vae_epochs: int = 30
 
     # Ray resource allocation
     # Runs 10 jobs in parallel:
