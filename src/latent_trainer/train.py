@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
     help="Training pipeline to use.",
 )
 @click.option(
-    "--dataset-filename",
+    "--dataset_filename",
     default="cached_dataset_rich.pt",
     show_default=True,
     help="Filename of the cached dataset.  See 'features/main.py' to generate it.",
@@ -64,45 +64,46 @@ logger = logging.getLogger(__name__)
     help="'sweep' runs Ray+Optuna HPO; 'best' retrains using the best Optuna trial.",
 )
 @click.option(
-    "--n-trials",
+    "--n_trials",
     type=int,
-    default=100,
+    default=20,
     show_default=True,
     help="Optuna trials for sweep mode.",
 )
 @click.option(
-    "--experiment-name",
+    "--experiment_name",
     help="MLFlow experiment name.",
 )
 @click.option(
-    "--mlflow-uri",
+    "--mlflow_uri",
     default=DEFAULT_MLFLOW_URI,
     show_default=True,
-    help="MLFlow tracking URI.  Defaults to sqlite:///mlflow.db.",
+    help="MLFlow tracking URI. Defaults to sqlite:///mlflow.db.",
 )
 @click.option(
-    "--gpus-per-trial",
+    "--gpus_per_trial",
     type=float,
     default=0.1,
     show_default=True,
     help="Fractional GPU per Ray trial.",
 )
 @click.option(
-    "--cpus-per-trial",
+    "--cpus_per_trial",
     type=int,
     default=2,
     show_default=True,
     help="CPUs per Ray trial.",
 )
 @click.option(
-    "--optuna-db",
+    "--optuna_db",
     default="sqlite:///optuna_study.db",
     show_default=True,
     help="Optuna storage URL.",
 )
 @click.option(
-    "--study-name",
+    "--study_name",
     help="Optuna study name.",
+    required=True,
 )
 def main(
     pipeline: str,

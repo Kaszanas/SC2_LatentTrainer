@@ -71,27 +71,27 @@ class ExperimentConfig:
         Optuna study name (used for persistence / resumption).
     """
 
-    # ── Pipeline selection ──────────────────────────────────────────
+    # Pipeline selection
     pipeline: str = "two_stage"
     dataset_filename: str = "cached_dataset_rich.pt"
     mode: str = "sweep"
 
-    # ── MLFlow tracking ─────────────────────────────────────────────
-    experiment_name: str = "SC2_Latent_TwoStage"
+    # MLFlow tracking
     mlflow_tracking_uri: str = DEFAULT_MLFLOW_URI
+    experiment_name: str = "SC2_Latent_TwoStage"
 
-    # ── Sweep configuration ─────────────────────────────────────────
+    # Sweep configuration
     n_trials: int = 20
 
-    # ── Training defaults (overridden per-trial during sweeps) ──────
+    # Training defaults (overridden per-trial during sweeps)
     vae_epochs: int = 200
     cls_epochs: int = 100
     guided_vae_epochs: int = 10
 
-    # ── Ray resource allocation ─────────────────────────────────────
+    # Ray resource allocation
     gpus_per_trial: float = 1.0
     cpus_per_trial: int = 2
 
-    # ── Optuna persistence ──────────────────────────────────────────
+    # Optuna persistence
     optuna_db: str = "sqlite:///optuna_study.db"
     study_name: str = "latent_trainer_hpo"

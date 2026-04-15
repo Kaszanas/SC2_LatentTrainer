@@ -26,7 +26,7 @@ from latent_trainer.features.data_utils import (
 )
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
 from latent_trainer.models.train_guided import train_guided
-from latent_trainer.settings import OUTPUT_DIR, SEED
+from latent_trainer.settings import DATA_DIR, OUTPUT_DIR, SEED
 from latent_trainer.tracking.mlflow_utils import (
     create_child_mlflow_logger,
     start_parent_run,
@@ -50,7 +50,7 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
     optuna.Study
         Completed study for further analysis / logging.
     """
-    data = load_and_normalize(config.dataset_filename)
+    data = load_and_normalize(DATA_DIR / config.dataset_filename)
     input_dim = data.train_X.shape[-1]
 
     with start_parent_run(
@@ -132,7 +132,10 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
     Uses all training epochs (``config.guided_vae_epochs``) and writes
     checkpoints + MLFlow artifacts via :func:`train_guided`.
     """
-    study = optuna.load_study(study_name=config.study_name, storage=config.optuna_db)
+    study = optuna.load_study(
+        study_name=config.study_name,
+        storage=config.optuna_db,
+    )
     best = study.best_trial
     flat_params = best.params
     logger.info(
