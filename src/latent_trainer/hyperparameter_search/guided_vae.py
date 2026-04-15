@@ -139,7 +139,10 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
 
     params = {
         **flat_params,
-        "encoder_hidden_dims": reconstruct_hidden_dims(flat_params, "enc"),
+        "encoder_hidden_dims": reconstruct_hidden_dims(
+            params=flat_params,
+            prefix="enc",
+        ),
     }
 
     batch_size: int = params["batch_size"]
