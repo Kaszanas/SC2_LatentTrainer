@@ -57,11 +57,11 @@ logger = logging.getLogger(__name__)
     help="Filename of the cached dataset.  See 'features/main.py' to generate it.",
 )
 @click.option(
-    "--mode",
-    type=click.Choice(["sweep", "best"]),
-    default="sweep",
+    "--sweep",
+    is_flag=True,
+    default=False,
     show_default=True,
-    help="'sweep' runs Ray+Optuna HPO; 'best' retrains using the best Optuna trial.",
+    help="--sweep runs Ray+Optuna HPO; --best (default) retrains using the best Optuna trial.",
 )
 @click.option(
     "--n_trials",
@@ -73,6 +73,7 @@ logger = logging.getLogger(__name__)
 @click.option(
     "--experiment_name",
     help="MLFlow experiment name.",
+    required=True,
 )
 @click.option(
     "--mlflow_uri",
@@ -103,7 +104,7 @@ logger = logging.getLogger(__name__)
 def main(
     pipeline: str,
     dataset_filename: str,
-    mode: str,
+    sweep: bool,
     n_trials: int,
     experiment_name: str,
     mlflow_uri: str,
@@ -125,7 +126,7 @@ def main(
     config = ExperimentConfig(
         pipeline=pipeline,
         dataset_filename=dataset_filename,
-        mode=mode,
+        sweep=sweep,
         experiment_name=experiment_name,
         mlflow_tracking_uri=mlflow_uri,
         n_trials=n_trials,
@@ -139,17 +140,18 @@ def main(
         experiment_name=config.experiment_name,
     )
 
-    if pipeline == "two_stage":
-        _train_two_stage(config=config)
-    elif pipeline == "guided_vae":
-        _train_guided_vae(config=config)
-    else:
-        raise click.BadParameter(f"Unknown pipeline: {pipeline}")
+    match pipeline:
+        case "two_stage":
+            _train_two_stage(config=config)
+        case "guided_vae":
+            _train_guided_vae(config=config)
+        case _:
+            raise click.BadParameter(f"Unknown pipeline: {pipeline}")
 
 
 def _train_two_stage(config: ExperimentConfig) -> None:
     """Dispatch between sweep and best for the two-stage pipeline."""
-    if config.mode == "sweep":
+    if config.sweep:
         logger.info(f"Starting Ray Tune + Optuna sweep ({config.n_trials} trials)...")
         study = run_two_stage_hyperparameter_search(config=config)
         log_best_trial(study=study, config=config)
@@ -163,7 +165,7 @@ def _train_two_stage(config: ExperimentConfig) -> None:
 
 def _train_guided_vae(config: ExperimentConfig) -> None:
     """Dispatch between sweep and best for the Guided-VAE pipeline."""
-    if config.mode == "sweep":
+    if config.sweep:
         logger.info(f"Starting Guided-VAE Optuna sweep ({config.n_trials} trials)...")
         study = run_guided_vae_hyperparameter_search(config=config)
         log_best_trial(study=study, config=config)
