@@ -87,18 +87,27 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
                 input_dim=input_dim,
                 encoder_hidden_dims=params["encoder_hidden_dims"],
             )
-            es = EarlyStopping(monitor="val_vae_loss", patience=3, mode="min")
+            early_stopping = EarlyStopping(
+                monitor="val_vae_loss",
+                patience=7,
+                mode="min",
+            )
+
             trainer = pl.Trainer(
                 max_epochs=config.guided_vae_epochs,
                 accelerator="auto",
                 devices=1,
                 logger=mlf_trial,
-                callbacks=[es],
+                callbacks=[early_stopping],
                 enable_progress_bar=True,
                 enable_checkpointing=False,
                 log_every_n_steps=10,
             )
-            trainer.fit(model, train_loader, val_loader)
+            trainer.fit(
+                model=model,
+                train_dataloaders=train_loader,
+                val_dataloaders=val_loader,
+            )
             return trainer.callback_metrics["val_vae_loss"].item()
 
         study = optuna.create_study(
@@ -114,9 +123,7 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
         mlflow.log_params({f"best_{k}": v for k, v in study.best_trial.params.items()})
 
     logger.info(
-        "Guided-VAE HPO complete.  Best trial #%d  val_vae_loss=%.4f",
-        study.best_trial.number,
-        study.best_trial.value,
+        f"Guided-VAE HPO complete.  Best trial {study.best_trial.number}  val_vae_loss={study.best_trial.value:.4f}",
     )
     return study
 
