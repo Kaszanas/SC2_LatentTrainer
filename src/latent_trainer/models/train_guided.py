@@ -4,10 +4,14 @@
 import logging
 from pathlib import Path
 
-import lightning as pl
 import mlflow
 import torch
 from lightning import Trainer
+from lightning.pytorch.callbacks import (
+    EarlyStopping,
+    ModelCheckpoint,
+    TensorBoardLogger,
+)
 from torch.utils.data import DataLoader
 
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
@@ -57,7 +61,7 @@ def train_guided(
     checkpoints_path = output_dir / "checkpoints"
     filename_pattern = "model-{epoch:02d}-{val_vae_loss:.4f}"
 
-    checkpoint_cb = pl.pytorch.callbacks.ModelCheckpoint(
+    checkpoint_cb = ModelCheckpoint(
         dirpath=checkpoints_path,
         filename=filename_pattern,
         monitor="val_vae_loss",
@@ -65,12 +69,12 @@ def train_guided(
         save_last=True,
         save_top_k=3,
     )
-    early_stop = pl.pytorch.callbacks.EarlyStopping(
+    early_stop = EarlyStopping(
         monitor="val_vae_loss",
         patience=5,
         mode="min",
     )
-    tb_logger = pl.pytorch.loggers.TensorBoardLogger(
+    tb_logger = TensorBoardLogger(
         save_dir=output_dir,
         name="tensorboard_logs",
     )
@@ -125,6 +129,6 @@ def train_guided(
             log_checkpoint_artifacts(checkpoint_dir=ckpt_dir, tracking_uri=mlflow_uri)
             mlflow.log_artifact(local_path=final_model_path)
 
-    logger.info("Training complete.  Model saved to %s", final_model_path)
+    logger.info(f"Training complete.  Model saved to {str(final_model_path)}")
 
     return model
