@@ -87,10 +87,12 @@ def run_two_stage_hyperparameter_search(config: ExperimentConfig) -> optuna.Stud
             trial_run = mlflow.start_run(run_name=f"trial_{trial_tag}")
             trial_run_id = trial_run.info.run_id
             mlflow.set_tag("mlflow.parentRunId", parent_run_id)
-            mlflow.log_params({
-                k: str(v) if isinstance(v, list) else v
-                for k, v in ray_config.items()
-            })
+            mlflow.log_params(
+                {
+                    k: str(v) if isinstance(v, list) else v
+                    for k, v in ray_config.items()
+                },
+            )
             mlflow.end_run()
 
             acc = train_two_stage_pipeline(
@@ -118,7 +120,7 @@ def run_two_stage_hyperparameter_search(config: ExperimentConfig) -> optuna.Stud
             metric="val_acc",
             mode="max",
             storage=optuna_storage,
-            study_name=config.study_name,
+            study_name=config.experiment_name,
         )
 
         if not ray.is_initialized():
@@ -144,7 +146,7 @@ def run_two_stage_hyperparameter_search(config: ExperimentConfig) -> optuna.Stud
                 trial_dirname_creator=lambda trial: f"trial_{trial.trial_id}",
             ),
             run_config=tune.RunConfig(
-                name=config.study_name,
+                name=config.experiment_name,
                 storage_path=str(OUTPUT_DIR / "ray_results"),
             ),
         )
@@ -152,8 +154,8 @@ def run_two_stage_hyperparameter_search(config: ExperimentConfig) -> optuna.Stud
         results = tuner.fit()
 
         best = results.get_best_result(metric="val_acc", mode="max")
-        logger.info("Best trial config: %s", best.config)
-        logger.info("Best val_acc: %.4f", best.metrics["val_acc"])
+        logger.info(f"Best trial config: {best.config}")
+        logger.info(f"Best val_acc: {best.metrics['val_acc']:.4f}")
 
         mlflow.log_metric("best_val_acc", best.metrics["val_acc"])
         mlflow.log_params({f"best_{k}": v for k, v in best.config.items()})
@@ -173,7 +175,10 @@ def run_two_stage_best(config: ExperimentConfig) -> float:
     float
         Best validation accuracy achieved in this run.
     """
-    study = optuna.load_study(study_name=config.study_name, storage=config.optuna_db)
+    study = optuna.load_study(
+        study_name=config.experiment_name,
+        storage=config.optuna_db,
+    )
     flat_params = study.best_trial.params
     logger.info("Loaded best trial #%d: %s", study.best_trial.number, flat_params)
 

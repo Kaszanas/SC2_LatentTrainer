@@ -34,8 +34,6 @@ from latent_trainer.tracking.mlflow_utils import (
 
 logger = logging.getLogger(__name__)
 
-_GUIDED_VAE_TRIAL_EPOCHS = 5
-
 
 def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Study:
     """Run an Optuna HPO sweep for the Guided-VAE pipeline.
@@ -91,7 +89,7 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
             )
             es = EarlyStopping(monitor="val_vae_loss", patience=3, mode="min")
             trainer = pl.Trainer(
-                max_epochs=_GUIDED_VAE_TRIAL_EPOCHS,
+                max_epochs=config.guided_vae_epochs,
                 accelerator="auto",
                 devices=1,
                 logger=mlf_trial,
@@ -104,7 +102,7 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
             return trainer.callback_metrics["val_vae_loss"].item()
 
         study = optuna.create_study(
-            study_name=config.study_name,
+            study_name=config.experiment_name,
             storage=config.optuna_db,
             direction="minimize",
             pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=5),
@@ -123,9 +121,6 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
     return study
 
 
-# ------------------------------------------------------------------
-# Best-trial retrain
-# ------------------------------------------------------------------
 def run_guided_vae_best(config: ExperimentConfig) -> None:
     """Load the best Optuna trial and run a full Guided-VAE training.
 
@@ -133,13 +128,13 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
     checkpoints + MLFlow artifacts via :func:`train_guided`.
     """
     study = optuna.load_study(
-        study_name=config.study_name,
+        study_name=config.experiment_name,
         storage=config.optuna_db,
     )
     best = study.best_trial
     flat_params = best.params
     logger.info(
-        "Loaded best guided-VAE trial #%d  val_vae_loss=%.4f", best.number, best.value
+        f"Loaded best guided-VAE trial {best.number}  val_vae_loss={best.value}",
     )
 
     params = {
