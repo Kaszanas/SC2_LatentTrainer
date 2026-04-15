@@ -25,21 +25,23 @@ python ./src/latent_trainer/features/main.py --help
 
 **Unified entrypoint (two-stage or guided VAE):**
 
+As an example you can run the hyperparamter and architecture sweep using the following commands:
+
 ```bash
 # Two-stage pipeline (default):
-uv run python -m latent_trainer --pipeline two_stage --cache data/cached_dataset_rich.pt
+python src/latent_trainer/train.py --experiment_name two_stage_sweep --pipeline two_stage --dataset_filename cached_dataset_rich.pt
 
 # Guided VAE pipeline:
-uv run python -m latent_trainer --pipeline guided_vae --cache data/cached_dataset_rich.pt
+python src/latent_trainer/train.py --experiment_name guided_vae_sweep --pipeline guided_vae --dataset_filename cached_dataset_rich.pt
 
 # Hyperparameter sweep (Ray Tune + Optuna):
-uv run python -m latent_trainer --pipeline two_stage --mode sweep --n-trials 30
+python src/latent_trainer/train.py --pipeline two_stage --mode sweep --n_trials 30
 ```
 
 **Standalone guided-VAE training:**
 
 ```bash
-uv run python -m latent_trainer.models.train_model --cached data/cached_dataset_rich.pt
+uv run python -m latent_trainer.models.train_model --dataset_filename cached_dataset_rich.pt
 ```
 
 ### Step 4: Monitor training
@@ -60,7 +62,7 @@ All training runs are logged to a local SQLite database (`mlflow.db`) by
 default.  To use a remote tracking server, pass `--mlflow-uri`:
 
 ```bash
-uv run python -m latent_trainer --mlflow-uri http://localhost:5000
+uv run python src/latent_trainer/train.py --mlflow_uri http://localhost:5000
 ```
 
 ## Feedback Path Finder
