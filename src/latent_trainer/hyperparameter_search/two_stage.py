@@ -188,7 +188,7 @@ def run_two_stage_best(config: ExperimentConfig) -> float:
         "cls_hidden_dims": reconstruct_hidden_dims(flat_params, "cls"),
     }
 
-    data = load_and_normalize(config.dataset_filename)
+    data = load_and_normalize(DATA_DIR / config.dataset_filename)
     input_dim = data.train_X.shape[-1]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pl.seed_everything(SEED)
