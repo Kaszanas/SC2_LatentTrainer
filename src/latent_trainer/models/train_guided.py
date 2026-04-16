@@ -10,8 +10,8 @@ from lightning import Trainer
 from lightning.pytorch.callbacks import (
     EarlyStopping,
     ModelCheckpoint,
-    TensorBoardLogger,
 )
+from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
