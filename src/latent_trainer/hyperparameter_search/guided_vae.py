@@ -65,8 +65,8 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
             batch_size: int = params["batch_size"]
 
             train_loader, val_loader, _ = load_cached_dataloaders(
-                cache_path=config.dataset_filename,
-                batch_size=batch_size,
+                cache_path=DATA_DIR / config.dataset_filename,
+                batch_size=batch_size
             )
 
             mlf_trial = create_child_mlflow_logger(
@@ -154,8 +154,8 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
 
     batch_size: int = params["batch_size"]
     train_loader, val_loader, input_dim = load_cached_dataloaders(
-        cache_path=config.dataset_filename,
-        batch_size=batch_size,
+        cache_path=DATA_DIR / config.dataset_filename,
+        batch_size=batch_size
     )
     pl.seed_everything(SEED)
 
