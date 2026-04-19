@@ -28,7 +28,7 @@ class suGuidedVAE(nn.Module):
         self.input_dim = input_dim
 
         if encoder_hidden_dims is None:
-            encoder_hidden_dims = [64, 128, 256]
+            encoder_hidden_dims = [64, 128, 256, 512]
 
         # Encoder: input_dim → hidden_dims → n_vae_dis*2 (mu and logvar)
         enc_layers: list[nn.Module] = []
@@ -48,14 +48,16 @@ class suGuidedVAE(nn.Module):
         dec_layers.append(nn.Linear(in_dim, input_dim))
         self.decoder = nn.Sequential(*dec_layers)
 
+        # TODO: Revisit k_cls_dims=4 — keep as a fixed architectural choice, or expose via Optuna/search space and experiment_config?
+        self.k_cls_dims = 4
         self.classifier = nn.Sequential(
-            nn.Linear(1, 32),
-            nn.LayerNorm(32),
+            nn.Linear(self.k_cls_dims, 64),
+            nn.LayerNorm(64),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Linear(32, 32),
-            nn.LayerNorm(32),
+            nn.Linear(64, 64),
+            nn.LayerNorm(64),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Linear(32, 1),
+            nn.Linear(64, 1),
             nn.Sigmoid(),
         )
 
@@ -112,7 +114,7 @@ class suGuidedVAE(nn.Module):
             z = z.view(batch_size * num_players, latent_dim)
 
         # Extract first dimension for classification
-        z = z[:, 0:1]  # Shape: [batch, 1] or [batch*num_players, 1]
+        z = z[:, : self.k_cls_dims]  # Shape: [batch, 1] or [batch*num_players, 1]
         output = self.classifier(z)
 
         # Reshape back to 3D if input was 3D
@@ -128,11 +130,11 @@ class suGuidedVAE(nn.Module):
 
 
 class Classifier(nn.Module):
-    def __init__(self, n_vae_dis=16):
+    def __init__(self, n_vae_dis=16, k_cls_dims=4):
         super(Classifier, self).__init__()
 
         self.cls_sq = nn.Sequential(
-            nn.Linear(n_vae_dis - 1, 32),
+            nn.Linear(n_vae_dis - k_cls_dims, 32),
             nn.LayerNorm(32),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
             nn.Linear(32, 32),
