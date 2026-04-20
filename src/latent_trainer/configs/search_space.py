@@ -43,7 +43,10 @@ def build_hidden_layers(
     dims: list[int] = []
     for i in range(n_layers):
         w = trial.suggest_int(
-            f"{prefix}_width_{i}", min_width, max_width, step=width_step
+            name=f"{prefix}_width_{i}",
+            low=min_width,
+            high=max_width,
+            step=width_step,
         )
         dims.append(w)
     return dims
@@ -99,12 +102,34 @@ def get_guided_vae_search_space(trial: optuna.Trial) -> dict:
     """
     return {
         "nz": trial.suggest_int("nz", 8, 64),
-        "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256, 512]),
-        "cls": trial.suggest_float("cls", 1.0, 50.0, log=True),
-        "lr": trial.suggest_float("lr", 1e-5, 1e-3, log=True),
-        "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
-        "lr_c": trial.suggest_float("lr_c", 1e-5, 1e-3, log=True),
-        "weight_decay_c": trial.suggest_float("weight_decay_c", 1e-6, 1e-3, log=True),
+        "batch_size": trial.suggest_categorical(
+            name="batch_size",
+            choices=[64, 128, 256, 512],
+        ),
+        "cls": trial.suggest_float(name="cls", low=1.0, high=50.0, log=True),
+        "lr": trial.suggest_float(name="lr", low=1e-5, high=1e-3, log=True),
+        "weight_decay": trial.suggest_float(
+            name="weight_decay",
+            low=1e-6,
+            high=1e-3,
+            log=True,
+        ),
+        "lr_c": trial.suggest_float(
+            name="lr_c",
+            low=1e-5,
+            high=1e-3,
+            log=True,
+        ),
+        "weight_decay_c": trial.suggest_float(
+            name="weight_decay_c",
+            low=1e-6,
+            high=1e-3,
+            log=True,
+        ),
+        "supervised_dim": trial.suggest_categorical(
+            name="supervised_dim",
+            choices=[2, 4, 8],
+        ),
         "encoder_hidden_dims": build_hidden_layers(
             trial,
             "enc",
