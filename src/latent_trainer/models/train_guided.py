@@ -120,6 +120,10 @@ def train_guided(
         final_model_path,
     )
 
+    # Save Lighting Model
+    lit_model_path = output_dir / "final_lit_model.ckpt"
+    trainer.save_checkpoint(lit_model_path)
+
     # Log checkpoints as MLFlow artifacts
     ckpt_dir = output_dir / "checkpoints"
     if mlf_logger.run_id:
