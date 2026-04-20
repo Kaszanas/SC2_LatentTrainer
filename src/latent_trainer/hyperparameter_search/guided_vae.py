@@ -61,11 +61,12 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
 
         def objective(trial: optuna.Trial) -> float:
             pl.seed_everything(SEED)
-            params = get_guided_vae_search_space(trial)
+            params = get_guided_vae_search_space(trial=trial)
             batch_size: int = params["batch_size"]
 
             train_loader, val_loader, _ = load_cached_dataloaders(
-                cache_path=DATA_DIR / config.dataset_filename, batch_size=batch_size
+                cache_path=DATA_DIR / config.dataset_filename,
+                batch_size=batch_size,
             )
 
             mlf_trial = create_child_mlflow_logger(
@@ -77,14 +78,15 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
             )
 
             model = LitGuidedVAE(
+                input_dim=input_dim,
+                encoder_hidden_dims=params["encoder_hidden_dims"],
+                supervised_dim=params["supervised_dim"],
                 vae_latent_dim=params["nz"],
                 learning_rate=params["lr"],
                 weight_decay=params["weight_decay"],
                 learning_rate_classifier=params["lr_c"],
                 weight_decay_c=params["weight_decay_c"],
                 classification_weight=params["cls"],
-                input_dim=input_dim,
-                encoder_hidden_dims=params["encoder_hidden_dims"],
             )
             early_stopping = EarlyStopping(
                 monitor="val_vae_loss",
@@ -164,6 +166,7 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
         input_dim=input_dim,
         output_dir=OUTPUT_DIR,
         epochs=config.guided_vae_epochs,
+        supervised_dim=params["supervised_dim"],
         vae_latent_dim=params["nz"],
         classification_weight=params["cls"],
         learning_rate=params["lr"],
