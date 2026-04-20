@@ -14,8 +14,8 @@ class LitGuidedVAE(pl.LightningModule):
 
     def __init__(
         self,
-        encoder_hidden_dims: list[int],
         input_dim: int,
+        encoder_hidden_dims: list[int],
         supervised_dim: int,
         vae_latent_dim: int,
         learning_rate: float = 1e-4,
