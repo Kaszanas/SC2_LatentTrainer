@@ -33,14 +33,14 @@ def train_guided(
     vae_latent_dim: int,
     classification_weight: float,
     encoder_hidden_dims: list[int],
+    experiment_name: str,
+    run_name: str,
     learning_rate: float = 1e-4,
     weight_decay: float = 1e-5,
     learning_rate_classifier: float = 1e-4,
     weight_decay_c: float = 1e-4,
     test_interval: int = 1,
     mlflow_uri: str = DEFAULT_MLFLOW_URI,
-    experiment_name: str = "SC2_GuidedVAE",
-    run_name: str | None = None,
     parent_run_id: str | None = None,
 ) -> LitGuidedVAE:
     """Run a single guided-VAE training run and return the trained model."""
@@ -81,14 +81,14 @@ def train_guided(
     if parent_run_id:
         mlf_logger = create_child_mlflow_logger(
             experiment_name=experiment_name,
-            run_name=run_name or "guided_vae_train",
+            run_name=run_name,
             parent_run_id=parent_run_id,
             tracking_uri=mlflow_uri,
         )
     else:
         mlf_logger = create_mlflow_logger(
             experiment_name=experiment_name,
-            run_name=run_name or "guided_vae_train",
+            run_name=run_name,
             tracking_uri=mlflow_uri,
         )
 
