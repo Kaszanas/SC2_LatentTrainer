@@ -49,7 +49,7 @@ class suGuidedVAE(nn.Module):
         self.decoder = nn.Sequential(*dec_layers)
 
         self.classifier = nn.Sequential(
-            nn.Linear(1, 32),
+            nn.Linear(n_vae_dis * 2, 32),
             nn.LayerNorm(32),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
             nn.Linear(32, 32),
@@ -104,22 +104,12 @@ class suGuidedVAE(nn.Module):
         return output
 
     def cls(self, z):
-        # Handle both 2D [batch, latent_dim] and 3D [batch, num_players, latent_dim]
-        original_shape = z.shape
-        if len(z.shape) == 3:
+        # Expects 3D input [batch, num_players=2, latent_dim]
+        # Concatenates both players along feature dim for opponent-aware prediction
+        if z.dim() == 3:
             batch_size, num_players, latent_dim = z.shape
-            # Reshape to [batch*num_players, latent_dim]
-            z = z.view(batch_size * num_players, latent_dim)
-
-        # Extract first dimension for classification
-        z = z[:, 0:1]  # Shape: [batch, 1] or [batch*num_players, 1]
-        output = self.classifier(z)
-
-        # Reshape back to 3D if input was 3D
-        if len(original_shape) == 3:
-            output = output.view(batch_size, num_players, 1)
-
-        return output
+            z = z.view(batch_size, num_players * latent_dim)
+        return self.classifier(z)  # [batch, 1]
 
     def forward(self, x):
         mu, logvar = self.encode(x)
@@ -132,7 +122,7 @@ class Classifier(nn.Module):
         super(Classifier, self).__init__()
 
         self.cls_sq = nn.Sequential(
-            nn.Linear(n_vae_dis - 1, 32),
+            nn.Linear((n_vae_dis - 1) * 2, 32),
             nn.LayerNorm(32),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
             nn.Linear(32, 32),
@@ -143,17 +133,9 @@ class Classifier(nn.Module):
         )
 
     def forward(self, x):
-        # Handle both 2D [batch, latent_dim-1] and 3D [batch, num_players, latent_dim-1]
-        original_shape = x.shape
-        if len(x.shape) == 3:
+        # Expects 3D [batch, num_players=2, latent_dim-1]
+        # Concatenates both players for opponent-aware prediction
+        if x.dim() == 3:
             batch_size, num_players, latent_dim = x.shape
-            # Reshape to [batch*num_players, latent_dim]
-            x = x.view(batch_size * num_players, latent_dim)
-
-        output = self.cls_sq(x)
-
-        # Reshape back to 3D if input was 3D
-        if len(original_shape) == 3:
-            output = output.view(batch_size, num_players, 1)
-
-        return output
+            x = x.view(batch_size, num_players * latent_dim)
+        return self.cls_sq(x)  # [batch, 1]

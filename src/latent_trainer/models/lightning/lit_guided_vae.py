@@ -79,9 +79,7 @@ class LitGuidedVAE(pl.LightningModule):
 
         self.total_valid_samples = 0
 
-    # ------------------------------------------------------------------
     # Helpers
-    # ------------------------------------------------------------------
     @staticmethod
     def _prepare_labels(
         data: torch.Tensor,
@@ -96,16 +94,11 @@ class LitGuidedVAE(pl.LightningModule):
             label = label.float()
         if label.dim() == 1:
             label = label.unsqueeze(1)
-        if data.dim() == 3 and label.dim() == 2:
-            label = label.unsqueeze(1).expand(-1, data.shape[1], -1)
         if label.dtype != torch.float32:
             label = label.float()
 
         # Filter invalid labels
-        if data.dim() == 3 and label.dim() == 3:
-            valid = (label != -1).all(dim=1).all(dim=1)
-        else:
-            valid = (label != -1).squeeze()
+        valid = (label != -1).squeeze(dim=1)
 
         if valid.sum() == 0:
             return None
