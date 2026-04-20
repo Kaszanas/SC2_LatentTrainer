@@ -61,9 +61,10 @@ class ExperimentConfig:
     """
 
     # Pipeline selection
+    sweep: bool
     pipeline: str = "two_stage"
     dataset_filename: str = "cached_dataset_rich.pt"
-    sweep: bool = False
+    
 
     # MLFlow tracking
     mlflow_tracking_uri: str = DEFAULT_MLFLOW_URI

@@ -93,14 +93,14 @@ def get_guided_vae_search_space(trial: optuna.Trial) -> dict:
     Searched parameters:
     - ``nz`` (latent dim): 8-64
     - ``batch_size``: categorical {64, 128, 256, 512}
-    - ``cls`` (classification weight): log-uniform 1-100 000
+    - ``cls`` (classification weight): log-uniform 1-50
     - ``lr`` / ``lr_c``: log-uniform 1e-5 ... 1e-3
     - ``weight_decay`` / ``weight_decay_c``: log-uniform 1e-6 ... 1e-3
     """
     return {
         "nz": trial.suggest_int("nz", 8, 64),
         "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256, 512]),
-        "cls": trial.suggest_float("cls", 1.0, 100_000.0, log=True),
+        "cls": trial.suggest_float("cls", 1.0, 50.0, log=True),
         "lr": trial.suggest_float("lr", 1e-5, 1e-3, log=True),
         "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
         "lr_c": trial.suggest_float("lr_c", 1e-5, 1e-3, log=True),
@@ -108,8 +108,8 @@ def get_guided_vae_search_space(trial: optuna.Trial) -> dict:
         "encoder_hidden_dims": build_hidden_layers(
             trial,
             "enc",
-            min_layers=2,
-            max_layers=16,
+            min_layers=1,
+            max_layers=4,
             min_width=32,
             max_width=512,
             width_step=32,

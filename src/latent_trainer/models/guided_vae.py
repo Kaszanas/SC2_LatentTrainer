@@ -28,7 +28,7 @@ class suGuidedVAE(nn.Module):
         self.input_dim = input_dim
 
         if encoder_hidden_dims is None:
-            encoder_hidden_dims = [64, 128, 256]
+            encoder_hidden_dims = [64, 128, 256, 512]
 
         # Encoder: input_dim → hidden_dims → n_vae_dis*2 (mu and logvar)
         enc_layers: list[nn.Module] = []
@@ -52,10 +52,10 @@ class suGuidedVAE(nn.Module):
             nn.Linear(n_vae_dis * 2, 32),
             nn.LayerNorm(32),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Linear(32, 32),
-            nn.LayerNorm(32),
+            nn.Linear(64, 64),
+            nn.LayerNorm(64),
             nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Linear(32, 1),
+            nn.Linear(64, 1),
             nn.Sigmoid(),
         )
 
@@ -115,27 +115,3 @@ class suGuidedVAE(nn.Module):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         return self.decode(z), mu, logvar, self.cls(z)
-
-
-class Classifier(nn.Module):
-    def __init__(self, n_vae_dis=16):
-        super(Classifier, self).__init__()
-
-        self.cls_sq = nn.Sequential(
-            nn.Linear((n_vae_dis - 1) * 2, 32),
-            nn.LayerNorm(32),
-            nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Linear(32, 32),
-            nn.LayerNorm(32),
-            nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            nn.Linear(32, 1),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, x):
-        # Expects 3D [batch, num_players=2, latent_dim-1]
-        # Concatenates both players for opponent-aware prediction
-        if x.dim() == 3:
-            batch_size, num_players, latent_dim = x.shape
-            x = x.view(batch_size, num_players * latent_dim)
-        return self.cls_sq(x)  # [batch, 1]

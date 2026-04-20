@@ -32,9 +32,10 @@ class LitGuidedVAE(pl.LightningModule):
         weight_decay: float = 1e-5,
         lr_c: float = 1e-4,
         weight_decay_c: float = 1e-4,
-        w_cls: float = 50_000.0,
+        w_cls: float = 50.0,
         input_dim: int = 2,
         encoder_hidden_dims: list[int] | None = None,
+        k_cls_dims: int = 4,
     ) -> None:
         """Initialise the LitGuidedVAE module.
 
@@ -69,8 +70,9 @@ class LitGuidedVAE(pl.LightningModule):
             input_dim=input_dim,
             encoder_hidden_dims=encoder_hidden_dims,
         )
-        self.classifier = Classifier(n_vae_dis=n_vae_dis)
+        self.classifier = Classifier(n_vae_dis=n_vae_dis, k_cls_dims=k_cls_dims)
 
+        self.k_cls_dims = k_cls_dims
         self.lr = lr
         self.weight_decay = weight_decay
         self.lr_c = lr_c
@@ -94,6 +96,16 @@ class LitGuidedVAE(pl.LightningModule):
             label = label.float()
         if label.dim() == 1:
             label = label.unsqueeze(1)
+
+        # For [B, 2, F] player features, dataset labels encode player-1 outcome.
+        # Build per-player targets: [y_p1, 1 - y_p1] instead of duplicating labels.
+        if data.dim() == 3 and label.dim() == 2 and data.shape[1] == 2:
+            p1 = label
+            p2 = 1.0 - label
+            label = torch.stack((p1, p2), dim=1)
+        elif data.dim() == 3 and label.dim() == 2:
+            label = label.unsqueeze(1).expand(-1, data.shape[1], -1)
+
         if label.dtype != torch.float32:
             label = label.float()
 
@@ -105,10 +117,9 @@ class LitGuidedVAE(pl.LightningModule):
 
         return data[valid], torch.clamp(label[valid], 0, 1)
 
-    @staticmethod
-    def _slice_latent(z: torch.Tensor) -> torch.Tensor:
-        """Exclude first latent dim (used for classification)."""
-        return z[:, :, 1:] if z.dim() == 3 else z[:, 1:]
+    def _slice_latent(self, z: torch.Tensor) -> torch.Tensor:
+        """Exclude first k latent dims (used for classification)."""
+        return z[:, :, self.k_cls_dims :] if z.dim() == 3 else z[:, self.k_cls_dims :]
 
     # ------------------------------------------------------------------
     # Forward / training / validation
@@ -134,7 +145,7 @@ class LitGuidedVAE(pl.LightningModule):
         opt_vae.zero_grad()
         recon_batch, mu, logvar, re = self.model(valid_data)
         vae_loss = loss_supervised(recon_batch, valid_data, mu, logvar)[0]
-        cls_loss = F.binary_cross_entropy(re, valid_label, reduction="sum")
+        cls_loss = F.binary_cross_entropy(re, valid_label, reduction="mean")
         vae_total = vae_loss + cls_loss * self.w_cls
 
         pred = (re > 0.5).float()
@@ -153,7 +164,9 @@ class LitGuidedVAE(pl.LightningModule):
         mu, logvar = self.model.encode(valid_data)
         z = self.model.reparameterize(mu, logvar).detach()
         cls1 = self.classifier(self._slice_latent(z))
-        c_loss = F.binary_cross_entropy(cls1, valid_label, reduction="sum") * self.w_cls
+        c_loss = (
+            F.binary_cross_entropy(cls1, valid_label, reduction="mean") * self.w_cls
+        )
 
         c_acc = (
             (cls1 > 0.5).float().eq(valid_label).sum().item()
@@ -173,7 +186,7 @@ class LitGuidedVAE(pl.LightningModule):
         z = self.model.reparameterize(mu, logvar)
         cls2 = self.classifier(self._slice_latent(z))
         label_half = torch.empty_like(valid_label).fill_(0.5)
-        adv_loss = F.binary_cross_entropy(cls2, label_half, reduction="sum")
+        adv_loss = F.binary_cross_entropy(cls2, label_half, reduction="mean")
         adv_loss *= 0.0  # Disabled: adversarial step cancels classifier learning
 
         self.log("train_adv_loss", adv_loss, prog_bar=True, on_step=True, on_epoch=True)
@@ -186,6 +199,11 @@ class LitGuidedVAE(pl.LightningModule):
         self.log("epoch_valid_samples", self.total_valid_samples)
         self.total_valid_samples = 0
 
+        sch1, sch2, sch3 = self.lr_schedulers()
+        sch1.step()
+        sch2.step()
+        sch3.step()
+
     def validation_step(self, batch, batch_idx):
         if batch is None:
             return None
@@ -197,36 +215,44 @@ class LitGuidedVAE(pl.LightningModule):
 
         recon_batch, mu, logvar, re = self.model(valid_data)
         vae_loss = loss_supervised(recon_batch, valid_data, mu, logvar)[0]
-        cls_loss = F.binary_cross_entropy(re, valid_label, reduction="sum")
+        cls_loss = F.binary_cross_entropy(re, valid_label, reduction="mean")
+        total_loss = vae_loss + cls_loss * self.w_cls
 
         pred = (re > 0.5).float()
         acc = pred.eq(valid_label).sum().item() / valid_label.numel() * 100
 
+        self.log("val_loss", total_loss, prog_bar=True, sync_dist=True)
         self.log("val_vae_loss", vae_loss, prog_bar=True, sync_dist=True)
         self.log("val_cls_loss", cls_loss, prog_bar=True, sync_dist=True)
         self.log("val_acc", acc, prog_bar=True, sync_dist=True)
 
-        return vae_loss
+        return total_loss
 
     def test_step(self, batch, batch_idx):
         # Re-use validation logic for test evaluation
         return self.validation_step(batch, batch_idx)
 
     def configure_optimizers(self):
-        opt_vae = optim.Adam(
+        opt_vae = optim.AdamW(
             self.model.parameters(),
             lr=self.lr,
             weight_decay=self.weight_decay,
         )
-        opt_cls = optim.Adam(
+        opt_cls = optim.AdamW(
             self.classifier.parameters(),
             lr=self.lr_c,
             weight_decay=self.weight_decay_c,
         )
         # Adversarial optimizer (VAE params, trained adversarially)
-        opt_adv = optim.Adam(
+        opt_adv = optim.AdamW(
             self.model.parameters(),
             lr=self.lr,
             weight_decay=self.weight_decay,
         )
-        return [opt_vae, opt_cls, opt_adv], []
+
+        epochs = self.trainer.max_epochs if self.trainer.max_epochs else 100
+        sched_vae = optim.lr_scheduler.CosineAnnealingLR(opt_vae, T_max=epochs)
+        sched_cls = optim.lr_scheduler.CosineAnnealingLR(opt_cls, T_max=epochs)
+        sched_adv = optim.lr_scheduler.CosineAnnealingLR(opt_adv, T_max=epochs)
+
+        return [opt_vae, opt_cls, opt_adv], [sched_vae, sched_cls, sched_adv]

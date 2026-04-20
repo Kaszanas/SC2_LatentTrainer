@@ -30,8 +30,8 @@ def loss_supervised(
     Returns
     -------
     (total_loss, mse_loss)
-        Total loss is MSE + KLD, with both computed as sums over the batch.
+        Total loss is MSE + KLD, with both computed as means over the batch.
     """
-    MSE = F.mse_loss(recon_x, x, reduction="sum")
-    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    MSE = F.mse_loss(recon_x, x, reduction="mean")
+    KLD = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
     return MSE + KLD, MSE
