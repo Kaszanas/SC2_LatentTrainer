@@ -91,7 +91,10 @@ def decode_features(vae, z, norm_mean, norm_std) -> np.ndarray:
     return (recon_norm * norm_std + norm_mean).cpu().numpy()
 
 
-def load_model_and_data(model_path: str, cache_path: str) -> tuple:
+def load_model_and_data(
+    model_path: str,
+    cache_path: str,
+) -> tuple:
     info = torch.load(model_path, weights_only=False)
 
     vae = LitVAE.load_from_checkpoint(info["vae_ckpt_path"])
