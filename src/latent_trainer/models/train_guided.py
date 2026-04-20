@@ -1,6 +1,3 @@
-# ------------------------------------------------------------------
-# Training
-# ------------------------------------------------------------------
 import logging
 from pathlib import Path
 
@@ -32,11 +29,11 @@ def train_guided(
     input_dim: int,
     output_dir: Path | str = OUTPUT_DIR,
     epochs: int = 10,
-    nz: int = 16,
-    w_cls: float = 200.0,
-    lr: float = 1e-4,
+    vae_latent_dim: int = 16,
+    classification_weight: float = 200.0,
+    learning_rate: float = 1e-4,
     weight_decay: float = 1e-5,
-    lr_c: float = 1e-4,
+    learning_rate_classifier: float = 1e-4,
     weight_decay_c: float = 1e-4,
     encoder_hidden_dims: list[int] | None = None,
     test_interval: int = 1,
@@ -48,12 +45,12 @@ def train_guided(
     """Run a single guided-VAE training run and return the trained model."""
 
     model = LitGuidedVAE(
-        n_vae_dis=nz,
-        lr=lr,
+        vae_latent_dim=vae_latent_dim,
+        learning_rate=learning_rate,
         weight_decay=weight_decay,
-        lr_c=lr_c,
+        learning_rate_classifier=learning_rate_classifier,
         weight_decay_c=weight_decay_c,
-        w_cls=w_cls,
+        classification_weight=classification_weight,
         input_dim=input_dim,
         encoder_hidden_dims=encoder_hidden_dims,
     )
@@ -115,7 +112,7 @@ def train_guided(
         {
             "epoch": epochs,
             "model_state_dict": model.model.state_dict(),
-            "classifier_state_dict": model.classifier.state_dict(),
+            "classifier_state_dict": model.adversarial_classifier.state_dict(),
             "loss": trainer.callback_metrics.get("train_vae_loss", float("inf")).item(),
         },
         final_model_path,
