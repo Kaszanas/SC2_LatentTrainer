@@ -120,9 +120,11 @@ def train_guided(
         final_model_path,
     )
 
-    # Save Lighting Model
-    lit_model_path = output_dir / "final_lit_model.ckpt"
-    trainer.save_checkpoint(lit_model_path)
+    # Save Lighting Model with best hyperparameters (for easy loading later)
+    best_ckpt_path = checkpoint_cb.best_model_path
+    best_model = LitGuidedVAE.load_from_checkpoint(best_ckpt_path)
+    best_model_path = output_dir / "best_model.ckpt"
+    torch.save(best_model.state_dict(), best_model_path)
 
     # Log checkpoints as MLFlow artifacts
     ckpt_dir = output_dir / "checkpoints"
