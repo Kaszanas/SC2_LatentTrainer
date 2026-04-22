@@ -7,8 +7,8 @@ from lightning.pytorch.callbacks import (
     ModelCheckpoint,
 )
 from lightning.pytorch.loggers import TensorBoardLogger
-from torch.utils.data import DataLoader
 
+from latent_trainer.features.type import NormalizedDataloaders
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
 from latent_trainer.settings import CHECKPOINTS_DIR, DEFAULT_MLFLOW_URI, OUTPUT_DIR
 from latent_trainer.tracking.mlflow_utils import (
@@ -22,9 +22,7 @@ logger = logging.getLogger(__name__)
 
 def train_guided(
     *,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    input_dim: int,
+    normalized_dataloaders: NormalizedDataloaders,
     output_dir: Path | str = OUTPUT_DIR,
     supervised_dim: int,
     epochs: int,
@@ -51,8 +49,10 @@ def train_guided(
         learning_rate_classifier=learning_rate_classifier,
         weight_decay_c=weight_decay_c,
         classification_weight=classification_weight,
-        input_dim=input_dim,
+        input_dim=normalized_dataloaders.input_dim,
         encoder_hidden_dims=encoder_hidden_dims,
+        mean=normalized_dataloaders.mean,
+        std=normalized_dataloaders.std,
     )
 
     filename_pattern = "guided-vae-{epoch:02d}-{val_vae_loss:.4f}"
@@ -103,8 +103,8 @@ def train_guided(
     )
     trainer.fit(
         model=guided_vae_model,
-        train_dataloaders=train_loader,
-        val_dataloaders=val_loader,
+        train_dataloaders=normalized_dataloaders.train_loader,
+        val_dataloaders=normalized_dataloaders.val_loader,
     )
 
     # Save the best model under a custom name for easier retrieval later:
