@@ -96,7 +96,7 @@ def decode_features(vae, z, norm_mean, norm_std) -> np.ndarray:
 def load_model_and_data(
     model_path: Path,
     cached_dataset_filepath: Path,
-) -> tuple:
+) -> tuple[LitGuidedVAE, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
 
     # TODO: If there are other models than Guided VAE, this function
     # TODO: will need to take the model class as an argument instead of hardcoding:
@@ -104,11 +104,11 @@ def load_model_and_data(
     vae = LitGuidedVAE.load_from_checkpoint(checkpoint_path=model_path)
     vae.eval()
 
-    norm_mean = info["normalization"]["mean"]
-    norm_std = info["normalization"]["std"]
+    # norm_mean = info["normalization"]["mean"]
+    # norm_std = info["normalization"]["std"]
     data = load_and_normalize(cached_dataset_filepath=cached_dataset_filepath)
 
-    return vae, data.val_X, data.val_y, norm_mean, norm_std, vae.latent_dim
+    return vae, data.val_X, data.val_y, 0, 0, vae.vae_latent_dim
 
 
 # ---------------------------------------------------------------------------
