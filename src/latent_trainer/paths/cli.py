@@ -24,8 +24,6 @@ from latent_trainer.settings import DATA_DIR
 PATH_CHARTING_CLI_COMMON_OPTIONS = [
     click.option(
         "--model_path",
-        default="two_stage_model.pth",
-        show_default=True,
         help="Filename of the trained model.",
         type=click.Path(
             exists=True,
@@ -38,7 +36,7 @@ PATH_CHARTING_CLI_COMMON_OPTIONS = [
         "--dataset_filename",
         default="cached_dataset_rich.pt",
         show_default=True,
-        help="Filename of the cached dataset.",
+        help="Filename of the cached dataset placed in the DATA_DIR (set in settings.py).",
         type=click.Path(
             exists=True,
             dir_okay=False,
@@ -50,7 +48,7 @@ PATH_CHARTING_CLI_COMMON_OPTIONS = [
         "--sample_idx",
         type=int,
         default=None,
-        help="Dataset index of the game to analyse (default: random).",
+        help="Index of the game within the dataset for which to find the improvement path. If not provided a random losing sample will be chosen.",
     ),
     click.option(
         "--n_steps",
@@ -64,7 +62,7 @@ PATH_CHARTING_CLI_COMMON_OPTIONS = [
         type=int,
         default=10,
         show_default=True,
-        help="Number of top features to display.",
+        help="Number of features requiring improvement to display.",
     ),
 ]
 
@@ -91,7 +89,7 @@ def cli() -> None:
     help="Target selection: centroid of wins or nearest k-NN mean.",
 )
 @click.option(
-    "--k-neighbours",
+    "--k_neighbours",
     type=int,
     default=5,
     show_default=True,
@@ -109,7 +107,7 @@ def cmd_linear(
     """Linear interpolation toward a winning target."""
 
     print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
+    vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model_path=model_path,
         cached_dataset_filepath=DATA_DIR / dataset_filename,
     )
@@ -228,7 +226,7 @@ def cmd_gradient_ascent(
     """Gradient ascent on P(win) regularised by a KDE density prior."""
 
     print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
+    vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model_path, dataset_filename
     )
     labels = val_y.numpy()
@@ -316,7 +314,7 @@ def cmd_optimal_transport(
     """Wasserstein-barycentric path into the winning distribution."""
 
     print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
+    vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model_path=model_path,
         cached_dataset_filepath=dataset_filename,
     )
@@ -345,8 +343,8 @@ def cmd_optimal_transport(
 
     print("Computing optimal transport path...")
     path_z_np = path_optimal_transport(
-        sample_z.detach().cpu().numpy(),
-        win_latents.detach().cpu().numpy(),
+        z_start=sample_z.detach().cpu().numpy(),
+        Z_win=win_latents.detach().cpu().numpy(),
         reg=ot_reg,
         n_waypoints=n_steps,
     )
@@ -388,7 +386,7 @@ def cmd_geodesic(
     """Shortest path on a kNN latent-space graph."""
 
     print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
+    vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model_path=model_path,
         cached_dataset_filepath=dataset_filename,
     )
@@ -419,9 +417,9 @@ def cmd_geodesic(
 
     print("Computing geodesic path on kNN graph...")
     path_z_np = path_geodesic(
-        sample_z.detach().cpu().numpy(),
-        win_latents.detach().cpu().numpy(),
-        all_latents.detach().cpu().numpy(),
+        z_start=sample_z.detach().cpu().numpy(),
+        Z_win=win_latents.detach().cpu().numpy(),
+        Z_all=all_latents.detach().cpu().numpy(),
         k=geodesic_k,
         n_waypoints=n_steps,
     )
