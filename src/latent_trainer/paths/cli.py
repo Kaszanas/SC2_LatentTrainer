@@ -19,6 +19,7 @@ from latent_trainer.paths.strategies import path_linear
 from latent_trainer.paths.strategies.geodesic import path_geodesic
 from latent_trainer.paths.strategies.gradient_ascent import path_gradient_ascent
 from latent_trainer.paths.strategies.optimal_transport import path_optimal_transport
+from latent_trainer.settings import DATA_DIR
 
 PATH_CHARTING_CLI_COMMON_OPTIONS = [
     click.option(
@@ -97,8 +98,8 @@ def cli() -> None:
     help="k for nearest-neighbour target.",
 )
 def cmd_linear(
-    model: Path,
-    dataset_path: Path,
+    model_path: Path,
+    dataset_filename: Path,
     sample_idx: int | None,
     n_steps: int,
     top_k: int,
@@ -109,16 +110,16 @@ def cmd_linear(
 
     print("Loading model and data...")
     vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
-        model_path=model,
-        cached_dataset_filepath=dataset_path,
+        model_path=model_path,
+        cached_dataset_filepath=DATA_DIR / dataset_filename,
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
     print(f"Validation: {len(val_X)}")
 
     print("Encoding into latent space...")
-    latents_p0 = encode_player(vae, val_X[:, 0, :])
-    latents_p1 = encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae=vae, data=val_X[:, 0, :])
+    latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
 
     # Win cloud: label=1 → p0 won; label=0 → p1 won.
     win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
@@ -156,8 +157,8 @@ def cmd_linear(
         n_waypoints=n_steps,
     )
     run_path_charting_pipeline(
-        model=model,
-        cache=dataset_path,
+        model=model_path,
+        cache=dataset_filename,
         chosen=int(chosen),
         player_idx=player_idx,
         n_steps=n_steps,
@@ -235,8 +236,8 @@ def cmd_gradient_ascent(
     print(f"Validation: {len(val_X)}")
 
     print("Encoding into latent space...")
-    latents_p0 = encode_player(vae, val_X[:, 0, :])
-    latents_p1 = encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae=vae, data=val_X[:, 0, :])
+    latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
 
     n = len(labels)
     chosen = (
@@ -248,7 +249,7 @@ def cmd_gradient_ascent(
     sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
     opponent_z = latents_p1[chosen] if player_idx == 0 else latents_p0[chosen]
     print(
-        f"  Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
+        f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
     )
 
     # All loser latents as reference distribution for KDE.
@@ -298,7 +299,7 @@ def cmd_gradient_ascent(
 @cli.command("optimal_transport")
 @global_options
 @click.option(
-    "--ot-reg",
+    "--ot_reg",
     type=float,
     default=0.0,
     show_default=True,
@@ -321,11 +322,11 @@ def cmd_optimal_transport(
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
-    print(f"  Validation: {len(val_X)}")
+    print(f"Validation: {len(val_X)}")
 
     print("Encoding into latent space...")
-    latents_p0 = encode_player(vae, val_X[:, 0, :])
-    latents_p1 = encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae=vae, data=val_X[:, 0, :])
+    latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
 
     # Win cloud: label=1 → p0 won; label=0 → p1 won.
     win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
@@ -339,7 +340,7 @@ def cmd_optimal_transport(
     player_idx = int(labels[chosen])  # 0 if p0 lost, 1 if p1 lost
     sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
     print(
-        f"  Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
+        f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
     )
 
     print("Computing optimal transport path...")
@@ -393,11 +394,11 @@ def cmd_geodesic(
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
-    print(f"  Validation: {len(val_X)}")
+    print(f"Validation: {len(val_X)}")
 
     print("Encoding into latent space...")
-    latents_p0 = encode_player(vae, val_X[:, 0, :])
-    latents_p1 = encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae=vae, data=val_X[:, 0, :])
+    latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
 
     # Win cloud: label=1 → p0 won; label=0 → p1 won.
     win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
@@ -413,7 +414,7 @@ def cmd_geodesic(
     player_idx = int(labels[chosen])  # 0 if p0 lost, 1 if p1 lost
     sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
     print(
-        f"  Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
+        f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
     )
 
     print("Computing geodesic path on kNN graph...")
