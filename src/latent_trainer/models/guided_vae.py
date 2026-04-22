@@ -49,6 +49,7 @@ class suGuidedVAE(nn.Module):
         self.n_vae_dis = vae_latent_dim
         self.n_free_dims = vae_latent_dim - supervised_dim
         self.input_dim = input_dim
+
         self.supervised_dim = supervised_dim
 
         # Encoder: input_dim → hidden_dims → n_vae_dis*2 (mu and logvar)
@@ -69,7 +70,7 @@ class suGuidedVAE(nn.Module):
         dec_layers.append(nn.Linear(in_dim, input_dim))
         self.decoder = nn.Sequential(*dec_layers)
 
-        # Opponent-aware classifier using only the first k_cls_dims from each player
+        # Opponent-aware classifier using only the first supervised_dim from each player
         self.classifier = nn.Sequential(
             nn.Linear(supervised_dim * 2, 32),
             nn.LayerNorm(32),
@@ -120,10 +121,11 @@ class suGuidedVAE(nn.Module):
         return output
 
     def cls(self, z: torch.Tensor) -> torch.Tensor:
-        # Use only the first k_cls_dims from each player, concatenated opponent-aware
+        # Use only the first supervised_dim from each player,
+        # concatenated opponent-aware
         if z.dim() == 3:
             batch_size, num_players, _ = z.shape
-            z_cls = z[:, :, : self.supervised_dim]  # [batch, 2, k_cls_dims]
+            z_cls = z[:, :, : self.supervised_dim]  # [batch, 2, self.supervised_dim]
             z_cls = z_cls.reshape(batch_size, num_players * self.supervised_dim)
         else:
             z_cls = z[:, : self.supervised_dim]
@@ -132,7 +134,11 @@ class suGuidedVAE(nn.Module):
     def forward(self, x: torch.Tensor):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        return self.decode(z), mu, logvar, self.cls(z)
+
+        classification = self.cls(z)
+        reconstruction = self.decode(z)
+
+        return reconstruction, mu, logvar, classification
 
 
 class Classifier(nn.Module):
@@ -144,6 +150,12 @@ class Classifier(nn.Module):
             raise ValueError(
                 f"Classifier dimension must be in (0, vae_latent_dim). Got classifier_dim={supervised_dim}, vae_latent_dim={vae_latent_dim}."
             )
+
+        # Adversarial classifier operates on the non supervised dimensions coming out
+        # of the VAE encoder, since we have two players,
+        # we need to concatenate those dims for both players before classifying.
+        # Therefore the input dimension is number of the number of supervised
+        # dimensions subtracted from the total latent dim, multiplied by 2 for both players:
         in_dim = (vae_latent_dim - supervised_dim) * 2
         self.cls_sq = nn.Sequential(
             nn.Linear(in_dim, 32),
