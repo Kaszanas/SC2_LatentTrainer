@@ -8,11 +8,12 @@ import click
 import torch
 
 from latent_trainer.paths.data import (
-    encode_player,
-    load_model_and_data,
+    compute_loss_latents,
+    compute_win_latents,
     nearest_winning_target,
     opponent_aware_logit,
     opponent_aware_score,
+    prepare_path_context,
 )
 from latent_trainer.paths.pipeline import run_path_charting_pipeline
 from latent_trainer.paths.strategies import path_linear
@@ -43,7 +44,7 @@ PATH_CHARTING_CLI_COMMON_OPTIONS = [
         "--sample_idx",
         type=int,
         default=None,
-        help="Index of the game within the dataset for which to find the improvement path. If not provided a random losing sample will be chosen.",
+        help="Index of the game to analyse. If omitted, a game is chosen at random.",
     ),
     click.option(
         "--n_steps",
@@ -100,48 +101,27 @@ def cmd_linear(
     k_neighbours: int,
 ):
     """Linear interpolation toward a winning target."""
-
-    print("Loading model and data...")
-    vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
+    path_context = prepare_path_context(
         model_path=model_path,
-        cached_dataset_filepath=DATA_DIR / dataset_filename,
+        dataset_path=DATA_DIR / dataset_filename,
+        sample_idx=sample_idx,
     )
-    labels = val_y.numpy()
-    labels_tensor = torch.tensor(labels)
-    print(f"Validation: {len(val_X)}")
-
-    print("Encoding into latent space...")
-    latents_p0 = encode_player(vae=vae, data=val_X[:, 0, :])
-    latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
-
-    # Win cloud: label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where(
-        (labels_tensor == 1).unsqueeze(1),
-        latents_p0,
-        latents_p1,
+    win_latents = compute_win_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
     )
+
     win_centroid = win_latents.mean(dim=0)
-
-    n = len(labels)
-    chosen = (
-        sample_idx
-        if (sample_idx is not None and sample_idx < n)
-        else torch.randint(n, (1,)).item()
-    )
-    player_idx = int(labels[chosen])  # 0 if p0 lost, 1 if p1 lost
-    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
-    print(
-        f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
-    )
 
     match method:
         case "centroid":
-            print("  Target: centroid")
+            print("Target: centroid")
             target_z = win_centroid.numpy()
         case "nearest":
-            print(f"  Target: nearest (k={k_neighbours})")
+            print(f"Target: nearest (k={k_neighbours})")
             target_z = nearest_winning_target(
-                sample_z=sample_z,
+                sample_z=path_context.sample_z,
                 win_latents=win_latents,
                 k=k_neighbours,
             ).numpy()
@@ -149,15 +129,12 @@ def cmd_linear(
             raise click.ClickException(f"Invalid method: {method}")
 
     path_z_np = path_linear(
-        z_start=sample_z.detach().cpu().numpy(),
-        target_z=target_z,
+        z_start=path_context.sample_z.detach().cpu().numpy(),
+        z_target=target_z,
         n_waypoints=n_steps,
     )
     run_path_charting_pipeline(
-        model=model_path,
-        cache=dataset_filename,
-        chosen=int(chosen),
-        player_idx=player_idx,
+        path_context=path_context,
         n_steps=n_steps,
         top_k=top_k,
         strategy="linear",
@@ -223,56 +200,39 @@ def cmd_gradient_ascent(
     convergence_threshold: float,
 ):
     """Gradient ascent on P(win) regularised by a KDE density prior."""
-
-    print("Loading model and data...")
-    vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
+    path_context = prepare_path_context(
         model_path=model_path,
-        cached_dataset_filepath=DATA_DIR / dataset_filename,
+        dataset_path=DATA_DIR / dataset_filename,
+        sample_idx=sample_idx,
     )
-    labels = val_y.numpy()
-    labels_tensor = torch.tensor(labels)
-    print(f"Validation: {len(val_X)}")
-
-    print("Encoding into latent space...")
-    latents_p0 = encode_player(vae=vae, data=val_X[:, 0, :])
-    latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
-
-    n = len(labels)
-    chosen = (
-        sample_idx
-        if (sample_idx is not None and sample_idx < n)
-        else torch.randint(n, (1,)).item()
-    )
-    player_idx = int(labels[chosen])  # 0 if p0 lost, 1 if p1 lost
-    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
-    opponent_z = latents_p1[chosen] if player_idx == 0 else latents_p0[chosen]
-    print(
-        f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
+    opponent_z = (
+        path_context.latents_p1[path_context.chosen]
+        if path_context.player_idx == 0
+        else path_context.latents_p0[path_context.chosen]
     )
 
-    # All loser latents as reference distribution for KDE.
-    all_loss_latents = torch.where(
-        (labels_tensor == 0).unsqueeze(1),
-        latents_p0,
-        latents_p1,
+    all_loss_latents = compute_loss_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
     )
 
     score_fn = partial(
         opponent_aware_score,
-        classifier=vae.model.classifier,
+        classifier=path_context.guided_vae.model.classifier,
         opponent_z=opponent_z,
-        player_idx=player_idx,
+        player_idx=path_context.player_idx,
     )
     logit_fn = partial(
         opponent_aware_logit,
-        classifier=vae.model.classifier,
+        classifier=path_context.guided_vae.model.classifier,
         opponent_z=opponent_z,
-        player_idx=player_idx,
+        player_idx=path_context.player_idx,
     )
 
     print("Running gradient ascent with KDE density regularisation...")
     path_z_np = path_gradient_ascent(
-        z_start=sample_z.detach().cpu().numpy(),
+        z_start=path_context.sample_z.detach().cpu().numpy(),
         score_fn=score_fn,
         logit_fn=logit_fn,
         Z_all=all_loss_latents.detach().cpu().numpy(),
@@ -285,10 +245,7 @@ def cmd_gradient_ascent(
         convergence_threshold=convergence_threshold,
     )
     run_path_charting_pipeline(
-        model=model_path,
-        cache=dataset_filename,
-        chosen=int(chosen),
-        player_idx=player_idx,
+        path_context=path_context,
         n_steps=n_steps,
         top_k=top_k,
         strategy="gradient_ascent",
@@ -308,48 +265,26 @@ def cmd_gradient_ascent(
 def cmd_optimal_transport(
     model_path: Path,
     dataset_filename: str,
-    sample_idx: int,
+    sample_idx: int | None,
     n_steps: int,
     top_k: int,
     ot_reg: float,
 ):
     """Wasserstein-barycentric path into the winning distribution."""
-
-    print("Loading model and data...")
-    vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
+    path_context = prepare_path_context(
         model_path=model_path,
-        cached_dataset_filepath=DATA_DIR / dataset_filename,
+        dataset_path=DATA_DIR / dataset_filename,
+        sample_idx=sample_idx,
     )
-    labels = val_y.numpy()
-    labels_tensor = torch.tensor(labels)
-    print(f"Validation: {len(val_X)}")
-
-    print("Encoding into latent space...")
-    latents_p0 = encode_player(vae=vae, data=val_X[:, 0, :])
-    latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
-
-    # Win cloud: label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where(
-        (labels_tensor == 1).unsqueeze(1),
-        latents_p0,
-        latents_p1,
-    )
-
-    n = len(labels)
-    chosen = (
-        sample_idx
-        if (sample_idx is not None and sample_idx < n)
-        else torch.randint(n, (1,)).item()
-    )
-    player_idx = int(labels[chosen])  # 0 if p0 lost, 1 if p1 lost
-    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
-    print(
-        f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
+    win_latents = compute_win_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
     )
 
     print("Computing optimal transport path...")
     path_z_np = path_optimal_transport(
-        z_start=sample_z.detach().cpu().numpy(),
+        z_start=path_context.sample_z.detach().cpu().numpy(),
         Z_win=win_latents.detach().cpu().numpy(),
         reg=ot_reg,
         n_waypoints=n_steps,
@@ -361,10 +296,7 @@ def cmd_optimal_transport(
             "such as '--ot-reg 0.05' or '--ot-reg 0.1'."
         )
     run_path_charting_pipeline(
-        model=model_path,
-        cache=dataset_filename,
-        chosen=int(chosen),
-        player_idx=player_idx,
+        path_context=path_context,
         n_steps=n_steps,
         top_k=top_k,
         strategy="optimal_transport",
@@ -384,60 +316,34 @@ def cmd_optimal_transport(
 def cmd_geodesic(
     model_path: Path,
     dataset_filename: str,
-    sample_idx: int,
+    sample_idx: int | None,
     n_steps: int,
     top_k: int,
     geodesic_k: int,
 ):
     """Shortest path on a kNN latent-space graph."""
-
-    print("Loading model and data...")
-    vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
+    path_context = prepare_path_context(
         model_path=model_path,
-        cached_dataset_filepath=DATA_DIR / dataset_filename,
+        dataset_path=DATA_DIR / dataset_filename,
+        sample_idx=sample_idx,
     )
-    labels = val_y.numpy()
-    labels_tensor = torch.tensor(labels)
-    print(f"Validation: {len(val_X)}")
-
-    print("Encoding into latent space...")
-    latents_p0 = encode_player(vae=vae, data=val_X[:, 0, :])
-    latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
-
-    # Win cloud: label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where(
-        (labels_tensor == 1).unsqueeze(1),
-        latents_p0,
-        latents_p1,
+    win_latents = compute_win_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
     )
-    # All latents for kNN graph.
-    all_latents = torch.cat([latents_p0, latents_p1], dim=0)
-
-    n = len(labels)
-    chosen = (
-        sample_idx
-        if (sample_idx is not None and sample_idx < n)
-        else torch.randint(n, (1,)).item()
-    )
-    player_idx = int(labels[chosen])  # 0 if p0 lost, 1 if p1 lost
-    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
-    print(
-        f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
-    )
+    all_latents = torch.cat([path_context.latents_p0, path_context.latents_p1], dim=0)
 
     print("Computing geodesic path on kNN graph...")
     path_z_np = path_geodesic(
-        z_start=sample_z.detach().cpu().numpy(),
+        z_start=path_context.sample_z.detach().cpu().numpy(),
         Z_win=win_latents.detach().cpu().numpy(),
         Z_all=all_latents.detach().cpu().numpy(),
         k=geodesic_k,
         n_waypoints=n_steps,
     )
     run_path_charting_pipeline(
-        model=model_path,
-        cache=dataset_filename,
-        chosen=int(chosen),
-        player_idx=player_idx,
+        path_context=path_context,
         n_steps=n_steps,
         top_k=top_k,
         strategy="geodesic",
