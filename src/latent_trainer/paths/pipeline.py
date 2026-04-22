@@ -56,7 +56,7 @@ def run_path_charting_pipeline(
 
     score_fn = partial(
         opponent_aware_score,
-        classifier=path_context.guided_vae.model.classifier,
+        guided_vae=path_context.guided_vae,
         opponent_z=opponent_z,
         player_idx=path_context.player_idx,
     )
@@ -89,7 +89,7 @@ def run_path_charting_pipeline(
         top_k=top_k,
     )
     path_features = decode_features(
-        vae=path_context.guided_vae,
+        vae=path_context.guided_vae.model,
         z=path_z_tensor,
         norm_mean=path_context.guided_vae.mean,
         norm_std=path_context.guided_vae.std,
