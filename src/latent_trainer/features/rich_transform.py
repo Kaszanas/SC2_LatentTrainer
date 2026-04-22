@@ -1,34 +1,37 @@
 """Rich feature transform for SC2 replays.
 
-Extracts a comprehensive feature vector per player including:
-- Temporal economy snapshots (early/mid/late game) — 39 features × 3 time windows
-- Final economy state — 39 features
-- Economy rate-of-change (late minus early) — 39 features
-- Player meta stats: APM, MMR, SQ, supplyCappedPercent
-- Unit activity: units born count, units lost count (killed by opponent)
-- Upgrade count
-- Game duration (shared)
+Extracts a comprehensive feature vector per player represented as a nested TensorDict:
+- Temporal economy snapshots (early/mid/late game) — 39 Stats fields × 3 time windows
+- Final economy state — 39 Stats fields
+- Economy rate-of-change (late minus early) — 39 Stats fields
+- Player meta stats: APM, MMR, SQ, supply_capped_percent
+- Unit activity: units_born, units_killed
+- upgrade_count
 
-Total: per player = 39*3 + 39 + 39 + 4 + 2 + 1 + 1 = 203 features
-Output shape: [2, 203] per replay
+Output: TensorDict with batch_size=[2] (player 0 = player 1, player 1 = player 2).
+Each player entry is a nested TensorDict with keys:
+  early, mid, late, final, delta  → nested TensorDict of 39 Stats fields (float32)
+  meta                            → nested TensorDict {APM, MMR, SQ, supply_capped_percent}
+  units_born, units_killed, upgrade_count  → scalar float32 tensors
+
+TODO: preprocess_dataset.py must be updated in a follow-up to handle TensorDict output.
 """
 
-from typing import Optional, Tuple
+from typing import Tuple
 
-import numpy as np
 import torch
 from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData, ToonPlayerDesc
 from sc2_datasets.replay_parser.tracker_events.events.player_stats.player_stats import (
     PlayerStats,
 )
+from sc2_datasets.replay_parser.tracker_events.events.player_stats.stats import Stats
+from tensordict import TensorDict
 
-# Race encoding: map race name to float
-RACE_MAP = {"Zerg": 0.0, "Protoss": 1.0, "Terran": 2.0}
 
-
-def _get_stats_values(stats_obj) -> list:
-    """Extract float values from a Stats object."""
-    return [float(v) for v in stats_obj.__dict__.values()]
+def _get_stats_values(stats: Stats) -> TensorDict:
+    """Convert a Stats dataclass to a float32 TensorDict with one key per field."""
+    td = TensorDict.from_dataclass(stats)
+    return td.apply(lambda t: t.float())
 
 
 def _get_player_stats_timeseries(
@@ -62,9 +65,9 @@ def _temporal_snapshot(
     events: list[PlayerStats],
     start_frac: float,
     end_frac: float,
-) -> np.ndarray:
+) -> TensorDict:
     """
-    Extract a temporal snapshot of player stats averaged over a fractional time window of the game.
+    Extract a temporal snapshot of player stats averaged over a fractional time window.
 
     Parameters
     ----------
@@ -77,18 +80,17 @@ def _temporal_snapshot(
 
     Returns
     -------
-    np.ndarray
-        Averaged stats values over the specified time window, or zeros if no events in window.
+    TensorDict
+        Averaged Stats fields over the specified time window.
     """
-
     n = len(events)
     start_idx = int(start_frac * n)
     end_idx = max(int(end_frac * n), start_idx + 1)
 
     window = events[start_idx:end_idx]
-
-    values = [_get_stats_values(stats_obj=e.stats) for e in window]
-    return np.mean(values, axis=0)
+    values = [_get_stats_values(e.stats) for e in window]
+    stacked = torch.stack(values, dim=0)
+    return stacked.mean(dim=0, dtype=torch.float32)
 
 
 def _count_units_born(sc2_replay: SC2ReplayData, player_id: int) -> int:
@@ -107,7 +109,6 @@ def _count_units_born(sc2_replay: SC2ReplayData, player_id: int) -> int:
     int
         Number of units born for the specified player.
     """
-
     count = 0
     for event in sc2_replay.trackerEvents:
         if type(event).__name__ == "UnitBorn":
@@ -157,7 +158,6 @@ def _count_upgrades(sc2_replay: SC2ReplayData, player_id: int) -> int:
     int
         Number of upgrades for the specified player.
     """
-
     count = 0
     for event in sc2_replay.trackerEvents:
         if type(event).__name__ == "Upgrade" and event.playerId == player_id:
@@ -183,7 +183,6 @@ def _get_player_info(
     ToonPlayerDesc | None
         ToonPlayerDesc object containing player information, or None if not found.
     """
-
     for toon_desc in sc2_replay.toonPlayerDescMap:
         if str(toon_desc.toon_player_info.playerID) == str(player_id):
             return toon_desc.toon_player_info
@@ -201,10 +200,9 @@ def _get_outcome(sc2_replay: SC2ReplayData) -> int | None:
 
     Returns
     -------
-    Optional[int]
+    int | None
         Game outcome for player 1 (0=loss, 1=win), or None to skip if undecided/draw.
     """
-
     result_map = {"Loss": 0, "Win": 1, "Victory": 1, "Defeat": 0}
     skip_results = {"Undecided", "Draw", "Tie"}
 
@@ -225,137 +223,109 @@ def _get_outcome(sc2_replay: SC2ReplayData) -> int | None:
 def prepare_player_features(
     sc2_replay: SC2ReplayData,
     player_id: int,
-    game_duration: float,
-) -> Optional[np.ndarray]:
+) -> TensorDict | None:
+    """
+    Build a nested TensorDict of features for one player.
 
-    # 1. Temporal economy snapshots
-    events = _get_player_stats_timeseries(
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed SC2 replay data.
+    player_id : int
+        ID of the player (1 or 2).
+
+    Returns
+    -------
+    TensorDict | None
+        Nested TensorDict with keys: early, mid, late, final, delta, meta,
+        units_born, units_killed, upgrade_count. Returns None to skip the replay.
+    """
+    player_stats_events = _get_player_stats_timeseries(
         sc2_replay=sc2_replay,
         player_id=player_id,
     )
-
-    # Skip replays without economy data
-    if not events:
+    if not player_stats_events:
         return None
 
-    early_stats = _temporal_snapshot(
-        events=events,
-        start_frac=0.0,
-        end_frac=0.33,
-    )
-    mid_stats = _temporal_snapshot(
-        events=events,
-        start_frac=0.33,
-        end_frac=0.67,
-    )
-    late_stats = _temporal_snapshot(
-        events=events,
-        start_frac=0.67,
-        end_frac=1.0,
-    )
+    early = _temporal_snapshot(player_stats_events, 0.0, 0.33)
+    mid = _temporal_snapshot(player_stats_events, 0.33, 0.67)
+    late = _temporal_snapshot(player_stats_events, 0.67, 1.0)
+    final = _get_stats_values(player_stats_events[-1].stats)
+    delta = late - early
 
-    # --- 2. Final economy state ---
-    final_stats = _get_stats_values(stats_obj=events[-1].stats)
-    final_stats = np.array(final_stats, dtype=np.float32)
-
-    # --- 3. Economy rate of change (late - early) ---
-    econ_delta = late_stats - early_stats
-
-    # --- 4. Player meta stats ---
     player_info = _get_player_info(sc2_replay=sc2_replay, player_id=player_id)
     if player_info is None:
         return None
 
-    meta_features = np.array(
-        [
-            float(player_info.APM),
-            float(player_info.MMR) if player_info.MMR else 0.0,
-            float(player_info.SQ) if player_info.SQ else 0.0,
-            float(player_info.supplyCappedPercent)
-            if player_info.supplyCappedPercent
-            else 0.0,
-        ],
-        dtype=np.float32,
+    meta = TensorDict(
+        {
+            "APM": torch.tensor(float(player_info.APM)),
+            "MMR": torch.tensor(float(player_info.MMR) if player_info.MMR else 0.0),
+            "SQ": torch.tensor(float(player_info.SQ) if player_info.SQ else 0.0),
+            "supply_capped_percent": torch.tensor(
+                float(player_info.supplyCappedPercent)
+                if player_info.supplyCappedPercent
+                else 0.0
+            ),
+        },
+        batch_size=[],
     )
 
-    # --- 5. Unit activity ---
-    units_born = float(
-        _count_units_born(
-            sc2_replay=sc2_replay,
-            player_id=player_id,
-        )
-    )
-    units_killed = float(
-        _count_units_died_by_opponent(
-            sc2_replay=sc2_replay,
-            player_id=player_id,
-        )
-    )
-
-    # --- 6. Upgrades ---
-    upgrade_count = float(
-        _count_upgrades(
-            sc2_replay=sc2_replay,
-            player_id=player_id,
-        )
-    )
-
-    # --- 7. Game duration (same for both, but included) ---
-    duration = np.array([game_duration], dtype=np.float32)
-
-    # REVIEW: Why do we have duration in here?
-    # REVIEW: What will the model learn to do with duration? It is not player
-    # REVIEW: specific information.
-
-    # Concatenate all features for this player
-    player_feat = np.concatenate(
-        [
-            early_stats,  # 39
-            mid_stats,  # 39
-            late_stats,  # 39
-            final_stats,  # 39
-            econ_delta,  # 39
-            meta_features,  # 4
-            [units_born],  # 1
-            [units_killed],  # 1
-            [upgrade_count],  # 1
-            duration,  # 1
-        ]
+    return TensorDict(
+        {
+            "early": early,
+            "mid": mid,
+            "late": late,
+            "final": final,
+            "delta": delta,
+            "meta": meta,
+            "units_born": torch.tensor(
+                float(_count_units_born(sc2_replay=sc2_replay, player_id=player_id))
+            ),
+            "units_killed": torch.tensor(
+                float(
+                    _count_units_died_by_opponent(
+                        sc2_replay=sc2_replay, player_id=player_id
+                    )
+                )
+            ),
+            "upgrade_count": torch.tensor(
+                float(_count_upgrades(sc2_replay=sc2_replay, player_id=player_id))
+            ),
+        },
+        batch_size=[],
     )
 
-    return player_feat
 
-
-def rich_transform(sc2_replay: SC2ReplayData) -> Tuple[torch.Tensor, int] | None:
+def rich_transform(sc2_replay: SC2ReplayData) -> Tuple[TensorDict, int] | None:
     """Extract rich features from an SC2 replay.
 
     Returns:
-        Tuple of (features_tensor [2, N_features], label) or None to skip.
+        Tuple of (features TensorDict batch_size=[2], label) or None to skip.
+        Index 0 = player 1, index 1 = player 2.
     """
-    # Get outcome
     label = _get_outcome(sc2_replay=sc2_replay)
     if label is None:
         return None
 
-    # Game duration in loops
+    # Games need to be at least 180s * 22.4 game_speed = 4032 gameloops to be included
     try:
         game_duration = float(sc2_replay.header.elapsedGameLoops)
+        if game_duration < 4032:
+            return None
     except (AttributeError, ValueError, TypeError):
         return None
 
-    player_features = []
-
+    player_tds = []
     for player_id in [1, 2]:
-        player_feat = prepare_player_features(
+        player_td = prepare_player_features(
             sc2_replay=sc2_replay,
             player_id=player_id,
-            game_duration=game_duration,
         )
-        if not player_feat:
+        if player_td is None:
             return None
+        player_tds.append(player_td)
 
-        player_features.append(player_feat)
-
-    features = torch.tensor(np.stack(player_features), dtype=torch.float32)
+    features = torch.stack(player_tds, dim=0)  # TensorDict, batch_size=[2]
 
     return features, label
