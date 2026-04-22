@@ -12,10 +12,10 @@ import logging
 from pathlib import Path
 
 import torch
+from tensordict import TensorDict
 from torch.utils.data import DataLoader
 
 from latent_trainer.features.type import (
-    CachedDatasetFileSpec,
     CachedSC2Dataset,
     Encoder,
     NormalizedData,
@@ -27,100 +27,105 @@ logger = logging.getLogger(__name__)
 
 
 def normalize(
-    train_X: torch.Tensor,
-    val_X: torch.Tensor,
-    test_X: torch.Tensor,
+    train_X: TensorDict,
+    val_X: TensorDict,
+    test_X: TensorDict,
 ) -> NormalizedData:
-    """Per-feature z-score normalisation.  Fit on *train*, apply to both.
+    """Per-key z-score normalisation.  Fit on *train*, apply to val and test.
 
     Parameters
     ----------
     train_X:
-        Training features, shape ``[N, ...]`` where the last dim is features.
+        Training features, TensorDict with ``batch_size=[N_train, 2]``.
     val_X:
-        Validation features with the same trailing feature dimension.
+        Validation features with the same nested key structure.
+    test_X:
+        Test features with the same nested key structure.
 
     Returns
     -------
     NormalizedData
-        Normalised tensors and normalisation parameters.
+        Normalised TensorDicts and per-key normalisation parameters.
     """
-    shape = train_X.shape
-    train_flat = train_X.reshape(-1, shape[-1])
-    val_flat = val_X.reshape(-1, shape[-1])
-    test_flat = test_X.reshape(-1, shape[-1])
+    train_f = train_X.apply(lambda t: t.float())
+    mean = train_f.apply(lambda t: t.mean())          # TensorDict, batch_size=[]
+    std = train_f.apply(lambda t: t.std() + 1e-8)     # TensorDict, batch_size=[]
 
-    mean = train_flat.mean(dim=0, keepdim=True)
-    std = train_flat.std(dim=0, keepdim=True) + 1e-8
+    train_norm = (train_f - mean) / std
+    val_norm = (val_X.apply(lambda t: t.float()) - mean) / std
+    test_norm = (test_X.apply(lambda t: t.float()) - mean) / std
 
-    train_flat = (train_flat - mean) / std
-    val_flat = (val_flat - mean) / std
-    test_flat = (test_flat - mean) / std
-
-    normalized_data = NormalizedData(
-        train_X=train_flat.reshape(shape),
-        val_X=val_flat.reshape(val_X.shape),
-        test_X=test_flat.reshape(test_X.shape),
+    return NormalizedData(
+        train_X=train_norm,
+        val_X=val_norm,
+        test_X=test_norm,
         mean=mean,
         std=std,
     )
 
-    return normalized_data
 
-
-# ------------------------------------------------------------------
 # Dataset loading
-# ------------------------------------------------------------------
 def load_and_normalize(
     cached_dataset_filepath: Path,
 ) -> NormalizedDataWithLabels:
     """
-    Load a cached ``.pt`` dataset and normalise features.
+    Load a cached memmap TensorDict dataset and normalise features.
 
-    The cache is expected to contain at least::
+    The cache directory is expected to follow the layout produced by
+    ``preprocess_dataset.py``::
 
-        {"train_features": ..., "train_labels": ...,
-         "val_features": ...,   "val_labels": ...}
+        <cache_dir>/
+          train/
+            features/   TensorDict batch_size=[N_train, 2]
+                        nested keys: early, mid, late, final, delta,
+                                     meta, units_born, units_killed, upgrade_count
+            labels      Tensor [N_train], long  (0=loss, 1=win)
+          val/
+            features/   TensorDict batch_size=[N_val, 2]
+            labels      Tensor [N_val], long
+          test/
+            features/   TensorDict batch_size=[N_test, 2]
+            labels      Tensor [N_test], long
 
     Parameters
     ----------
-    cache_path : Path
-        Path to the ``.pt`` file produced by ``preprocess_dataset.py``.
+    cached_dataset_filepath : Path
+        Path to the cache directory produced by ``preprocess_dataset.py``.
 
     Returns
     -------
     NormalizedDataWithLabels
-        Normalised tensors and normalisation parameters.
+        Normalised feature TensorDicts and long label tensors.
     """
     logger.info(f"Loading data from {cached_dataset_filepath}")
-    cached: dict[str, torch.Tensor] = torch.load(
-        f=str(cached_dataset_filepath),
-        weights_only=True,
-    )
 
-    cached_data_spec = CachedDatasetFileSpec(**cached)
+    full_td = TensorDict.load_memmap(str(cached_dataset_filepath))
 
-    train_y = cached_data_spec.train_labels.float()
-    val_y = cached_data_spec.val_labels.float()
-    test_y = cached_data_spec.test_labels.float()
+    train_features = full_td["train", "features"]
+    train_labels = full_td["train", "labels"]
+    val_features = full_td["val", "features"]
+    val_labels = full_td["val", "labels"]
+    test_features = full_td["test", "features"]
+    test_labels = full_td["test", "labels"]
 
     normalized_data = normalize(
-        train_X=cached_data_spec.train_features.float(),
-        val_X=cached_data_spec.val_features.float(),
-        test_X=cached_data_spec.test_features.float(),
+        train_X=train_features,
+        val_X=val_features,
+        test_X=test_features,
     )
 
     logger.info(
-        f"Feature shape: {list(normalized_data.train_X.shape)}  |  Train: {len(normalized_data.train_X)}  Val: {len(normalized_data.val_X)}"
+        f"Feature shape: {list(normalized_data.train_X.shape)}  |  "
+        f"Train: {len(normalized_data.train_X)}  Val: {len(normalized_data.val_X)}"
     )
 
     return NormalizedDataWithLabels(
         train_X=normalized_data.train_X,
-        train_y=train_y,
+        train_y=train_labels,   # long — cast to float at the loss call site if needed
         val_X=normalized_data.val_X,
-        val_y=val_y,
+        val_y=val_labels,
         test_X=normalized_data.test_X,
-        test_y=test_y,
+        test_y=test_labels,
         mean=normalized_data.mean,
         std=normalized_data.std,
     )
@@ -139,18 +144,21 @@ def load_cached_dataloaders(
     Parameters
     ----------
     cache_path : Path
-        Path to the cached dataset file.
+        Path to the cached dataset directory produced by ``preprocess_dataset.py``.
     batch_size : int
         Batch size for the DataLoaders.
 
     Returns
     -------
-    NormalizedData
-        Contains the DataLoaders and normalisation parameters.
+    NormalizedDataloaders
+        Contains the DataLoaders, ``input_dim``, and normalisation parameters.
     """
 
     normalized_data = load_and_normalize(cached_dataset_filepath=cache_path)
-    input_dim = normalized_data.train_X.shape[-1]
+
+    # Total scalar leaf count per player — used by model constructors
+    sample_player = normalized_data.train_X[0, 0]  # TensorDict batch_size=[]
+    input_dim = sum(t.numel() for t in sample_player.values(True, True))
 
     train_loader = DataLoader(
         CachedSC2Dataset(
@@ -196,6 +204,7 @@ def extract_latents(
         Any model with an ``encode(x) → (mu, logvar)`` method.
     data:
         Feature tensor of shape ``[N, 2, F]`` (two players).
+        NOTE: expects flat tensors [N, 2, F]. Needs updating when encoders accept TensorDict.
     device:
         Device to run inference on.
     batch_size:
