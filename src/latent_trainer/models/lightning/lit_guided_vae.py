@@ -23,6 +23,8 @@ class LitGuidedVAE(pl.LightningModule):
         learning_rate_classifier: float = 1e-4,
         weight_decay_c: float = 1e-4,
         classification_weight: float = 50.0,
+        mean: torch.Tensor | None = None,
+        std: torch.Tensor | None = None,
     ) -> None:
         """Initialise the LitGuidedVAE module.
 
@@ -33,6 +35,10 @@ class LitGuidedVAE(pl.LightningModule):
         encoder_hidden_dims:
             Hidden layer widths for the encoder.  The decoder mirrors these in
             reverse order.  Defaults to ``[64, 128, 256, 512]``.
+        supervised_dim:
+            Number of latent dims (per player) reserved for supervised
+            classification.  The remaining ``vae_latent_dim - supervised_dim`` dims are
+            adversarially disentangled.
         vae_latent_dim:
             Size of the VAE latent distribution.
         learning_rate:
@@ -45,10 +51,10 @@ class LitGuidedVAE(pl.LightningModule):
             Weight decay for the classifier optimizer.
         classification_weight:
             Weight for the classification loss.
-        supervised_dim:
-            Number of latent dims (per player) reserved for supervised
-            classification.  The remaining ``vae_latent_dim - supervised_dim`` dims are
-            adversarially disentangled.
+        mean:
+            Optional pre-computed training data mean for input normalisation.
+        std:
+            Optional pre-computed training data std for input normalisation.
         """
         super().__init__()
         self.save_hyperparameters()
@@ -58,6 +64,11 @@ class LitGuidedVAE(pl.LightningModule):
         self.encoder_hidden_dims = encoder_hidden_dims
         self.supervised_dim = supervised_dim
         self.vae_latent_dim = vae_latent_dim
+
+        # Normalization stats, needed for working with unnormalized data
+        # after training (e.g. when encoding new samples with the trained model):
+        self.register_buffer("mean", mean)
+        self.register_buffer("std", std)
 
         # Hyperparameters:
         self.learning_rate = learning_rate
