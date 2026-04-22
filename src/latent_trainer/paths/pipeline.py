@@ -7,12 +7,12 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
-from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
 from latent_trainer.paths.data import (
     FEATURE_NAMES,
+    PathContext,
+    compute_loss_latents,
+    compute_win_latents,
     decode_features,
-    encode_player,
-    load_model_and_data,
     opponent_aware_score,
 )
 from latent_trainer.paths.feedback import compute_feedback, print_feedback_report
@@ -23,15 +23,12 @@ from latent_trainer.paths.plot import (
     plot_main,
     plot_three_signal_feedback,
 )
-from latent_trainer.settings import DATA_DIR, OUTPUT_DIR, PLOTS_DIR
+from latent_trainer.settings import OUTPUT_DIR, PLOTS_DIR
 
 
 def run_path_charting_pipeline(
     *,
-    model: LitGuidedVAE,
-    cache: str,
-    chosen: int,
-    player_idx: int,
+    path_context: PathContext,
     n_steps: int,
     top_k: int,
     strategy: str,
@@ -39,53 +36,45 @@ def run_path_charting_pipeline(
 ) -> None:
     """Common post-path logic: P(win) curve, feedback, plots."""
 
-    guided_vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
-        model_path=model,
-        cached_dataset_filepath=DATA_DIR / cache,
+    win_latents = compute_win_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
     )
-    labels = val_y.numpy()
-    labels_tensor = torch.tensor(labels)
-
-    latents_p0 = encode_player(vae=guided_vae.model, data=val_X[:, 0, :])
-    latents_p1 = encode_player(vae=guided_vae.model, data=val_X[:, 1, :])
-
-    # Win cloud: for each game, the winner's latent.
-    # label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where(
-        (labels_tensor == 1).unsqueeze(1),
-        latents_p0,
-        latents_p1,
-    )
-    loss_latents = torch.where(
-        (labels_tensor == 0).unsqueeze(1), latents_p0, latents_p1
+    loss_latents = compute_loss_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
     )
     win_centroid = win_latents.mean(dim=0)
 
-    opponent_idx = 1 - player_idx
-    opponent_z = latents_p0[chosen] if opponent_idx == 0 else latents_p1[chosen]
+    opponent_z = (
+        path_context.latents_p1[path_context.chosen]
+        if path_context.player_idx == 0
+        else path_context.latents_p0[path_context.chosen]
+    )
 
     score_fn = partial(
         opponent_aware_score,
-        classifier=guided_vae.model.classifier,
+        classifier=path_context.guided_vae.model.classifier,
         opponent_z=opponent_z,
-        player_idx=player_idx,
+        player_idx=path_context.player_idx,
     )
 
-    n_waypoints = n_steps
     path_z_tensor = torch.tensor(path_z_np, dtype=torch.float32)
-    alphas = np.linspace(0.0, 1.0, n_waypoints)
+    alphas = np.linspace(0.0, 1.0, n_steps)
 
     with torch.no_grad():
         win_probs = score_fn(path_z_tensor).numpy()
     print(f"  P(win): {win_probs[0]:.3f} -> {win_probs[-1]:.3f}")
 
-    print("Computing three-signal feedback...")
+    print("Computing feedback...")
     feedback = compute_feedback(
         path_z=path_z_np,
-        decode_fn=guided_vae.decode,
+        decode_fn=path_context.guided_vae.model.decode,
         score_fn=score_fn,
-        norm_mean=norm_mean,
-        norm_std=norm_std,
+        norm_mean=path_context.guided_vae.mean,
+        norm_std=path_context.guided_vae.std,
         feature_names=FEATURE_NAMES,
         top_k=top_k,
         method_name=strategy.upper(),
@@ -100,10 +89,10 @@ def run_path_charting_pipeline(
         top_k=top_k,
     )
     path_features = decode_features(
-        vae=guided_vae,
+        vae=path_context.guided_vae,
         z=path_z_tensor,
-        norm_mean=norm_mean,
-        norm_std=norm_std,
+        norm_mean=path_context.guided_vae.mean,
+        norm_std=path_context.guided_vae.std,
     )
     plot_feature_evolution(
         path_features=path_features,
