@@ -64,7 +64,7 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
             params = get_guided_vae_search_space(trial=trial)
             batch_size: int = params["batch_size"]
 
-            train_loader, val_loader, _ = load_cached_dataloaders(
+            normalized_dataloaders = load_cached_dataloaders(
                 cache_path=DATA_DIR / config.dataset_filename,
                 batch_size=batch_size,
             )
@@ -106,8 +106,8 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
             )
             trainer.fit(
                 model=model,
-                train_dataloaders=train_loader,
-                val_dataloaders=val_loader,
+                train_dataloaders=normalized_dataloaders.train_loader,
+                val_dataloaders=normalized_dataloaders.val_loader,
             )
             return trainer.callback_metrics["val_vae_loss"].item()
 
@@ -157,15 +157,13 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
     }
 
     batch_size: int = params["batch_size"]
-    train_loader, val_loader, input_dim = load_cached_dataloaders(
+    normalized_dataloaders = load_cached_dataloaders(
         cache_path=DATA_DIR / config.dataset_filename,
         batch_size=batch_size,
     )
 
     train_guided(
-        train_loader=train_loader,
-        val_loader=val_loader,
-        input_dim=input_dim,
+        normalized_dataloaders=normalized_dataloaders,
         output_dir=OUTPUT_DIR,
         epochs=config.guided_vae_epochs,
         supervised_dim=params["supervised_dim"],
