@@ -40,17 +40,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import mlflow
+import optuna
 from lightning.pytorch.loggers import MLFlowLogger
 
-from latent_trainer.settings import DEFAULT_MLFLOW_URI
-
-if TYPE_CHECKING:
-    import optuna
-
-    from latent_trainer.configs.experiment_config import ExperimentConfig
+from latent_trainer.configs.experiment_config import ExperimentConfig
+from latent_trainer.settings import DEFAULT_MLFLOW_URI, OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -69,35 +65,6 @@ def setup_mlflow(mlflow_tracking_uri: str, experiment_name: str) -> str:
         f"MLFlow: tracking_uri={mlflow_tracking_uri}  experiment={experiment_name} (id={experiment.experiment_id})"
     )
     return experiment.experiment_id
-
-
-def create_mlflow_logger(
-    experiment_name: str,
-    run_name: str,
-    tracking_uri: str = DEFAULT_MLFLOW_URI,
-    *,
-    run_id: str | None = None,
-) -> MLFlowLogger:
-    """Create a Lightning ``MLFlowLogger`` instance.
-
-    Parameters
-    ----------
-    experiment_name:
-        MLFlow experiment name.
-    run_name:
-        Human-readable name for this run (e.g. ``"trial_3_stage1_vae"``).
-    tracking_uri:
-        MLFlow tracking URI.  Defaults to the project-wide SQLite URI.
-    run_id:
-        If provided, attach the logger to an *existing* MLFlow run
-        (e.g. a parent run opened with ``mlflow.start_run()``).
-    """
-    return MLFlowLogger(
-        experiment_name=experiment_name,
-        run_name=run_name,
-        tracking_uri=tracking_uri,
-        run_id=run_id,
-    )
 
 
 # ------------------------------------------------------------------
@@ -151,6 +118,36 @@ def start_parent_run(
     return active_run
 
 
+def create_mlflow_logger(
+    experiment_name: str,
+    run_name: str,
+    tracking_uri: str = DEFAULT_MLFLOW_URI,
+    *,
+    run_id: str | None = None,
+) -> MLFlowLogger:
+    """Create a Lightning ``MLFlowLogger`` instance.
+
+    Parameters
+    ----------
+    experiment_name:
+        MLFlow experiment name.
+    run_name:
+        Human-readable name for this run (e.g. ``"trial_3_stage1_vae"``).
+    tracking_uri:
+        MLFlow tracking URI.  Defaults to the project-wide SQLite URI.
+    run_id:
+        If provided, attach the logger to an *existing* MLFlow run
+        (e.g. a parent run opened with ``mlflow.start_run()``).
+    """
+    return MLFlowLogger(
+        experiment_name=experiment_name,
+        run_name=run_name,
+        tracking_uri=tracking_uri,
+        run_id=run_id,
+        artifact_location=str(OUTPUT_DIR / "mlruns"),
+    )
+
+
 def create_child_mlflow_logger(
     experiment_name: str,
     run_name: str,
@@ -190,6 +187,7 @@ def create_child_mlflow_logger(
         experiment_name=experiment_name,
         run_id=child_run_id,
         tracking_uri=tracking_uri,
+        artifact_location=str(OUTPUT_DIR / "mlruns"),
     )
 
 
@@ -256,11 +254,11 @@ def log_artifact(
         raise ValueError("MLFlow logger must have an active run_id to log artifacts")
 
     # Log checkpoints as MLFlow artifacts
-    mlflow.set_tracking_uri(mlflow_logger.tracking_uri)
+    mlflow.set_tracking_uri(mlflow_logger._tracking_uri)
     with mlflow.start_run(run_id=mlflow_logger.run_id):
         log_checkpoint_artifacts(
             checkpoint_dir=checkpoint_dir,
-            tracking_uri=mlflow_logger.tracking_uri,
+            tracking_uri=mlflow_logger._tracking_uri,
         )
         mlflow.log_artifact(local_path=model_path)
 
