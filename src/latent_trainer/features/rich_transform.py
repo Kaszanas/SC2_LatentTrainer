@@ -227,14 +227,114 @@ def _get_outcome(sc2_replay: SC2ReplayData) -> int | None:
     return None
 
 
-def rich_transform(sc2_replay: SC2ReplayData) -> Optional[Tuple[torch.Tensor, int]]:
+def prepare_player_features(
+    sc2_replay: SC2ReplayData,
+    player_id: int,
+    game_duration: float,
+) -> Optional[np.ndarray]:
+
+    # 1. Temporal economy snapshots
+    events = _get_player_stats_timeseries(
+        sc2_replay=sc2_replay,
+        player_id=player_id,
+    )
+
+    # Skip replays without economy data
+    if not events:
+        return None
+
+    early_stats = _temporal_snapshot(
+        events=events,
+        start_frac=0.0,
+        end_frac=0.33,
+    )
+    mid_stats = _temporal_snapshot(
+        events=events,
+        start_frac=0.33,
+        end_frac=0.67,
+    )
+    late_stats = _temporal_snapshot(
+        events=events,
+        start_frac=0.67,
+        end_frac=1.0,
+    )
+
+    # --- 2. Final economy state ---
+    final_stats = _get_stats_values(stats_obj=events[-1].stats)
+    final_stats = np.array(final_stats, dtype=np.float32)
+
+    # --- 3. Economy rate of change (late - early) ---
+    econ_delta = late_stats - early_stats
+
+    # --- 4. Player meta stats ---
+    player_info = _get_player_info(sc2_replay=sc2_replay, player_id=player_id)
+    if player_info is None:
+        return None
+
+    meta_features = np.array(
+        [
+            float(player_info.APM),
+            float(player_info.MMR) if player_info.MMR else 0.0,
+            float(player_info.SQ) if player_info.SQ else 0.0,
+            float(player_info.supplyCappedPercent)
+            if player_info.supplyCappedPercent
+            else 0.0,
+        ],
+        dtype=np.float32,
+    )
+
+    # --- 5. Unit activity ---
+    units_born = float(
+        _count_units_born(
+            sc2_replay=sc2_replay,
+            player_id=player_id,
+        )
+    )
+    units_killed = float(
+        _count_units_died_by_opponent(
+            sc2_replay=sc2_replay,
+            player_id=player_id,
+        )
+    )
+
+    # --- 6. Upgrades ---
+    upgrade_count = float(
+        _count_upgrades(
+            sc2_replay=sc2_replay,
+            player_id=player_id,
+        )
+    )
+
+    # --- 7. Game duration (same for both, but included) ---
+    duration = np.array([game_duration], dtype=np.float32)
+
+    # Concatenate all features for this player
+    player_feat = np.concatenate(
+        [
+            early_stats,  # 39
+            mid_stats,  # 39
+            late_stats,  # 39
+            final_stats,  # 39
+            econ_delta,  # 39
+            meta_features,  # 4
+            [units_born],  # 1
+            [units_killed],  # 1
+            [upgrade_count],  # 1
+            duration,  # 1
+        ]
+    )
+
+    return player_feat
+
+
+def rich_transform(sc2_replay: SC2ReplayData) -> Tuple[torch.Tensor, int] | None:
     """Extract rich features from an SC2 replay.
 
     Returns:
         Tuple of (features_tensor [2, N_features], label) or None to skip.
     """
     # Get outcome
-    label = _get_outcome(sc2_replay)
+    label = _get_outcome(sc2_replay=sc2_replay)
     if label is None:
         return None
 
@@ -242,70 +342,18 @@ def rich_transform(sc2_replay: SC2ReplayData) -> Optional[Tuple[torch.Tensor, in
     try:
         game_duration = float(sc2_replay.header.elapsedGameLoops)
     except (AttributeError, ValueError, TypeError):
-        game_duration = 0.0
+        return None
 
     player_features = []
 
     for player_id in [1, 2]:
-        # --- 1. Temporal economy snapshots ---
-        events = _get_player_stats_timeseries(sc2_replay, player_id)
-
-        if not events:
-            return None  # Skip replays without economy data
-
-        early_stats = _temporal_snapshot(events, 0.0, 0.33)  # first third
-        mid_stats = _temporal_snapshot(events, 0.33, 0.67)  # middle third
-        late_stats = _temporal_snapshot(events, 0.67, 1.0)  # last third
-
-        # --- 2. Final economy state ---
-        final_stats = _get_stats_values(events[-1].stats)
-        final_stats = np.array(final_stats, dtype=np.float32)
-
-        # --- 3. Economy rate of change (late - early) ---
-        econ_delta = late_stats - early_stats
-
-        # --- 4. Player meta stats ---
-        player_info = _get_player_info(sc2_replay, player_id)
-        if player_info is None:
+        player_feat = prepare_player_features(
+            sc2_replay=sc2_replay,
+            player_id=player_id,
+            game_duration=game_duration,
+        )
+        if not player_feat:
             return None
-
-        meta_features = np.array(
-            [
-                float(player_info.APM),
-                float(player_info.MMR) if player_info.MMR else 0.0,
-                float(player_info.SQ) if player_info.SQ else 0.0,
-                float(player_info.supplyCappedPercent)
-                if player_info.supplyCappedPercent
-                else 0.0,
-            ],
-            dtype=np.float32,
-        )
-
-        # --- 5. Unit activity ---
-        units_born = float(_count_units_born(sc2_replay, player_id))
-        units_killed = float(_count_units_died_by_opponent(sc2_replay, player_id))
-
-        # --- 6. Upgrades ---
-        upgrade_count = float(_count_upgrades(sc2_replay, player_id))
-
-        # --- 7. Game duration (same for both, but included) ---
-        duration = np.array([game_duration], dtype=np.float32)
-
-        # Concatenate all features for this player
-        player_feat = np.concatenate(
-            [
-                early_stats,  # 39
-                mid_stats,  # 39
-                late_stats,  # 39
-                final_stats,  # 39
-                econ_delta,  # 39
-                meta_features,  # 4
-                [units_born],  # 1
-                [units_killed],  # 1
-                [upgrade_count],  # 1
-                duration,  # 1
-            ]
-        )
 
         player_features.append(player_feat)
 
