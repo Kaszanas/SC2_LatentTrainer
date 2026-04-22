@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
+from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
 from latent_trainer.paths.data import (
     FEATURE_NAMES,
     decode_features,
@@ -22,12 +23,12 @@ from latent_trainer.paths.plot import (
     plot_main,
     plot_three_signal_feedback,
 )
-from latent_trainer.settings import OUTPUT_DIR, PLOTS_DIR
+from latent_trainer.settings import DATA_DIR, OUTPUT_DIR, PLOTS_DIR
 
 
 def run_path_charting_pipeline(
     *,
-    model: str,
+    model: LitGuidedVAE,
     cache: str,
     chosen: int,
     player_idx: int,
@@ -38,19 +39,23 @@ def run_path_charting_pipeline(
 ) -> None:
     """Common post-path logic: P(win) curve, feedback, plots."""
 
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
+    guided_vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model_path=model,
-        cached_dataset_filepath=cache,
+        cached_dataset_filepath=DATA_DIR / cache,
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
 
-    latents_p0 = encode_player(vae, val_X[:, 0, :])
-    latents_p1 = encode_player(vae, val_X[:, 1, :])
+    latents_p0 = encode_player(vae=guided_vae.model, data=val_X[:, 0, :])
+    latents_p1 = encode_player(vae=guided_vae.model, data=val_X[:, 1, :])
 
     # Win cloud: for each game, the winner's latent.
     # label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
+    win_latents = torch.where(
+        (labels_tensor == 1).unsqueeze(1),
+        latents_p0,
+        latents_p1,
+    )
     loss_latents = torch.where(
         (labels_tensor == 0).unsqueeze(1), latents_p0, latents_p1
     )
@@ -61,7 +66,7 @@ def run_path_charting_pipeline(
 
     score_fn = partial(
         opponent_aware_score,
-        classifier=classifier,
+        classifier=guided_vae.model.classifier,
         opponent_z=opponent_z,
         player_idx=player_idx,
     )
@@ -77,7 +82,7 @@ def run_path_charting_pipeline(
     print("Computing three-signal feedback...")
     feedback = compute_feedback(
         path_z=path_z_np,
-        decode_fn=vae.decode,
+        decode_fn=guided_vae.decode,
         score_fn=score_fn,
         norm_mean=norm_mean,
         norm_std=norm_std,
@@ -94,7 +99,12 @@ def run_path_charting_pipeline(
         save_path=OUTPUT_DIR / f"feedback_{strategy}_three_signal.png",
         top_k=top_k,
     )
-    path_features = decode_features(vae, path_z_tensor, norm_mean, norm_std)
+    path_features = decode_features(
+        vae=guided_vae,
+        z=path_z_tensor,
+        norm_mean=norm_mean,
+        norm_std=norm_std,
+    )
     plot_feature_evolution(
         path_features=path_features,
         delta=feedback["_raw_delta"],
