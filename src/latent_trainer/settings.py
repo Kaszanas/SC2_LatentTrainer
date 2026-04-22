@@ -27,6 +27,9 @@ LOGGING_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 OUTPUT_DIR = Path("./output").resolve()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+CHECKPOINTS_DIR = OUTPUT_DIR / "checkpoints"
+CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+
 DATA_DIR = Path("./data").resolve()
 
 PLOTS_DIR = OUTPUT_DIR / "plots"
