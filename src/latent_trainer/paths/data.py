@@ -96,27 +96,22 @@ def decode_features(vae, z, norm_mean, norm_std) -> np.ndarray:
 def load_model_and_data(
     model_path: Path,
     cached_dataset_filepath: Path,
-) -> tuple[LitGuidedVAE, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
+) -> tuple[LitGuidedVAE, torch.Tensor, torch.Tensor]:
 
     # TODO: If there are other models than Guided VAE, this function
     # TODO: will need to take the model class as an argument instead of hardcoding:
+    vae_model = LitGuidedVAE.load_from_checkpoint(checkpoint_path=model_path)
+    vae_model.eval()
 
-    vae = LitGuidedVAE.load_from_checkpoint(checkpoint_path=model_path)
-    vae.eval()
-
-    # norm_mean = info["normalization"]["mean"]
-    # norm_std = info["normalization"]["std"]
     data = load_and_normalize(cached_dataset_filepath=cached_dataset_filepath)
 
-    return vae, data.val_X, data.val_y, 0, 0, vae.vae_latent_dim
+    return vae_model, data.test_X, data.test_y
 
 
-# ---------------------------------------------------------------------------
 # Opponent-aware score / logit functions
 #
 # These closures adapt the two-stage (player_z, opponent_z) classifier
 # into the generic callable interface expected by path strategies.
-# ---------------------------------------------------------------------------
 def opponent_aware_score(
     z: torch.Tensor,
     *,
@@ -142,7 +137,8 @@ def opponent_aware_logit(
     opponent_z: torch.Tensor,
     player_idx: int,
 ) -> torch.Tensor:
-    """Pre-sigmoid logit for each row in z, with a fixed opponent.
+    """
+    Pre-sigmoid logit for each row in z, with a fixed opponent.
 
     Strips the final Sigmoid layer from the classifier so we get
     raw logits — better gradients far from the decision boundary.
