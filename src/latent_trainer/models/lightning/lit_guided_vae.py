@@ -28,7 +28,12 @@ class LitGuidedVAE(pl.LightningModule):
 
         Parameters
         ----------
-        n_vae_dis:
+        input_dim:
+            Input feature dimension (depends on the transform used).
+        encoder_hidden_dims:
+            Hidden layer widths for the encoder.  The decoder mirrors these in
+            reverse order.  Defaults to ``[64, 128, 256, 512]``.
+        vae_latent_dim:
             Size of the VAE latent distribution.
         learning_rate:
             Learning rate for the VAE and adversarial optimizers.
@@ -40,20 +45,29 @@ class LitGuidedVAE(pl.LightningModule):
             Weight decay for the classifier optimizer.
         classification_weight:
             Weight for the classification loss.
-        input_dim:
-            Input feature dimension (depends on the transform used).
-        encoder_hidden_dims:
-            Hidden layer widths for the encoder.  The decoder mirrors these in
-            reverse order.  Defaults to ``[64, 128, 256, 512]``.
-        k_cls_dims:
+        supervised_dim:
             Number of latent dims (per player) reserved for supervised
-            classification.  The remaining ``n_vae_dis - k_cls_dims`` dims are
+            classification.  The remaining ``vae_latent_dim - supervised_dim`` dims are
             adversarially disentangled.
         """
         super().__init__()
         self.save_hyperparameters()
 
-        # Manual optimisation (3 optimizers)
+        # Dimensions:
+        self.input_dim = input_dim
+        self.encoder_hidden_dims = encoder_hidden_dims
+        self.supervised_dim = supervised_dim
+        self.vae_latent_dim = vae_latent_dim
+
+        # Hyperparameters:
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.learning_rate_classifier = learning_rate_classifier
+        self.weight_decay_c = weight_decay_c
+        self.classification_weight = classification_weight
+
+        # Manual optimisation (3 optimizers), required for the
+        # alternating adversarial training steps:
         self.automatic_optimization = False
 
         self.model = suGuidedVAE(
@@ -70,13 +84,6 @@ class LitGuidedVAE(pl.LightningModule):
             vae_latent_dim=vae_latent_dim,
             supervised_dim=supervised_dim,
         )
-
-        self.supervised_dim = supervised_dim
-        self.learning_rate = learning_rate
-        self.weight_decay = weight_decay
-        self.learning_rate_classifier = learning_rate_classifier
-        self.weight_decay_c = weight_decay_c
-        self.classification_weight = classification_weight
 
     # Helpers
     @staticmethod
