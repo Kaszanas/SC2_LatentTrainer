@@ -1,6 +1,8 @@
 # ---------------------------------------------------------------------------
 # Model loading and encoding
 # ---------------------------------------------------------------------------
+from pathlib import Path
+
 import numpy as np
 import torch
 
@@ -92,8 +94,8 @@ def decode_features(vae, z, norm_mean, norm_std) -> np.ndarray:
 
 
 def load_model_and_data(
-    model_path: str,
-    cache_path: str,
+    model_path: Path,
+    cached_dataset_filepath: Path,
 ) -> tuple:
     info = torch.load(model_path, weights_only=False)
 
@@ -105,7 +107,7 @@ def load_model_and_data(
 
     norm_mean = info["normalization"]["mean"]
     norm_std = info["normalization"]["std"]
-    data = load_and_normalize(cache_path)
+    data = load_and_normalize(cached_dataset_filepath=cached_dataset_filepath)
 
     return vae, classifier, data.val_X, data.val_y, norm_mean, norm_std, vae.latent_dim
 

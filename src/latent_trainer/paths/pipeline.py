@@ -40,7 +40,7 @@ def run_path_charting_pipeline(
 
     vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model_path=model,
-        cache_path=cache,
+        cached_dataset_filepath=cache,
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
@@ -76,7 +76,7 @@ def run_path_charting_pipeline(
 
     print("Computing three-signal feedback...")
     feedback = compute_feedback(
-        path_z_np,
+        path_z=path_z_np,
         decode_fn=vae.decode,
         score_fn=score_fn,
         norm_mean=norm_mean,
