@@ -8,7 +8,6 @@ import numpy as np
 import torch
 
 from latent_trainer.features.data_utils import load_and_normalize
-from latent_trainer.models.lightning.lit_classifier import LatentClassifier
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
 
 # ---------------------------------------------------------------------------
@@ -116,54 +115,66 @@ def load_model_and_data(
 def opponent_aware_score(
     z: torch.Tensor,
     *,
-    classifier: LatentClassifier,
+    guided_vae: LitGuidedVAE,
     opponent_z: torch.Tensor,
     player_idx: int,
 ) -> torch.Tensor:
-    """P(z wins) for each row in z against a fixed opponent."""
+    """
+    P(z wins) for each row in z against a fixed opponent.
+
+    The classifier operates only on the supervised latent dims
+    (first ``supervised_dim`` entries).
+    We derive that count from the classifier's
+    input layer so callers don't need to pass it explicitly.
+    """
+
+    classifier = guided_vae.model.classifier
+
+    sup_dim = classifier[0].in_features // 2
     n = z.shape[0]
-    opp = opponent_z.unsqueeze(0).expand(n, -1)
+    z_cls = z[:, :sup_dim]
+    opp_cls = opponent_z[:sup_dim].unsqueeze(0).expand(n, -1)
     if player_idx == 0:
-        combined = torch.cat([z, opp], dim=1)
+        combined = torch.cat([z_cls, opp_cls], dim=1)
         return classifier(combined).squeeze(-1)
-    else:
-        combined = torch.cat([opp, z], dim=1)
-        return 1.0 - classifier(combined).squeeze(-1)
+
+    combined = torch.cat([opp_cls, z_cls], dim=1)
+    return 1.0 - classifier(combined).squeeze(-1)
 
 
 def opponent_aware_logit(
     z: torch.Tensor,
     *,
-    classifier: LatentClassifier,
+    guided_vae: LitGuidedVAE,
     opponent_z: torch.Tensor,
     player_idx: int,
 ) -> torch.Tensor:
-    """
-    Pre-sigmoid logit for each row in z, with a fixed opponent.
+    """Pre-sigmoid logit for each row in z, with a fixed opponent.
 
     Strips the final Sigmoid layer from the classifier so we get
     raw logits — better gradients far from the decision boundary.
     """
+
+    classifier = guided_vae.model.classifier
+
+    sup_dim = classifier[0].in_features // 2
     n = z.shape[0]
-    opp = opponent_z.unsqueeze(0).expand(n, -1)
+    z_cls = z[:, :sup_dim]
+    opp_cls = opponent_z[:sup_dim].unsqueeze(0).expand(n, -1)
     if player_idx == 0:
-        combined = torch.cat([z, opp], dim=1)
+        combined = torch.cat([z_cls, opp_cls], dim=1)
     else:
-        combined = torch.cat([opp, z], dim=1)
+        combined = torch.cat([opp_cls, z_cls], dim=1)
     # Forward through all layers except the final Sigmoid
     h = combined
-    for layer in list(classifier.net.children())[:-1]:
+    for layer in list(classifier.children())[:-1]:
         h = layer(h)
     logit = h.squeeze(-1)
     # Negate for player 1 so the logit sign matches "z is winning".
     return logit if player_idx == 0 else -logit
 
 
-# ---------------------------------------------------------------------------
 # Shared path-charting context
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class PathContext:
     guided_vae: LitGuidedVAE
@@ -235,7 +246,9 @@ def prepare_path_context(
     )
     player_idx = int(labels[chosen])
     sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
-    print(f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})")
+    print(
+        f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
+    )
 
     return PathContext(
         guided_vae=guided_vae,
