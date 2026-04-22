@@ -81,18 +81,13 @@ def _temporal_snapshot(
         Averaged stats values over the specified time window, or zeros if no events in window.
     """
 
-    if not events:
-        return np.zeros(39)
-
     n = len(events)
     start_idx = int(start_frac * n)
     end_idx = max(int(end_frac * n), start_idx + 1)
 
     window = events[start_idx:end_idx]
-    if not window:
-        return np.zeros(39)
 
-    values = [_get_stats_values(e.stats) for e in window]
+    values = [_get_stats_values(stats_obj=e.stats) for e in window]
     return np.mean(values, axis=0)
 
 
@@ -307,6 +302,10 @@ def prepare_player_features(
 
     # --- 7. Game duration (same for both, but included) ---
     duration = np.array([game_duration], dtype=np.float32)
+
+    # REVIEW: Why do we have duration in here?
+    # REVIEW: What will the model learn to do with duration? It is not player
+    # REVIEW: specific information.
 
     # Concatenate all features for this player
     player_feat = np.concatenate(
