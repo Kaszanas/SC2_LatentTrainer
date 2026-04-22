@@ -14,26 +14,26 @@ Usage:
 
 import logging
 import os
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, as_completed, wait
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from dataclasses import asdict
 from pathlib import Path
-from time import perf_counter
 from typing import Callable
 
-import click
 import torch
 from sc2_datasets.lightning.sc2_egset_datamodule import (
     SC2EGSetDataModuleSingleJSON,
 )
 from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData
-from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
-    economy_average_vs_outcome,
-)
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 
-from latent_trainer.features.rich_transform import rich_transform
 from latent_trainer.features.type import CachedDatasetFileSpec
 from latent_trainer.settings import DATA_DIR
 
@@ -61,6 +61,7 @@ def _transform_single_object(
 
 
 def process_batch(
+    executor: ProcessPoolExecutor | ThreadPoolExecutor,
     n_workers: int,
     dataset_object: Dataset,
     transform_fn: Callable,
@@ -72,7 +73,7 @@ def process_batch(
     skipped = 0
     errors = 0
 
-    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+    with executor(max_workers=n_workers) as executor:
         futures = [
             executor.submit(
                 _transform_single_object,
@@ -108,6 +109,7 @@ def process_batch(
 
 def process_set(
     dataset_object: DataLoader,
+    executor: ProcessPoolExecutor | ThreadPoolExecutor,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]] = None,
     n_workers: int = 24,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
@@ -146,6 +148,7 @@ def process_set(
     for start_index in range(0, total_size, batch_size):
         end_index = min(start_index + batch_size, total_size)
         batch_features, batch_labels, batch_skipped, batch_errors = process_batch(
+            executor=executor,
             n_workers=n_workers,
             dataset_object=dataset_object,
             transform_fn=transform_fn,
@@ -219,6 +222,47 @@ def check_split(
     return total
 
 
+def debug_preprocess_dataset(
+    single_json_dataset_path: Path | str,
+    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
+) -> None:
+
+    # Initialize datamodule (this downloads + extracts if needed)
+    logging.info("[1/3] Loading SC2EGSet datamodule (downloading if needed)...")
+
+    datamodule = SC2EGSetDataModuleSingleJSON(
+        json_path=single_json_dataset_path,
+        download=False,
+    )
+
+    # Initialize the datamodule to get train/test/val splits (but skip any transforms for now)
+    datamodule.prepare_data()
+    datamodule.setup("fit")
+
+    # Get train, test, and val datasets
+    train_dataset = datamodule.train_dataset
+    test_dataset = datamodule.test_dataset
+    val_dataset = datamodule.val_dataset
+
+    train_dataset.indices = sorted(train_dataset.indices)
+    test_dataset.indices = sorted(test_dataset.indices)
+    val_dataset.indices = sorted(val_dataset.indices)
+
+    for i in range(len(train_dataset)):
+        replay = train_dataset[i]
+
+        result = process_replay(
+            replay=replay,
+            transform_fn=transform_fn,
+        )
+
+        if result is None:
+            logging.info(f"Replay {i} skipped (transform returned None)")
+        else:
+            features, label = result
+            logging.info(f"Replay {i} processed successfully. Label: {label}")
+
+
 def preprocess_dataset(
     transform_name: str,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
@@ -280,20 +324,23 @@ def preprocess_dataset(
     # Process all replays
     logging.info("[2/3] Processing replays and applying transform...")
 
-    logging.info("  Processing training set...")
+    logging.info("Processing training set...")
     train_features, train_labels, skipped_train, errors_train = process_set(
+        executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
         dataset_object=train_dataset,
         transform_fn=transform_fn,
         n_workers=n_workers,
     )
-    logging.info("  Processing test set...")
+    logging.info("Processing test set...")
     test_features, test_labels, skipped_test, errors_test = process_set(
+        executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
         dataset_object=test_dataset,
         transform_fn=transform_fn,
         n_workers=n_workers,
     )
-    logging.info("  Processing validation set...")
+    logging.info("Processing validation set...")
     val_features, val_labels, skipped_val, errors_val = process_set(
+        executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
         dataset_object=val_dataset,
         transform_fn=transform_fn,
         n_workers=n_workers,
@@ -342,24 +389,6 @@ def preprocess_dataset(
     logging.info(f"{'=' * 60}")
 
 
-class TransformEnumFunction(click.Choice):
-    """Custom Click Choice type that returns the actual transform function instead of the string name."""
-
-    _TRANSFORM_NAMES: dict[Callable, str] = {
-        rich_transform: "rich",
-        economy_average_vs_outcome: "averaged_economy",
-    }
-
-    def convert(self, value, param, ctx):
-        match value:
-            case "rich":
-                return rich_transform
-            case "averaged_economy":
-                return economy_average_vs_outcome
-            case _:
-                raise click.BadParameter(f"Invalid transform choice: {value}")
-
-
 def _transform_index_chunk(
     dataset_object: DataLoader,
     indices: list[int],
@@ -394,18 +423,11 @@ def _transform_index_chunk(
             )
             set_labels.append(label)
 
-    # profiler.disable()
-    # profile_output = Path(
-    #     f"E:/Projects/1_Python/latent_trainer_fresh/SCI_SC2_LatentTrainer/{next_chunk}_preprocess_dataset_profile_no_chunk.prof"
-    # ).resolve()
-
-    # profiler.dump_stats(str(profile_output))
-    # click.echo(f"Saved cProfile stats to: {profile_output}")
-
     return set_features, set_labels, skipped, errors
 
 
 def process_set_chunked_single_pool(
+    executor: ProcessPoolExecutor | ThreadPoolExecutor,
     dataset_object: DataLoader,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]] = None,
     n_workers: int = 8,
@@ -436,7 +458,7 @@ def process_set_chunked_single_pool(
     pending_futures = set()
     next_chunk = 0
 
-    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+    with executor(max_workers=n_workers) as executor:
         with tqdm(total=total_size, desc=f"{set_name} (chunked-single-pool)") as pbar:
             while (
                 next_chunk < len(chunks) and len(pending_futures) < max_inflight_tasks
@@ -521,9 +543,9 @@ def preprocess_dataset_chunked_profile(
         val_dataset=val_dataset,
     )
 
-    t0 = perf_counter()
     train_features, train_labels, skipped_train, errors_train = (
         process_set_chunked_single_pool(
+            executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
             dataset_object=train_dataset,
             transform_fn=transform_fn,
             n_workers=n_workers,
@@ -532,11 +554,10 @@ def preprocess_dataset_chunked_profile(
             set_name="train",
         )
     )
-    t1 = perf_counter()
-    logging.info(f"  train done in {(t1 - t0):.1f}s")
 
     test_features, test_labels, skipped_test, errors_test = (
         process_set_chunked_single_pool(
+            executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
             dataset_object=test_dataset,
             transform_fn=transform_fn,
             n_workers=n_workers,
@@ -545,10 +566,9 @@ def preprocess_dataset_chunked_profile(
             set_name="test",
         )
     )
-    t2 = perf_counter()
-    logging.info(f"  test done in {(t2 - t1):.1f}s")
 
     val_features, val_labels, skipped_val, errors_val = process_set_chunked_single_pool(
+        executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
         dataset_object=val_dataset,
         transform_fn=transform_fn,
         n_workers=n_workers,
@@ -556,8 +576,6 @@ def preprocess_dataset_chunked_profile(
         max_inflight_tasks=max_inflight_tasks,
         set_name="val",
     )
-    t3 = perf_counter()
-    logging.info(f"  val done in {(t3 - t2):.1f}s")
 
     train_features_tensor = torch.stack(train_features)
     train_labels_tensor = torch.tensor(train_labels, dtype=torch.long)
@@ -580,12 +598,10 @@ def preprocess_dataset_chunked_profile(
     path_to_save = output_directory / f"cached_dataset_{transform_name}_chunked.pt"
     torch.save(asdict(file_spec), path_to_save)
 
-    total_elapsed = t3 - t0
     logging.info(f"\n{'=' * 60}")
     logging.info("Chunked profile pre-processing complete!")
     logging.info(f"  Transform:        {transform_name}")
     logging.info(f"  Total replays:    {total}")
-    logging.info(f"  Total time (s):   {total_elapsed:.1f}")
     logging.info(f"  Valid train:      {len(train_features)}")
     logging.info(f"  Valid val:        {len(val_features)}")
     logging.info(f"  Skipped (None):   {skipped_train + skipped_val + skipped_test}")
