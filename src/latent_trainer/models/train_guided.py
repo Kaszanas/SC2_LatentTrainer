@@ -55,11 +55,10 @@ def train_guided(
         encoder_hidden_dims=encoder_hidden_dims,
     )
 
-    checkpoints_path = output_dir / "checkpoints"
     filename_pattern = "model-{epoch:02d}-{val_vae_loss:.4f}"
 
     checkpoint_callback = ModelCheckpoint(
-        dirpath=checkpoints_path,
+        dirpath=CHECKPOINTS_DIR,
         filename=filename_pattern,
         monitor="val_vae_loss",
         mode="min",
