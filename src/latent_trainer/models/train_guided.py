@@ -55,15 +55,17 @@ def train_guided(
         encoder_hidden_dims=encoder_hidden_dims,
     )
 
-    filename_pattern = "model-{epoch:02d}-{val_vae_loss:.4f}"
+    filename_pattern = "guided-vae-{epoch:02d}-{val_vae_loss:.4f}"
+
+    run_checkpoint_dir = CHECKPOINTS_DIR / experiment_name / run_name
 
     checkpoint_callback = ModelCheckpoint(
-        dirpath=CHECKPOINTS_DIR,
+        dirpath=run_checkpoint_dir,
         filename=filename_pattern,
         monitor="val_vae_loss",
         mode="min",
         save_last=True,
-        save_top_k=3,
+        save_top_k=5,
     )
     early_stopping = EarlyStopping(
         monitor="val_vae_loss",
@@ -105,11 +107,18 @@ def train_guided(
         val_dataloaders=val_loader,
     )
 
+    # Save the best model under a custom name for easier retrieval later:
+    best_model_path = run_checkpoint_dir / "best.ckpt"
+    guided_vae_model = LitGuidedVAE.load_from_checkpoint(
+        checkpoint_callback.best_model_path
+    )
+    trainer.save_checkpoint(best_model_path)
+
     # Save Lighting Model with best hyperparameters (for easy loading later)
     log_artifact(
-        checkpoint_dir=CHECKPOINTS_DIR,
+        checkpoint_dir=run_checkpoint_dir,
         mlflow_logger=mlf_logger,
-        model_path=Path(checkpoint_callback.best_model_path),
+        model_path=best_model_path,
     )
 
     return guided_vae_model
