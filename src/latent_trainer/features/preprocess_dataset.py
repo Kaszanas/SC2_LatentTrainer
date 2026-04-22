@@ -1,8 +1,9 @@
 """Pre-process the SC2EGSet dataset and cache transformed tensors to disk.
 
 This script iterates through all replays once, applies the transform,
-catches broken replays, and saves valid (features, label) pairs to a .pt file.
-Subsequent training runs can load from this cache instantly.
+catches broken replays, and saves valid (features, label) pairs to a memmap
+TensorDict cache directory. Subsequent training runs can load from this cache
+instantly.
 
 Usage:
     # Default (rich transform):
@@ -10,10 +11,24 @@ Usage:
 
     # Legacy economy-average transform:
     uv run python src/latent_trainer/features/preprocess_dataset.py --transform economy
+
+On-disk format (memmap TensorDict):
+
+    <output_directory>/cached_dataset_<transform_name>/
+      train/
+        features/   TensorDict batch_size=[N_train, 2]
+                    nested keys: early, mid, late, final, delta,
+                                 meta, units_born, units_killed, upgrade_count
+        labels      Tensor [N_train], long  (0=loss, 1=win)
+      val/
+        features/   TensorDict batch_size=[N_val, 2]
+        labels      Tensor [N_val], long
+      test/
+        features/   TensorDict batch_size=[N_test, 2]
+        labels      Tensor [N_test], long
 """
 
 import logging
-import os
 from concurrent.futures import (
     FIRST_COMPLETED,
     ProcessPoolExecutor,
@@ -21,7 +36,6 @@ from concurrent.futures import (
     as_completed,
     wait,
 )
-from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
@@ -30,11 +44,11 @@ from sc2_datasets.lightning.sc2_egset_datamodule import (
     SC2EGSetDataModuleSingleJSON,
 )
 from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData
+from tensordict import TensorDict
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 
-from latent_trainer.features.type import CachedDatasetFileSpec
 from latent_trainer.settings import DATA_DIR
 
 
@@ -42,7 +56,7 @@ def _transform_single_object(
     dataset_object: DataLoader,
     index: int,
     transform_fn: Callable,
-) -> tuple[torch.Tensor, torch.Tensor] | None | Exception:
+) -> tuple[TensorDict, int] | None | Exception:
 
     try:
         replay = dataset_object[index]
@@ -67,9 +81,9 @@ def process_batch(
     transform_fn: Callable,
     start_index: int,
     end_index: int,
-) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
-    set_features = []
-    set_labels = []
+) -> tuple[list[TensorDict], list[int], int, int]:
+    set_features: list[TensorDict] = []
+    set_labels: list[int] = []
     skipped = 0
     errors = 0
 
@@ -97,11 +111,7 @@ def process_batch(
                 skipped += 1
             else:
                 features, label = result
-                set_features.append(
-                    features
-                    if isinstance(features, torch.Tensor)
-                    else torch.tensor(features, dtype=torch.float32)
-                )
+                set_features.append(features)
                 set_labels.append(label)
 
     return set_features, set_labels, skipped, errors
@@ -110,9 +120,9 @@ def process_batch(
 def process_set(
     dataset_object: DataLoader,
     executor: ProcessPoolExecutor | ThreadPoolExecutor,
-    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]] = None,
+    transform_fn: Callable[[SC2ReplayData], tuple[TensorDict, int] | None] = None,
     n_workers: int = 24,
-) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
+) -> tuple[list[TensorDict], list[int], int, int]:
     """
     Process a dataset split (train/test/val) in parallel,
     apply the transform, and return lists of features and labels along with counts of skipped and errored replays.
@@ -121,17 +131,17 @@ def process_set(
     ----------
     dataset_object : DataLoader
         Dataloader for the dataset split to process (train/test/val)
-    transform_fn : Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]], optional
+    transform_fn : Callable[[SC2ReplayData], tuple[TensorDict, int] | None], optional
         Function to apply as the transform, by default None
     n_workers : int, optional
         Number of worker processes to use for parallel processing, by default 24
 
     Returns
     -------
-    tuple[list[torch.Tensor], list[torch.Tensor], int, int]
+    tuple[list[TensorDict], list[int], int, int]
         A tuple containing:
-        - List of feature tensors
-        - List of label tensors
+        - List of feature TensorDicts (each batch_size=[2])
+        - List of labels (int)
         - Count of skipped replays (where transform returned None)
         - Count of errors encountered during processing
     """
@@ -139,8 +149,8 @@ def process_set(
     skipped = 0
     errors = 0
 
-    set_features = []
-    set_labels = []
+    set_features: list[TensorDict] = []
+    set_labels: list[int] = []
 
     batch_size = 20_000
     total_size = len(dataset_object)
@@ -166,10 +176,9 @@ def process_set(
 
 def process_replay(
     replay: SC2ReplayData,
-    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
-) -> tuple[torch.Tensor, torch.Tensor] | None:
+    transform_fn: Callable[[SC2ReplayData], tuple[TensorDict, int] | None],
+) -> tuple[TensorDict, int] | None:
     """Apply transform and return (features, label) or None."""
-    # Rich transform takes the raw replay directly
     result = transform_fn(replay)
 
     if result is None:
@@ -224,7 +233,7 @@ def check_split(
 
 def debug_preprocess_dataset(
     single_json_dataset_path: Path | str,
-    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
+    transform_fn: Callable[[SC2ReplayData], tuple[TensorDict, int] | None],
 ) -> None:
 
     # Initialize datamodule (this downloads + extracts if needed)
@@ -263,9 +272,56 @@ def debug_preprocess_dataset(
             logging.info(f"Replay {i} processed successfully. Label: {label}")
 
 
+def _save_dataset(
+    output_directory: Path,
+    transform_name: str,
+    train_features: TensorDict,   # batch_size=[N_train, 2] — stacked/catted by caller
+    train_labels: list[int],
+    val_features: TensorDict,     # batch_size=[N_val, 2]
+    val_labels: list[int],
+    test_features: TensorDict,    # batch_size=[N_test, 2]
+    test_labels: list[int],
+) -> Path:
+    """Wrap pre-stacked feature TensorDicts with labels and save as a memmap TensorDict.
+
+    Returns the path to the saved cache directory.
+    """
+    train_labels_tensor = torch.tensor(train_labels, dtype=torch.long)
+    val_labels_tensor   = torch.tensor(val_labels,   dtype=torch.long)
+    test_labels_tensor  = torch.tensor(test_labels,  dtype=torch.long)
+
+    n_features = sum(t.numel() for t in train_features[0, 0].values(True, True))
+
+    train_td = TensorDict(
+        {"features": train_features, "labels": train_labels_tensor},
+        batch_size=[len(train_labels_tensor)],
+    )
+    val_td = TensorDict(
+        {"features": val_features, "labels": val_labels_tensor},
+        batch_size=[len(val_labels_tensor)],
+    )
+    test_td = TensorDict(
+        {"features": test_features, "labels": test_labels_tensor},
+        batch_size=[len(test_labels_tensor)],
+    )
+
+    dataset_td = TensorDict(
+        {"train": train_td, "val": val_td, "test": test_td},
+        batch_size=[],
+    )
+
+    save_dir = output_directory / f"cached_dataset_{transform_name}"
+    dataset_td.memmap(str(save_dir))
+
+    logging.info(f"  Feature batch:    {train_features.shape}  n_features={n_features}")
+    logging.info(f"  Cache dir:        {save_dir}")
+
+    return save_dir
+
+
 def preprocess_dataset(
     transform_name: str,
-    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
+    transform_fn: Callable[[SC2ReplayData], tuple[TensorDict, int] | None],
     single_json_dataset_path: Path | str,
     output_directory: Path | str = DATA_DIR,
     n_workers: int = 24,
@@ -277,16 +333,13 @@ def preprocess_dataset(
     ----------
     transform_name : str
         The name of the transformation (e.g. ``"rich"`` or ``"averaged_economy"``).
-        Used to label the output file as ``cached_dataset_<transform_name>.pt``.
-    transform_fn : Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]]
+        Used to label the output directory as ``cached_dataset_<transform_name>``.
+    transform_fn : Callable[[SC2ReplayData], tuple[TensorDict, int] | None]
         Function that maps a raw SC2ReplayData replay to a (features, label) pair.
-    dataset_name : str, optional
-        Name of the dataset, matching the JSON file stem, by default ``"sc2egset_merged"``.
-    single_json_dataset_path : Path | str, optional
-        Path to the single-JSON index file for the dataset,
-        by default ``H:/sc2egset_merged/sc2egset_merged.json``.
+    single_json_dataset_path : Path | str
+        Path to the single-JSON index file for the dataset.
     output_directory : Path | str, optional
-        Directory where the cached ``.pt`` file will be written,
+        Directory where the cached memmap directory will be written,
         by default ``./data``.
     n_workers : int, optional
         Number of worker processes for parallel replay processing, by default 24.
@@ -346,35 +399,19 @@ def preprocess_dataset(
         n_workers=n_workers,
     )
 
-    # Stack into tensors
+    # Stack and save
     logging.info("\n[3/3] Saving cached dataset...")
 
-    train_features_tensor = torch.stack(train_features)
-    train_labels_tensor = torch.tensor(train_labels, dtype=torch.long)
-    test_features_tensor = torch.stack(test_features)
-    test_labels_tensor = torch.tensor(test_labels, dtype=torch.long)
-    val_features_tensor = torch.stack(val_features)
-    val_labels_tensor = torch.tensor(val_labels, dtype=torch.long)
-
-    file_spec = CachedDatasetFileSpec(
-        train_features=train_features_tensor,
-        train_labels=train_labels_tensor,
-        test_features=test_features_tensor,
-        test_labels=test_labels_tensor,
-        val_features=val_features_tensor,
-        val_labels=val_labels_tensor,
-        transform=transform_name,
+    save_dir = _save_dataset(
+        output_directory=output_directory,
+        transform_name=transform_name,
+        train_features=torch.stack(train_features),   # batch_size=[N_train, 2]
+        train_labels=train_labels,
+        val_features=torch.stack(val_features),       # batch_size=[N_val, 2]
+        val_labels=val_labels,
+        test_features=torch.stack(test_features),     # batch_size=[N_test, 2]
+        test_labels=test_labels,
     )
-
-    # Save
-    os.makedirs(os.path.dirname(output_directory), exist_ok=True)
-    path_to_save = output_directory / f"cached_dataset_{transform_name}.pt"
-    torch.save(
-        asdict(file_spec),
-        path_to_save,
-    )
-
-    file_size_mb = os.path.getsize(path_to_save) / (1024 * 1024)
 
     logging.info(f"\n{'=' * 60}")
     logging.info("Pre-processing complete!")
@@ -384,8 +421,7 @@ def preprocess_dataset(
     logging.info(f"  Valid val:        {len(val_features)}")
     logging.info(f"  Skipped (None):   {skipped_train + skipped_val + skipped_test}")
     logging.info(f"  Errors:           {errors_train + errors_val + errors_test}")
-    logging.info(f"  Feature shape:    {train_features_tensor.shape}")
-    logging.info(f"  Cache file:       {output_directory} ({file_size_mb:.1f} MB)")
+    logging.info(f"  Cache dir:        {save_dir}")
     logging.info(f"{'=' * 60}")
 
 
@@ -393,13 +429,15 @@ def _transform_index_chunk(
     dataset_object: DataLoader,
     indices: list[int],
     transform_fn: Callable,
-) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
-    """Process a contiguous chunk of replay indices in one worker call."""
-    # profiler = cProfile.Profile()
-    # profiler.enable()
+) -> tuple[TensorDict | None, list[int], int, int]:
+    """Process a contiguous chunk of replay indices in one worker call.
 
-    set_features: list[torch.Tensor] = []
-    set_labels: list[torch.Tensor] = []
+    Returns a stacked TensorDict batch_size=[chunk_valid, 2] rather than a list,
+    reducing IPC pickling overhead when results are returned to the main process.
+    Returns None for the features if every replay in the chunk was skipped/errored.
+    """
+    set_features: list[TensorDict] = []
+    set_labels: list[int] = []
     skipped = 0
     errors = 0
 
@@ -416,30 +454,27 @@ def _transform_index_chunk(
             skipped += 1
         else:
             features, label = result
-            set_features.append(
-                features
-                if isinstance(features, torch.Tensor)
-                else torch.tensor(features, dtype=torch.float32)
-            )
+            set_features.append(features)
             set_labels.append(label)
 
-    return set_features, set_labels, skipped, errors
+    stacked = torch.stack(set_features) if set_features else None
+    return stacked, set_labels, skipped, errors
 
 
 def process_set_chunked_single_pool(
     executor: ProcessPoolExecutor | ThreadPoolExecutor,
     dataset_object: DataLoader,
-    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]] = None,
+    transform_fn: Callable[[SC2ReplayData], tuple[TensorDict, int] | None] = None,
     n_workers: int = 8,
     chunk_size: int = 256,
     max_inflight_tasks: int | None = None,
     set_name: str = "train",
-) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
-    """Alternative fast path: chunked index tasks with one persistent process pool.
+) -> tuple[list[TensorDict], list[int], int, int]:
+    """Fast path: chunked index tasks with one persistent process pool.
 
-    This function is meant for profiling/benchmarking against ``process_set``.
-    It avoids recreating process pools and reduces scheduling overhead by
-    submitting chunks of indices as single tasks.
+    Each chunk is processed by a single worker call that returns a stacked
+    TensorDict batch_size=[chunk_valid, 2] instead of individual batch_size=[2]
+    items, reducing IPC overhead. The caller must ``torch.cat`` the returned list.
     """
     if max_inflight_tasks is None:
         max_inflight_tasks = max(2, int(n_workers * 1.1))
@@ -450,8 +485,8 @@ def process_set_chunked_single_pool(
         for start in range(0, total_size, chunk_size)
     ]
 
-    set_features: list[torch.Tensor] = []
-    set_labels: list[torch.Tensor] = []
+    set_features: list[TensorDict] = []   # each item: batch_size=[chunk_valid, 2]
+    set_labels: list[int] = []
     skipped = 0
     errors = 0
 
@@ -481,12 +516,13 @@ def process_set_chunked_single_pool(
                     chunk_features, chunk_labels, chunk_skipped, chunk_errors = (
                         future.result()
                     )
-                    set_features.extend(chunk_features)
+                    if chunk_features is not None:
+                        set_features.append(chunk_features)
                     set_labels.extend(chunk_labels)
                     skipped += chunk_skipped
                     errors += chunk_errors
 
-                    pbar.update(len(chunk_features) + chunk_skipped + chunk_errors)
+                    pbar.update(len(chunk_labels) + chunk_skipped + chunk_errors)
 
                     if next_chunk < len(chunks):
                         new_future = executor.submit(
@@ -501,9 +537,9 @@ def process_set_chunked_single_pool(
     return set_features, set_labels, skipped, errors
 
 
-def preprocess_dataset_chunked_profile(
+def preprocess_dataset_chunked(
     transform_name: str,
-    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
+    transform_fn: Callable[[SC2ReplayData], tuple[TensorDict, int] | None],
     single_json_dataset_path: Path | str,
     output_directory: Path | str = DATA_DIR,
     n_workers: int = 8,
@@ -512,7 +548,7 @@ def preprocess_dataset_chunked_profile(
 ) -> None:
     """Alternative preprocess entrypoint for performance profiling.
 
-    This leaves ``preprocess_dataset`` unchanged and writes a separate cache file
+    This leaves ``preprocess_dataset`` unchanged and writes a separate cache directory
     with ``_chunked`` suffix for side-by-side comparison.
     """
 
@@ -577,35 +613,24 @@ def preprocess_dataset_chunked_profile(
         set_name="val",
     )
 
-    train_features_tensor = torch.stack(train_features)
-    train_labels_tensor = torch.tensor(train_labels, dtype=torch.long)
-    test_features_tensor = torch.stack(test_features)
-    test_labels_tensor = torch.tensor(test_labels, dtype=torch.long)
-    val_features_tensor = torch.stack(val_features)
-    val_labels_tensor = torch.tensor(val_labels, dtype=torch.long)
-
-    file_spec = CachedDatasetFileSpec(
-        train_features=train_features_tensor,
-        train_labels=train_labels_tensor,
-        test_features=test_features_tensor,
-        test_labels=test_labels_tensor,
-        val_features=val_features_tensor,
-        val_labels=val_labels_tensor,
-        transform=transform_name,
+    save_dir = _save_dataset(
+        output_directory=output_directory,
+        transform_name=transform_name,
+        train_features=torch.cat(train_features),   # batch_size=[N_train, 2]
+        train_labels=train_labels,
+        val_features=torch.cat(val_features),       # batch_size=[N_val, 2]
+        val_labels=val_labels,
+        test_features=torch.cat(test_features),     # batch_size=[N_test, 2]
+        test_labels=test_labels,
     )
-
-    os.makedirs(os.path.dirname(output_directory), exist_ok=True)
-    path_to_save = output_directory / f"cached_dataset_{transform_name}_chunked.pt"
-    torch.save(asdict(file_spec), path_to_save)
 
     logging.info(f"\n{'=' * 60}")
     logging.info("Chunked profile pre-processing complete!")
     logging.info(f"  Transform:        {transform_name}")
     logging.info(f"  Total replays:    {total}")
-    logging.info(f"  Valid train:      {len(train_features)}")
-    logging.info(f"  Valid val:        {len(val_features)}")
+    logging.info(f"  Valid train:      {len(train_labels)}")
+    logging.info(f"  Valid val:        {len(val_labels)}")
     logging.info(f"  Skipped (None):   {skipped_train + skipped_val + skipped_test}")
     logging.info(f"  Errors:           {errors_train + errors_val + errors_test}")
-    logging.info(f"  Feature shape:    {train_features_tensor.shape}")
-    logging.info(f"  Cache file:       {path_to_save}")
+    logging.info(f"  Cache dir:        {save_dir}")
     logging.info(f"{'=' * 60}")
