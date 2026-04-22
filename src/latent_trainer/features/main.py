@@ -5,9 +5,9 @@ from typing import Callable
 import click
 import lightning as pl
 
+from latent_trainer.features.available_transforms import TransformEnumFunction
 from latent_trainer.features.preprocess_dataset import (
-    TransformEnumFunction,
-    preprocess_dataset_chunked_profile,
+    preprocess_dataset_chunked,
 )
 from latent_trainer.settings import DATA_DIR, SEED
 
@@ -29,7 +29,7 @@ from latent_trainer.settings import DATA_DIR, SEED
     help="Path to the single JSON dataset file.",
 )
 @click.option(
-    "--n-workers",
+    "--n_workers",
     type=int,
     default=24,
     show_default=True,
@@ -49,7 +49,20 @@ def main(
     pl.seed_everything(SEED)
 
     try:
-        preprocess_dataset_chunked_profile(
+        # preprocess_dataset(
+        #     output_directory=DATA_DIR,
+        #     single_json_dataset_path=single_json_dataset_path,
+        #     transform_fn=transform,
+        #     transform_name=transform_name,
+        #     n_workers=n_workers,
+        # )
+
+        # debug_preprocess_dataset(
+        #     single_json_dataset_path=single_json_dataset_path,
+        #     transform_fn=transform,
+        # )
+
+        preprocess_dataset_chunked(
             output_directory=DATA_DIR,
             single_json_dataset_path=single_json_dataset_path,
             transform_fn=transform,
