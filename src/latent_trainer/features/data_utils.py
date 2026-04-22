@@ -25,9 +25,6 @@ from latent_trainer.features.type import (
 logger = logging.getLogger(__name__)
 
 
-# ------------------------------------------------------------------
-# Normalisation
-# ------------------------------------------------------------------
 def normalize(
     train_X: torch.Tensor,
     val_X: torch.Tensor,
@@ -153,22 +150,24 @@ def load_cached_dataloaders(
 
     train_loader = DataLoader(
         CachedSC2Dataset(
-            features=normalized_data.train_X, labels=normalized_data.train_y
+            features=normalized_data.train_X,
+            labels=normalized_data.train_y,
         ),
         batch_size=batch_size,
         shuffle=True,
     )
     val_loader = DataLoader(
-        CachedSC2Dataset(features=normalized_data.val_X, labels=normalized_data.val_y),
+        CachedSC2Dataset(
+            features=normalized_data.val_X,
+            labels=normalized_data.val_y,
+        ),
         batch_size=batch_size,
         shuffle=False,
     )
     return train_loader, val_loader, input_dim
 
 
-# ------------------------------------------------------------------
 # Latent extraction
-# ------------------------------------------------------------------
 def extract_latents(
     encoder: Encoder,
     data: torch.Tensor,

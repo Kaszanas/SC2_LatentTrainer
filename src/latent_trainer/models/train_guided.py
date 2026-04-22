@@ -1,11 +1,6 @@
-# ------------------------------------------------------------------
-# Training
-# ------------------------------------------------------------------
 import logging
 from pathlib import Path
 
-import mlflow
-import torch
 from lightning import Trainer
 from lightning.pytorch.callbacks import (
     EarlyStopping,
@@ -15,11 +10,11 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
-from latent_trainer.settings import DEFAULT_MLFLOW_URI, OUTPUT_DIR
+from latent_trainer.settings import CHECKPOINTS_DIR, DEFAULT_MLFLOW_URI, OUTPUT_DIR
 from latent_trainer.tracking.mlflow_utils import (
     create_child_mlflow_logger,
     create_mlflow_logger,
-    log_checkpoint_artifacts,
+    log_artifact,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,50 +26,53 @@ def train_guided(
     val_loader: DataLoader,
     input_dim: int,
     output_dir: Path | str = OUTPUT_DIR,
-    epochs: int = 10,
-    nz: int = 16,
-    w_cls: float = 200.0,
-    lr: float = 1e-4,
+    supervised_dim: int,
+    epochs: int,
+    vae_latent_dim: int,
+    classification_weight: float,
+    encoder_hidden_dims: list[int],
+    experiment_name: str,
+    run_name: str,
+    learning_rate: float = 1e-4,
     weight_decay: float = 1e-5,
-    lr_c: float = 1e-4,
+    learning_rate_classifier: float = 1e-4,
     weight_decay_c: float = 1e-4,
-    encoder_hidden_dims: list[int] | None = None,
     test_interval: int = 1,
     mlflow_uri: str = DEFAULT_MLFLOW_URI,
-    experiment_name: str = "SC2_GuidedVAE",
-    run_name: str | None = None,
     parent_run_id: str | None = None,
 ) -> LitGuidedVAE:
     """Run a single guided-VAE training run and return the trained model."""
 
-    model = LitGuidedVAE(
-        n_vae_dis=nz,
-        lr=lr,
+    guided_vae_model = LitGuidedVAE(
+        vae_latent_dim=vae_latent_dim,
+        learning_rate=learning_rate,
         weight_decay=weight_decay,
-        lr_c=lr_c,
+        supervised_dim=supervised_dim,
+        learning_rate_classifier=learning_rate_classifier,
         weight_decay_c=weight_decay_c,
-        w_cls=w_cls,
+        classification_weight=classification_weight,
         input_dim=input_dim,
         encoder_hidden_dims=encoder_hidden_dims,
     )
 
-    checkpoints_path = output_dir / "checkpoints"
-    filename_pattern = "model-{epoch:02d}-{val_vae_loss:.4f}"
+    filename_pattern = "guided-vae-{epoch:02d}-{val_vae_loss:.4f}"
 
-    checkpoint_cb = ModelCheckpoint(
-        dirpath=checkpoints_path,
+    run_checkpoint_dir = CHECKPOINTS_DIR / experiment_name / run_name
+
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=run_checkpoint_dir,
         filename=filename_pattern,
         monitor="val_vae_loss",
         mode="min",
         save_last=True,
-        save_top_k=3,
+        save_top_k=5,
     )
-    early_stop = EarlyStopping(
+    early_stopping = EarlyStopping(
         monitor="val_vae_loss",
         patience=5,
         mode="min",
     )
-    tb_logger = TensorBoardLogger(
+    tensorboard_logger = TensorBoardLogger(
         save_dir=output_dir,
         name="tensorboard_logs",
     )
@@ -82,53 +80,45 @@ def train_guided(
     if parent_run_id:
         mlf_logger = create_child_mlflow_logger(
             experiment_name=experiment_name,
-            run_name=run_name or "guided_vae_train",
+            run_name=run_name,
             parent_run_id=parent_run_id,
             tracking_uri=mlflow_uri,
         )
     else:
         mlf_logger = create_mlflow_logger(
             experiment_name=experiment_name,
-            run_name=run_name or "guided_vae_train",
+            run_name=run_name,
             tracking_uri=mlflow_uri,
         )
 
     trainer = Trainer(
         max_epochs=epochs,
-        logger=[tb_logger, mlf_logger],
+        logger=[tensorboard_logger, mlf_logger],
         enable_progress_bar=True,
-        callbacks=[checkpoint_cb, early_stop],
+        callbacks=[checkpoint_callback, early_stopping],
         accelerator="auto",
         devices=1,
         check_val_every_n_epoch=test_interval,
         log_every_n_steps=10,
     )
     trainer.fit(
-        model=model,
+        model=guided_vae_model,
         train_dataloaders=train_loader,
         val_dataloaders=val_loader,
     )
 
-    # Save final model in PyTorch format
-    final_model_path = output_dir / "final_model.pth"
-    torch.save(
-        {
-            "epoch": epochs,
-            "model_state_dict": model.model.state_dict(),
-            "classifier_state_dict": model.classifier.state_dict(),
-            "loss": trainer.callback_metrics.get("train_vae_loss", float("inf")).item(),
-        },
-        final_model_path,
+    # Save the best model under a custom name for easier retrieval later:
+    best_model_path = run_checkpoint_dir / "best.ckpt"
+    guided_vae_model = LitGuidedVAE.load_from_checkpoint(
+        checkpoint_callback.best_model_path
+    )
+    trainer.save_checkpoint(best_model_path)
+
+    # Save Lighting Model with best hyperparameters (for easy loading later)
+    log_artifact(
+        checkpoint_dir=run_checkpoint_dir,
+        mlflow_logger=mlf_logger,
+        model_path=best_model_path,
     )
 
-    # Log checkpoints as MLFlow artifacts
-    ckpt_dir = output_dir / "checkpoints"
-    if mlf_logger.run_id:
-        mlflow.set_tracking_uri(mlflow_uri)
-        with mlflow.start_run(run_id=mlf_logger.run_id):
-            log_checkpoint_artifacts(checkpoint_dir=ckpt_dir, tracking_uri=mlflow_uri)
-            mlflow.log_artifact(local_path=final_model_path)
-
-    logger.info(f"Training complete.  Model saved to {str(final_model_path)}")
-
-    return model
+    return guided_vae_model

@@ -61,12 +61,12 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
 
         def objective(trial: optuna.Trial) -> float:
             pl.seed_everything(SEED)
-            params = get_guided_vae_search_space(trial)
+            params = get_guided_vae_search_space(trial=trial)
             batch_size: int = params["batch_size"]
 
             train_loader, val_loader, _ = load_cached_dataloaders(
                 cache_path=DATA_DIR / config.dataset_filename,
-                batch_size=batch_size
+                batch_size=batch_size,
             )
 
             mlf_trial = create_child_mlflow_logger(
@@ -78,14 +78,15 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
             )
 
             model = LitGuidedVAE(
-                n_vae_dis=params["nz"],
-                lr=params["lr"],
-                weight_decay=params["weight_decay"],
-                lr_c=params["lr_c"],
-                weight_decay_c=params["weight_decay_c"],
-                w_cls=params["cls"],
                 input_dim=input_dim,
                 encoder_hidden_dims=params["encoder_hidden_dims"],
+                supervised_dim=params["supervised_dim"],
+                vae_latent_dim=params["nz"],
+                learning_rate=params["lr"],
+                weight_decay=params["weight_decay"],
+                learning_rate_classifier=params["lr_c"],
+                weight_decay_c=params["weight_decay_c"],
+                classification_weight=params["cls"],
             )
             early_stopping = EarlyStopping(
                 monitor="val_vae_loss",
@@ -134,6 +135,8 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
     Uses all training epochs (``config.guided_vae_epochs``) and writes
     checkpoints + MLFlow artifacts via :func:`train_guided`.
     """
+    pl.seed_everything(SEED)
+
     study = optuna.load_study(
         study_name=config.experiment_name,
         storage=config.optuna_db,
@@ -144,6 +147,7 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
         f"Loaded best guided-VAE trial {best.number}  val_vae_loss={best.value}",
     )
 
+    # Reconstruct nested parameters to properly re-build the model:
     params = {
         **flat_params,
         "encoder_hidden_dims": reconstruct_hidden_dims(
@@ -155,9 +159,8 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
     batch_size: int = params["batch_size"]
     train_loader, val_loader, input_dim = load_cached_dataloaders(
         cache_path=DATA_DIR / config.dataset_filename,
-        batch_size=batch_size
+        batch_size=batch_size,
     )
-    pl.seed_everything(SEED)
 
     train_guided(
         train_loader=train_loader,
@@ -165,11 +168,12 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
         input_dim=input_dim,
         output_dir=OUTPUT_DIR,
         epochs=config.guided_vae_epochs,
-        nz=params["nz"],
-        w_cls=params["cls"],
-        lr=params["lr"],
+        supervised_dim=params["supervised_dim"],
+        vae_latent_dim=params["nz"],
+        classification_weight=params["cls"],
+        learning_rate=params["lr"],
         weight_decay=params["weight_decay"],
-        lr_c=params["lr_c"],
+        learning_rate_classifier=params["lr_c"],
         weight_decay_c=params["weight_decay_c"],
         encoder_hidden_dims=params["encoder_hidden_dims"],
         mlflow_uri=config.mlflow_tracking_uri,

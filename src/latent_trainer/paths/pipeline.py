@@ -39,7 +39,8 @@ def run_path_charting_pipeline(
     """Common post-path logic: P(win) curve, feedback, plots."""
 
     vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
-        model, cache
+        model_path=model,
+        cache_path=cache,
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
