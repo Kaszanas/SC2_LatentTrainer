@@ -217,7 +217,7 @@ def log_checkpoint_artifacts(
     """
     mlflow.set_tracking_uri(tracking_uri)
     if checkpoint_dir.exists():
-        mlflow.log_artifacts(str(checkpoint_dir), artifact_path="checkpoints")
+        mlflow.log_artifacts(local_dir=str(checkpoint_dir))
         logger.info(f"MLFlow: logged checkpoints from {checkpoint_dir}")
     else:
         logger.warning(
@@ -244,3 +244,24 @@ def log_best_trial(study: optuna.Study, config: ExperimentConfig) -> None:
     logger.info(
         f"MLFlow: logged best trial #{best.number} (value={best.value:.4f}) as summary run"
     )
+
+
+def log_artifact(
+    checkpoint_dir: Path,
+    mlflow_logger: MLFlowLogger,
+    model_path: Path,
+):
+
+    if not mlflow_logger.run_id:
+        raise ValueError("MLFlow logger must have an active run_id to log artifacts")
+
+    # Log checkpoints as MLFlow artifacts
+    mlflow.set_tracking_uri(mlflow_logger.tracking_uri)
+    with mlflow.start_run(run_id=mlflow_logger.run_id):
+        log_checkpoint_artifacts(
+            checkpoint_dir=checkpoint_dir,
+            tracking_uri=mlflow_logger.tracking_uri,
+        )
+        mlflow.log_artifact(local_path=model_path)
+
+    logger.info(f"Training complete.  Model saved to {str(model_path)}")
