@@ -268,7 +268,6 @@ def prepare_player_features(
                 else 0.0
             ),
         },
-        batch_size=[],
     )
 
     return TensorDict(
@@ -280,20 +279,22 @@ def prepare_player_features(
             "delta": delta,
             "meta": meta,
             "units_born": torch.tensor(
-                float(_count_units_born(sc2_replay=sc2_replay, player_id=player_id))
+                float(_count_units_born(sc2_replay=sc2_replay, player_id=player_id)),
+                dtype=torch.float32,
             ),
             "units_killed": torch.tensor(
                 float(
                     _count_units_died_by_opponent(
                         sc2_replay=sc2_replay, player_id=player_id
-                    )
-                )
+                    ),
+                ),
+                dtype=torch.float32,
             ),
             "upgrade_count": torch.tensor(
-                float(_count_upgrades(sc2_replay=sc2_replay, player_id=player_id))
+                float(_count_upgrades(sc2_replay=sc2_replay, player_id=player_id)),
+                dtype=torch.float32,
             ),
         },
-        batch_size=[],
     )
 
 
