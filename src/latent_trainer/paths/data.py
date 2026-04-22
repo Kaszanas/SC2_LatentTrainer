@@ -1,6 +1,7 @@
 # ---------------------------------------------------------------------------
 # Model loading and encoding
 # ---------------------------------------------------------------------------
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -156,3 +157,94 @@ def opponent_aware_logit(
     logit = h.squeeze(-1)
     # Negate for player 1 so the logit sign matches "z is winning".
     return logit if player_idx == 0 else -logit
+
+
+# ---------------------------------------------------------------------------
+# Shared path-charting context
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PathContext:
+    guided_vae: LitGuidedVAE
+    X: torch.Tensor
+    labels: np.ndarray
+    labels_tensor: torch.Tensor
+    latents_p0: torch.Tensor
+    latents_p1: torch.Tensor
+    chosen: int
+    player_idx: int
+    sample_z: torch.Tensor
+
+
+def compute_win_latents(
+    labels_tensor: torch.Tensor,
+    latents_p0: torch.Tensor,
+    latents_p1: torch.Tensor,
+) -> torch.Tensor:
+    """Return the winning player's latent for each sample (label=1 → p0 won)."""
+    return torch.where(
+        (labels_tensor == 1).unsqueeze(1),
+        latents_p0,
+        latents_p1,
+    )
+
+
+def compute_loss_latents(
+    labels_tensor: torch.Tensor,
+    latents_p0: torch.Tensor,
+    latents_p1: torch.Tensor,
+) -> torch.Tensor:
+    """Return the losing player's latent for each sample (label=0 → p1 won, p0 lost)."""
+    return torch.where(
+        (labels_tensor == 0).unsqueeze(1),
+        latents_p0,
+        latents_p1,
+    )
+
+
+def prepare_path_context(
+    model_path: Path,
+    dataset_path: Path,
+    sample_idx: int | None,
+) -> PathContext:
+    """Load model + data, encode both players, and select a game to analyse.
+
+    Every game has exactly one loser. ``sample_z`` is always that player's
+    latent — the starting point for the improvement path. The winning target
+    (centroid, nearest-win, etc.) is determined separately by each strategy.
+    """
+    print("Loading model and data...")
+    guided_vae, X, y = load_model_and_data(
+        model_path=model_path,
+        cached_dataset_filepath=dataset_path,
+    )
+    labels = y.numpy()
+    labels_tensor = torch.tensor(labels)
+    print(f"Validation: {len(X)}")
+
+    print("Encoding into latent space...")
+    latents_p0 = encode_player(vae=guided_vae.model, data=X[:, 0, :])
+    latents_p1 = encode_player(vae=guided_vae.model, data=X[:, 1, :])
+
+    n = len(labels)
+    chosen = int(
+        sample_idx
+        if (sample_idx is not None and sample_idx < n)
+        else torch.randint(n, (1,)).item()
+    )
+    player_idx = int(labels[chosen])
+    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
+    print(f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})")
+
+    return PathContext(
+        guided_vae=guided_vae,
+        X=X,
+        labels=labels,
+        labels_tensor=labels_tensor,
+        latents_p0=latents_p0,
+        latents_p1=latents_p1,
+        chosen=chosen,
+        player_idx=player_idx,
+        sample_z=sample_z,
+    )
