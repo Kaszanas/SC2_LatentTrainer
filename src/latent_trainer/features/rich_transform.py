@@ -270,7 +270,7 @@ def prepare_player_features(
         },
     )
 
-    return TensorDict(
+    return_tensordict = TensorDict(
         {
             "early": early,
             "mid": mid,
@@ -296,6 +296,8 @@ def prepare_player_features(
             ),
         },
     )
+
+    return return_tensordict
 
 
 def rich_transform(sc2_replay: SC2ReplayData) -> Tuple[TensorDict, int] | None:
