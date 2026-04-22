@@ -8,7 +8,6 @@ import click
 import torch
 
 from latent_trainer.paths.data import (
-    compute_loss_latents,
     compute_win_latents,
     nearest_winning_target,
     opponent_aware_logit,
@@ -147,21 +146,21 @@ def cmd_linear(
 @click.option(
     "--ga_steps",
     type=int,
-    default=500,
+    default=1000,
     show_default=True,
     help="Max gradient ascent steps.",
 )
 @click.option(
     "--ga_lr",
     type=float,
-    default=0.02,
+    default=0.005,
     show_default=True,
     help="Learning rate.",
 )
 @click.option(
     "--ga_momentum",
     type=float,
-    default=0.9,
+    default=0.5,
     show_default=True,
     help="Momentum.",
 )
@@ -211,7 +210,7 @@ def cmd_gradient_ascent(
         else path_context.latents_p0[path_context.chosen]
     )
 
-    all_loss_latents = compute_loss_latents(
+    win_latents = compute_win_latents(
         labels_tensor=path_context.labels_tensor,
         latents_p0=path_context.latents_p0,
         latents_p1=path_context.latents_p1,
@@ -219,13 +218,13 @@ def cmd_gradient_ascent(
 
     score_fn = partial(
         opponent_aware_score,
-        classifier=path_context.guided_vae.model.classifier,
+        guided_vae=path_context.guided_vae,
         opponent_z=opponent_z,
         player_idx=path_context.player_idx,
     )
     logit_fn = partial(
         opponent_aware_logit,
-        classifier=path_context.guided_vae.model.classifier,
+        guided_vae=path_context.guided_vae,
         opponent_z=opponent_z,
         player_idx=path_context.player_idx,
     )
@@ -235,7 +234,7 @@ def cmd_gradient_ascent(
         z_start=path_context.sample_z.detach().cpu().numpy(),
         score_fn=score_fn,
         logit_fn=logit_fn,
-        Z_all=all_loss_latents.detach().cpu().numpy(),
+        Z_all=win_latents.detach().cpu().numpy(),
         steps=ga_steps,
         lr=ga_lr,
         momentum=ga_momentum,
