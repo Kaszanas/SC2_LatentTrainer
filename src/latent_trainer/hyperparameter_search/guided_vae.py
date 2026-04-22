@@ -135,6 +135,8 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
     Uses all training epochs (``config.guided_vae_epochs``) and writes
     checkpoints + MLFlow artifacts via :func:`train_guided`.
     """
+    pl.seed_everything(SEED)
+
     study = optuna.load_study(
         study_name=config.experiment_name,
         storage=config.optuna_db,
@@ -145,6 +147,7 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
         f"Loaded best guided-VAE trial {best.number}  val_vae_loss={best.value}",
     )
 
+    # Reconstruct nested parameters to properly re-build the model:
     params = {
         **flat_params,
         "encoder_hidden_dims": reconstruct_hidden_dims(
@@ -158,7 +161,6 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
         cache_path=DATA_DIR / config.dataset_filename,
         batch_size=batch_size,
     )
-    pl.seed_everything(SEED)
 
     train_guided(
         train_loader=train_loader,
