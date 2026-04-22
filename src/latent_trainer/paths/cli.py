@@ -37,12 +37,7 @@ PATH_CHARTING_CLI_COMMON_OPTIONS = [
         default="cached_dataset_rich.pt",
         show_default=True,
         help="Filename of the cached dataset placed in the DATA_DIR (set in settings.py).",
-        type=click.Path(
-            exists=True,
-            dir_okay=False,
-            path_type=Path,
-            resolve_path=True,
-        ),
+        type=str,
     ),
     click.option(
         "--sample_idx",
@@ -97,7 +92,7 @@ def cli() -> None:
 )
 def cmd_linear(
     model_path: Path,
-    dataset_filename: Path,
+    dataset_filename: str,
     sample_idx: int | None,
     n_steps: int,
     top_k: int,
@@ -120,7 +115,11 @@ def cmd_linear(
     latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
 
     # Win cloud: label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
+    win_latents = torch.where(
+        (labels_tensor == 1).unsqueeze(1),
+        latents_p0,
+        latents_p1,
+    )
     win_centroid = win_latents.mean(dim=0)
 
     n = len(labels)
@@ -212,7 +211,7 @@ def cmd_linear(
 )
 def cmd_gradient_ascent(
     model_path: Path,
-    dataset_filename: Path,
+    dataset_filename: str,
     sample_idx: int | None,
     n_steps: int,
     top_k: int,
@@ -227,7 +226,8 @@ def cmd_gradient_ascent(
 
     print("Loading model and data...")
     vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
-        model_path, dataset_filename
+        model_path=model_path,
+        cached_dataset_filepath=DATA_DIR / dataset_filename,
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
@@ -252,18 +252,20 @@ def cmd_gradient_ascent(
 
     # All loser latents as reference distribution for KDE.
     all_loss_latents = torch.where(
-        (labels_tensor == 0).unsqueeze(1), latents_p0, latents_p1
+        (labels_tensor == 0).unsqueeze(1),
+        latents_p0,
+        latents_p1,
     )
 
     score_fn = partial(
         opponent_aware_score,
-        classifier=classifier,
+        classifier=vae.model.classifier,
         opponent_z=opponent_z,
         player_idx=player_idx,
     )
     logit_fn = partial(
         opponent_aware_logit,
-        classifier=classifier,
+        classifier=vae.model.classifier,
         opponent_z=opponent_z,
         player_idx=player_idx,
     )
@@ -305,7 +307,7 @@ def cmd_gradient_ascent(
 )
 def cmd_optimal_transport(
     model_path: Path,
-    dataset_filename: Path,
+    dataset_filename: str,
     sample_idx: int,
     n_steps: int,
     top_k: int,
@@ -316,7 +318,7 @@ def cmd_optimal_transport(
     print("Loading model and data...")
     vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model_path=model_path,
-        cached_dataset_filepath=dataset_filename,
+        cached_dataset_filepath=DATA_DIR / dataset_filename,
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
@@ -327,7 +329,11 @@ def cmd_optimal_transport(
     latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
 
     # Win cloud: label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
+    win_latents = torch.where(
+        (labels_tensor == 1).unsqueeze(1),
+        latents_p0,
+        latents_p1,
+    )
 
     n = len(labels)
     chosen = (
@@ -377,7 +383,7 @@ def cmd_optimal_transport(
 )
 def cmd_geodesic(
     model_path: Path,
-    dataset_filename: Path,
+    dataset_filename: str,
     sample_idx: int,
     n_steps: int,
     top_k: int,
@@ -388,7 +394,7 @@ def cmd_geodesic(
     print("Loading model and data...")
     vae, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
         model_path=model_path,
-        cached_dataset_filepath=dataset_filename,
+        cached_dataset_filepath=DATA_DIR / dataset_filename,
     )
     labels = val_y.numpy()
     labels_tensor = torch.tensor(labels)
@@ -399,7 +405,11 @@ def cmd_geodesic(
     latents_p1 = encode_player(vae=vae, data=val_X[:, 1, :])
 
     # Win cloud: label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
+    win_latents = torch.where(
+        (labels_tensor == 1).unsqueeze(1),
+        latents_p0,
+        latents_p1,
+    )
     # All latents for kNN graph.
     all_latents = torch.cat([latents_p0, latents_p1], dim=0)
 
