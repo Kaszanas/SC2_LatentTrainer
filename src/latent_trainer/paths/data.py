@@ -1,12 +1,14 @@
 # ---------------------------------------------------------------------------
 # Model loading and encoding
 # ---------------------------------------------------------------------------
+from pathlib import Path
+
 import numpy as np
 import torch
 
 from latent_trainer.features.data_utils import load_and_normalize
 from latent_trainer.models.lightning.lit_classifier import LatentClassifier
-from latent_trainer.models.lightning.lit_vae import LitVAE
+from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
 
 # ---------------------------------------------------------------------------
 # Feature names -- 203 per player
@@ -92,22 +94,21 @@ def decode_features(vae, z, norm_mean, norm_std) -> np.ndarray:
 
 
 def load_model_and_data(
-    model_path: str,
-    cache_path: str,
+    model_path: Path,
+    cached_dataset_filepath: Path,
 ) -> tuple:
-    info = torch.load(model_path, weights_only=False)
 
-    vae = LitVAE.load_from_checkpoint(info["vae_ckpt_path"])
+    # TODO: If there are other models than Guided VAE, this function
+    # TODO: will need to take the model class as an argument instead of hardcoding:
+
+    vae = LitGuidedVAE.load_from_checkpoint(checkpoint_path=model_path)
     vae.eval()
-
-    classifier = LatentClassifier.load_from_checkpoint(info["cls_ckpt_path"])
-    classifier.eval()
 
     norm_mean = info["normalization"]["mean"]
     norm_std = info["normalization"]["std"]
-    data = load_and_normalize(cache_path)
+    data = load_and_normalize(cached_dataset_filepath=cached_dataset_filepath)
 
-    return vae, classifier, data.val_X, data.val_y, norm_mean, norm_std, vae.latent_dim
+    return vae, data.val_X, data.val_y, norm_mean, norm_std, vae.latent_dim
 
 
 # ---------------------------------------------------------------------------
