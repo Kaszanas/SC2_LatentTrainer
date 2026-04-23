@@ -43,6 +43,8 @@ from pathlib import Path
 
 import mlflow
 import optuna
+from mlflow import MlflowClient
+from mlflow.utils.mlflow_tags import MLFLOW_PARENT_RUN_ID, MLFLOW_RUN_NAME
 from lightning.pytorch.loggers import MLFlowLogger
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
@@ -173,15 +175,22 @@ def create_child_mlflow_logger(
     params:
         Optional dict of params to log on this child run.
     """
-    mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(experiment_name)
+    client = MlflowClient(tracking_uri=tracking_uri)
+    experiment = client.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        experiment_id = client.create_experiment(experiment_name)
+    else:
+        experiment_id = experiment.experiment_id
 
-    child_run = mlflow.start_run(run_name=run_name, nested=True)
-    child_run_id = child_run.info.run_id
-    mlflow.set_tag("mlflow.parentRunId", parent_run_id)
+    tags = {MLFLOW_PARENT_RUN_ID: parent_run_id, MLFLOW_RUN_NAME: run_name}
+    run = client.create_run(experiment_id=experiment_id, run_name=run_name, tags=tags)
+    child_run_id = run.info.run_id
+
     if params:
-        mlflow.log_params(params)
-    mlflow.end_run()  # Close the manual run; Lightning logger re-opens via run_id
+        client.log_batch(
+            child_run_id,
+            params=[mlflow.entities.Param(k, str(v)) for k, v in params.items()],
+        )
 
     return MLFlowLogger(
         experiment_name=experiment_name,
