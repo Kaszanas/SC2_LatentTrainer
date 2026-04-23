@@ -4,9 +4,34 @@ import lightning as pl
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from tensordict import TensorDict
 
 from latent_trainer.models.guided_vae import Classifier, suGuidedVAE
 from latent_trainer.models.losses import loss_supervised
+
+
+def _flatten_td(
+    td: TensorDict,
+    in_keys: list[str | tuple[str, ...]] | None,
+) -> torch.Tensor:
+    """Flatten selected TensorDict keys → Tensor[..., F] via leaf insertion order.
+
+    Parameters
+    ----------
+    td:
+        Source TensorDict (any batch size).
+    in_keys:
+        Top-level keys to include.  ``None`` means use all keys.
+
+    Returns
+    -------
+    torch.Tensor
+        Stacked leaf tensors with a new trailing feature dimension.
+        For a ``[batch, 2]`` input the output is ``[batch, 2, F]``.
+        For a ``batch_size=[]`` stats TensorDict the output is ``[F]``.
+    """
+    selected = td.select(*in_keys) if in_keys else td
+    return torch.stack(list(selected.values(True, True)), dim=-1)
 
 
 class LitGuidedVAE(pl.LightningModule):
@@ -23,8 +48,9 @@ class LitGuidedVAE(pl.LightningModule):
         learning_rate_classifier: float = 1e-4,
         weight_decay_c: float = 1e-4,
         classification_weight: float = 50.0,
-        mean: torch.Tensor | None = None,
-        std: torch.Tensor | None = None,
+        mean: torch.Tensor | TensorDict | None = None,
+        std: torch.Tensor | TensorDict | None = None,
+        in_keys: list[str | tuple[str, ...]] | None = None,
     ) -> None:
         """Initialise the LitGuidedVAE module.
 
@@ -53,11 +79,31 @@ class LitGuidedVAE(pl.LightningModule):
             Weight for the classification loss.
         mean:
             Optional pre-computed training data mean for input normalisation.
+            Accepts either a flat ``torch.Tensor`` (legacy) or a ``TensorDict``
+            (TensorDict pipeline) — the latter is flattened to a 1-D buffer.
         std:
             Optional pre-computed training data std for input normalisation.
+            Same dual-type support as ``mean``.
+        in_keys:
+            Top-level TensorDict keys to include as features.  When ``None``
+            (default) the keys are auto-inferred from ``mean`` if it is a
+            ``TensorDict``, otherwise all keys in the batch are used.
+            Pass an explicit list to train on a feature subset (e.g.
+            ``["early", "late"]``).
         """
         super().__init__()
-        self.save_hyperparameters()
+
+        # Infer in_keys before save_hyperparameters so the resolved value is stored:
+        if in_keys is not None:
+            self.in_keys: list[str | tuple[str, ...]] | None = list(in_keys)
+        elif isinstance(mean, TensorDict):
+            self.in_keys = list(mean.keys())
+        else:
+            self.in_keys = None  # plain Tensor pipeline — no key selection needed
+
+        # mean/std are large tensors, not scalar hyperparameters — exclude from hparams.
+        # in_keys IS saved so checkpoint loading can reconstruct the model without them.
+        self.save_hyperparameters(ignore=["mean", "std"])
 
         # Dimensions:
         self.input_dim = input_dim
@@ -65,10 +111,17 @@ class LitGuidedVAE(pl.LightningModule):
         self.supervised_dim = supervised_dim
         self.vae_latent_dim = vae_latent_dim
 
-        # Normalization stats, needed for working with unnormalized data
-        # after training (e.g. when encoding new samples with the trained model):
-        self.register_buffer("mean", mean)
-        self.register_buffer("std", std)
+        # Normalization stats for post-training inference on unnormalized data.
+        # TensorDict mean/std are flattened to 1-D tensors matching the leaf order
+        # of _flatten_td so that index positions correspond between the two:
+        self.register_buffer(
+            "mean",
+            _flatten_td(mean, self.in_keys) if isinstance(mean, TensorDict) else mean,
+        )
+        self.register_buffer(
+            "std",
+            _flatten_td(std, self.in_keys) if isinstance(std, TensorDict) else std,
+        )
 
         # Hyperparameters:
         self.learning_rate = learning_rate
@@ -133,18 +186,31 @@ class LitGuidedVAE(pl.LightningModule):
             else z[:, self.supervised_dim :]
         )
 
+    def _unpack_batch(
+        self,
+        batch: tuple[TensorDict | torch.Tensor, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return ``(data [batch, 2, F], label [batch])`` for TensorDict or Tensor batches."""
+        raw, label = batch[0], batch[1]
+        data = _flatten_td(raw, self.in_keys) if isinstance(raw, TensorDict) else raw
+        return data, label
+
     # Forward / training / validation
     def forward(self, x: torch.Tensor):  # noqa: D401
         return self.model(x)
 
-    def training_step(self, batch, batch_idx: int):
-        data, label = batch[0], batch[1]
-        valid_data = data
+    def training_step(
+        self,
+        batch: tuple[TensorDict | torch.Tensor, torch.Tensor],
+        batch_idx: int,
+    ) -> torch.Tensor:
+        valid_data, label = self._unpack_batch(batch)
         valid_label = self._prepare_label(label=label)
 
         optimizer_vae, optimizer_classification, optimizer_adversarial = (
             self.optimizers()
         )
+
         # Step 1: VAE
         optimizer_vae.zero_grad()
         recon_batch, mu, logvar, re = self.model(valid_data)
@@ -226,9 +292,12 @@ class LitGuidedVAE(pl.LightningModule):
         sch2.step()
         sch3.step()
 
-    def validation_step(self, batch, batch_idx):
-        data, label = batch[0], batch[1]
-        valid_data = data
+    def validation_step(
+        self,
+        batch: tuple[TensorDict | torch.Tensor, torch.Tensor],
+        batch_idx: int,
+    ) -> torch.Tensor:
+        valid_data, label = self._unpack_batch(batch)
         valid_label = self._prepare_label(label)
 
         recon_batch, mu, logvar, re = self.model(valid_data)
