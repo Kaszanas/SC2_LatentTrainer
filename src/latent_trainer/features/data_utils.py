@@ -26,6 +26,19 @@ from latent_trainer.features.type import (
 logger = logging.getLogger(__name__)
 
 
+def _collate_sc2(
+    batch: list[tuple[TensorDict, torch.Tensor]],
+) -> tuple[TensorDict, torch.Tensor]:
+    """Stack a list of (TensorDict, label) pairs into a batched tuple.
+
+    PyTorch's default collate cannot handle TensorDicts correctly — it treats
+    them as plain dicts and fails on nested indexing.  This collate uses
+    ``torch.stack`` which TensorDict natively supports.
+    """
+    features, labels = zip(*batch)
+    return torch.stack(list(features)), torch.stack(list(labels))
+
+
 def normalize(
     train_X: TensorDict,
     val_X: TensorDict,
@@ -48,8 +61,8 @@ def normalize(
         Normalised TensorDicts and per-key normalisation parameters.
     """
     train_f = train_X.apply(lambda t: t.float())
-    mean = train_f.apply(lambda t: t.mean())          # TensorDict, batch_size=[]
-    std = train_f.apply(lambda t: t.std() + 1e-8)     # TensorDict, batch_size=[]
+    mean = train_f.apply(lambda t: t.mean(), batch_size=[])
+    std = train_f.apply(lambda t: t.std() + 1e-8, batch_size=[])
 
     train_norm = (train_f - mean) / std
     val_norm = (val_X.apply(lambda t: t.float()) - mean) / std
@@ -167,6 +180,7 @@ def load_cached_dataloaders(
         ),
         batch_size=batch_size,
         shuffle=True,
+        collate_fn=_collate_sc2,
     )
     val_loader = DataLoader(
         CachedSC2Dataset(
@@ -175,6 +189,7 @@ def load_cached_dataloaders(
         ),
         batch_size=batch_size,
         shuffle=False,
+        collate_fn=_collate_sc2,
     )
 
     return NormalizedDataloaders(
