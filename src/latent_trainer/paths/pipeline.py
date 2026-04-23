@@ -6,6 +6,8 @@ from functools import partial
 import numpy as np
 import torch
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from umap import UMAP
 
 from latent_trainer.paths.data import (
     FEATURE_NAMES,
@@ -20,10 +22,19 @@ from latent_trainer.paths.plot import (
     plot_distance,
     plot_feature_delta,
     plot_feature_evolution,
-    plot_main,
+    plot_main_proj,
     plot_three_signal_feedback,
 )
 from latent_trainer.settings import OUTPUT_DIR, PLOTS_DIR
+
+_TSNE_MAX = 3000
+
+
+def _slice_proj(coords: np.ndarray, n_win: int, n_loss: int) -> tuple:
+    win_c = coords[:n_win]
+    loss_c = coords[n_win : n_win + n_loss]
+    path_c = coords[n_win + n_loss :]
+    return win_c, loss_c, path_c
 
 
 def run_path_charting_pipeline(
@@ -110,25 +121,73 @@ def run_path_charting_pipeline(
     )
 
     Z_win_np = win_latents.detach().cpu().numpy()
-    all_data = np.concatenate(
-        [Z_win_np, loss_latents.detach().cpu().numpy(), path_z_np]
-    )
+    Z_loss_np = loss_latents.detach().cpu().numpy()
+    n_win, n_loss, n_path = len(Z_win_np), len(Z_loss_np), len(path_z_np)
+    all_data = np.concatenate([Z_win_np, Z_loss_np, path_z_np])
+
+    # --- PCA projection ---
+    print("  Fitting PCA...")
     pca = PCA(n_components=2)
     coords = pca.fit_transform(all_data)
-    n_w, n_l = len(win_latents), len(loss_latents)
-    win_c = coords[:n_w]
-    loss_c = coords[n_w : n_w + n_l]
-    path_c = coords[n_w + n_l :]
-
-    plot_main(
+    win_c, loss_c, path_c = _slice_proj(coords, n_win, n_loss)
+    plot_main_proj(
         win_c=win_c,
         loss_c=loss_c,
         path_c=path_c,
         alphas=alphas,
         win_probs=win_probs,
-        pca=pca,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_path.png",
+        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_pca.png",
+        proj_label="PC",
+        subtitle=f" ({pca.explained_variance_ratio_[0]:.1%})",
     )
+
+    # --- UMAP projection ---
+    print("  Fitting UMAP...")
+    umap_reducer = UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.1)
+    coords = umap_reducer.fit_transform(all_data)
+    win_c, loss_c, path_c = _slice_proj(coords, n_win, n_loss)
+    plot_main_proj(
+        win_c=win_c,
+        loss_c=loss_c,
+        path_c=path_c,
+        alphas=alphas,
+        win_probs=win_probs,
+        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_umap.png",
+        proj_label="UMAP",
+    )
+
+    # --- t-SNE projection (subsample background; always keep path points) ---
+    print("  Fitting t-SNE...")
+    n_bg = n_win + n_loss
+    rng = np.random.default_rng(42)
+    max_bg = max(1, _TSNE_MAX - n_path)
+    if n_bg > max_bg:
+        bg_idx = np.sort(rng.choice(n_bg, size=max_bg, replace=False))
+        sub_bg = all_data[bg_idx]
+        # track original win/loss membership for colouring
+        sub_is_win = bg_idx < n_win
+    else:
+        sub_bg = all_data[:n_bg]
+        sub_is_win = np.arange(n_bg) < n_win
+    sub_data = np.concatenate([sub_bg, path_z_np])
+    perplexity = min(30, max(5, len(sub_data) // 10))
+    tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity)
+    coords = tsne.fit_transform(sub_data)
+    bg_coords = coords[: len(sub_bg)]
+    sub_win_c = bg_coords[sub_is_win]
+    sub_loss_c = bg_coords[~sub_is_win]
+    sub_path_c = coords[len(sub_bg) :]
+    plot_main_proj(
+        win_c=sub_win_c,
+        loss_c=sub_loss_c,
+        path_c=sub_path_c,
+        alphas=alphas,
+        win_probs=win_probs,
+        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_tsne.png",
+        proj_label="t-SNE",
+        subtitle=f" (perp={perplexity})",
+    )
+
     plot_distance(
         path_z=path_z_tensor,
         win_centroid=win_centroid,
