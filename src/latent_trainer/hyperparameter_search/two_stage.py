@@ -45,7 +45,9 @@ def run_two_stage_hyperparameter_search(config: ExperimentConfig) -> optuna.Stud
 
     Returns the completed :class:`optuna.Study` for further analysis.
     """
-    data = load_and_normalize(cache_path=DATA_DIR / config.dataset_filename)
+    data = load_and_normalize(
+        cached_dataset_filepath=DATA_DIR / config.dataset_filename
+    )
     train_X = data.train_X
     train_y = data.train_y
     val_X = data.val_X

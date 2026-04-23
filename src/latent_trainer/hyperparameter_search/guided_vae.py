@@ -49,7 +49,8 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
         Completed study for further analysis / logging.
     """
     data = load_and_normalize(DATA_DIR / config.dataset_filename)
-    input_dim = data.train_X.shape[-1]
+    sample_player = data.train_X[0, 0]
+    input_dim = sum(t.numel() for t in sample_player.values(True, True))
 
     with start_parent_run(
         experiment_name=config.experiment_name,
