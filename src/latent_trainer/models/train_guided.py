@@ -1,13 +1,17 @@
 import logging
 from pathlib import Path
+from typing import Any
 
+import torch
 from lightning import Trainer
 from lightning.pytorch.callbacks import (
     EarlyStopping,
     ModelCheckpoint,
 )
 from lightning.pytorch.loggers import TensorBoardLogger
+from torch.utils.data import DataLoader, TensorDataset
 
+from latent_trainer.configs.experiment_config import ExperimentConfig
 from latent_trainer.features.type import NormalizedDataloaders
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
 from latent_trainer.settings import CHECKPOINTS_DIR, DEFAULT_MLFLOW_URI, OUTPUT_DIR
@@ -122,3 +126,153 @@ def train_guided(
     )
 
     return guided_vae_model
+
+
+def train_guided_pipeline(
+    train_X: torch.Tensor,
+    train_y: torch.Tensor,
+    val_X: torch.Tensor,
+    val_y: torch.Tensor,
+    input_dim: int,
+    config: ExperimentConfig,
+    params: dict[str, Any],
+    norm_mean: torch.Tensor | None = None,
+    norm_std: torch.Tensor | None = None,
+    parent_run_id: str | None = None,
+    trial_tag: str | None = None,
+    sweep_mode: bool = False,
+) -> float:
+    """Run one Guided-VAE trial and return ``val_vae_loss``.
+
+    Used by both the Ray Tune HPO trainable (``sweep_mode=True``) and the
+    final best-params retraining run (``sweep_mode=False``).  Mirrors the
+    ``train_two_stage_pipeline`` contract in the two-stage pipeline.
+
+    Parameters
+    ----------
+    train_X, train_y, val_X, val_y:
+        Pre-normalised feature and label tensors.
+    input_dim:
+        Number of features per sample.
+    config:
+        Experiment configuration (experiment name, tracking URI, epochs …).
+    params:
+        Flat hyperparameter dict from the search space; expected keys:
+        ``nz``, ``batch_size``, ``cls``, ``lr``, ``weight_decay``,
+        ``lr_c``, ``weight_decay_c``, ``supervised_dim``,
+        ``encoder_hidden_dims``.
+    norm_mean, norm_std:
+        Normalisation statistics to embed in the model for inference-time
+        de-normalisation.  Pass ``None`` during HPO screening.
+    parent_run_id:
+        MLFlow parent run ID for nested child logging.
+    trial_tag:
+        Short identifier appended to the run name.  ``None`` → ``"guided_vae_best"``.
+    sweep_mode:
+        ``True``: fast screening — no checkpoints, no TensorBoard, no
+        artifact upload, progress bar suppressed.
+        ``False``: full training — ModelCheckpoint, TensorBoardLogger,
+        and artifact logging enabled.
+    """
+    run_name = f"guided_vae_{trial_tag}" if trial_tag else "guided_vae_best"
+    batch_size: int = params["batch_size"]
+
+    train_loader = DataLoader(
+        TensorDataset(train_X, train_y),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
+    )
+    val_loader = DataLoader(
+        TensorDataset(val_X, val_y),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+    )
+
+    if parent_run_id:
+        mlf_logger = create_child_mlflow_logger(
+            experiment_name=config.experiment_name,
+            run_name=run_name,
+            parent_run_id=parent_run_id,
+            tracking_uri=config.mlflow_tracking_uri,
+        )
+    else:
+        mlf_logger = create_mlflow_logger(
+            experiment_name=config.experiment_name,
+            run_name=run_name,
+            tracking_uri=config.mlflow_tracking_uri,
+        )
+
+    model = LitGuidedVAE(
+        input_dim=input_dim,
+        encoder_hidden_dims=params["encoder_hidden_dims"],
+        supervised_dim=params["supervised_dim"],
+        vae_latent_dim=params["nz"],
+        learning_rate=params["lr"],
+        weight_decay=params["weight_decay"],
+        learning_rate_classifier=params["lr_c"],
+        weight_decay_c=params["weight_decay_c"],
+        classification_weight=params["cls"],
+        mean=norm_mean,
+        std=norm_std,
+    )
+
+    early_stopping = EarlyStopping(monitor="val_vae_loss", patience=7, mode="min")
+
+    if sweep_mode:
+        trainer = Trainer(
+            max_epochs=config.guided_vae_epochs,
+            accelerator="auto",
+            devices=1,
+            logger=mlf_logger,
+            callbacks=[early_stopping],
+            enable_progress_bar=False,
+            enable_checkpointing=False,
+            log_every_n_steps=10,
+        )
+        trainer.fit(
+            model=model,
+            train_dataloaders=train_loader,
+            val_dataloaders=val_loader,
+        )
+        return trainer.callback_metrics["val_vae_loss"].item()
+
+    # Full training: checkpoints, TensorBoard, artifact upload
+    run_checkpoint_dir = CHECKPOINTS_DIR / config.experiment_name / run_name
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=run_checkpoint_dir,
+        filename="guided-vae-{epoch:02d}-{val_vae_loss:.4f}",
+        monitor="val_vae_loss",
+        mode="min",
+        save_last=True,
+        save_top_k=5,
+    )
+    tensorboard_logger = TensorBoardLogger(
+        save_dir=OUTPUT_DIR,
+        name="tensorboard_logs",
+    )
+    trainer = Trainer(
+        max_epochs=config.guided_vae_epochs,
+        accelerator="auto",
+        devices=1,
+        logger=[tensorboard_logger, mlf_logger],
+        callbacks=[checkpoint_callback, early_stopping],
+        enable_progress_bar=True,
+        log_every_n_steps=10,
+    )
+    trainer.fit(
+        model=model,
+        train_dataloaders=train_loader,
+        val_dataloaders=val_loader,
+    )
+
+    best_model_path = run_checkpoint_dir / "best.ckpt"
+    trainer.save_checkpoint(best_model_path)
+    log_artifact(
+        checkpoint_dir=run_checkpoint_dir,
+        mlflow_logger=mlf_logger,
+        model_path=best_model_path,
+    )
+
+    return trainer.callback_metrics["val_vae_loss"].item()
