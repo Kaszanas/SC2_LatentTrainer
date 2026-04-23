@@ -8,64 +8,20 @@ import numpy as np
 import torch
 
 from latent_trainer.features.data_utils import load_and_normalize
+from latent_trainer.features.rich_transform import (
+    META_FEATURE_NAMES,
+    SORTED_PLAYERSTATS_KEYS,
+)
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
-
-# ---------------------------------------------------------------------------
-# Feature names -- 203 per player
-# ---------------------------------------------------------------------------
-_ECON_FIELDS: list[str] = [
-    "foodMade",
-    "foodUsed",
-    "mineralsCollectionRate",
-    "mineralsCurrent",
-    "mineralsFriendlyFireArmy",
-    "mineralsFriendlyFireEconomy",
-    "mineralsFriendlyFireTechnology",
-    "mineralsKilledArmy",
-    "mineralsKilledEconomy",
-    "mineralsKilledTechnology",
-    "mineralsLostArmy",
-    "mineralsLostEconomy",
-    "mineralsLostTechnology",
-    "mineralsUsedActiveForces",
-    "mineralsUsedCurrentArmy",
-    "mineralsUsedCurrentEconomy",
-    "mineralsUsedCurrentTechnology",
-    "mineralsUsedInProgressArmy",
-    "mineralsUsedInProgressEconomy",
-    "mineralsUsedInProgressTechnology",
-    "vespeneCollectionRate",
-    "vespeneCurrent",
-    "vespeneFriendlyFireArmy",
-    "vespeneFriendlyFireEconomy",
-    "vespeneFriendlyFireTechnology",
-    "vespeneKilledArmy",
-    "vespeneKilledEconomy",
-    "vespeneKilledTechnology",
-    "vespeneLostArmy",
-    "vespeneLostEconomy",
-    "vespeneLostTechnology",
-    "vespeneUsedActiveForces",
-    "vespeneUsedCurrentArmy",
-    "vespeneUsedCurrentEconomy",
-    "vespeneUsedCurrentTechnology",
-    "vespeneUsedInProgressArmy",
-    "vespeneUsedInProgressEconomy",
-    "vespeneUsedInProgressTechnology",
-    "workersActiveCount",
-]
 
 
 def _build_feature_names() -> list[str]:
     prefixes = ["early", "mid", "late", "final", "econDelta"]
     names: list[str] = []
     for prefix in prefixes:
-        for field in _ECON_FIELDS:
+        for field in SORTED_PLAYERSTATS_KEYS:
             names.append(f"{prefix}_{field}")
-    names.extend(["APM", "MMR", "SQ", "SupplyCapped%"])
-    names.extend(["UnitsBorn", "UnitsKilled"])
-    names.extend(["UpgradeCount", "GameDuration"])
-    assert len(names) == 203
+    names.extend(META_FEATURE_NAMES)
     return names
 
 
