@@ -68,9 +68,7 @@ def normalize(
     return normalized_data
 
 
-# ------------------------------------------------------------------
 # Dataset loading
-# ------------------------------------------------------------------
 def load_and_normalize(
     cached_dataset_filepath: Path,
 ) -> NormalizedDataWithLabels:
