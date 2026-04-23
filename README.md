@@ -86,14 +86,3 @@ The `gradient_kde` strategy computes:
 Both strategies are opponent-aware — P(win) is computed using both
 players' latent codes.
 
-## Advanced Usage
-
-You can customize your training run with various options (see `--help`):
-
-```bash
-uv run python -m latent_trainer --help
-uv run python -m latent_trainer.models.train_model --help
-uv run python feedback_path.py --help
-```
-
-Note: Currently only the `economy_average_vs_outcome` transform is fully functional.
