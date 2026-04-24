@@ -38,14 +38,21 @@ Usage::
 
 from __future__ import annotations
 
+import getpass
 import logging
 from pathlib import Path
 
 import mlflow
 import optuna
-from mlflow import MlflowClient
-from mlflow.utils.mlflow_tags import MLFLOW_PARENT_RUN_ID, MLFLOW_RUN_NAME
 from lightning.pytorch.loggers import MLFlowLogger
+from mlflow import MlflowClient
+from mlflow.utils.mlflow_tags import (
+    MLFLOW_PARENT_RUN_ID,
+    MLFLOW_RUN_NAME,
+    MLFLOW_SOURCE_NAME,
+    MLFLOW_SOURCE_TYPE,
+    MLFLOW_USER,
+)
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
 from latent_trainer.settings import DEFAULT_MLFLOW_URI, OUTPUT_DIR
@@ -182,7 +189,13 @@ def create_child_mlflow_logger(
     else:
         experiment_id = experiment.experiment_id
 
-    tags = {MLFLOW_PARENT_RUN_ID: parent_run_id, MLFLOW_RUN_NAME: run_name}
+    tags = {
+        MLFLOW_PARENT_RUN_ID: parent_run_id,
+        MLFLOW_RUN_NAME: run_name,
+        MLFLOW_USER: getpass.getuser(),
+        MLFLOW_SOURCE_TYPE: "LOCAL",
+        MLFLOW_SOURCE_NAME: "train.py",
+    }
     run = client.create_run(experiment_id=experiment_id, run_name=run_name, tags=tags)
     child_run_id = run.info.run_id
 
@@ -232,7 +245,11 @@ def log_checkpoint_artifacts(
         )
 
 
-def log_best_trial(study: optuna.Study, config: ExperimentConfig) -> None:
+def log_best_trial(
+    study: optuna.Study,
+    config: ExperimentConfig,
+    additional_params: dict | None = None,
+) -> None:
     """Log the best Optuna trial as a dedicated MLFlow run.
 
     This creates a summary run containing the best hyperparameters and
@@ -244,6 +261,9 @@ def log_best_trial(study: optuna.Study, config: ExperimentConfig) -> None:
 
     with mlflow.start_run(run_name="best_trial_summary"):
         mlflow.log_params(best.params)
+        if additional_params:
+            mlflow.log_params(additional_params)
+
         mlflow.log_metric("best_val_metric", best.value)
         mlflow.log_metric("best_trial_number", best.number)
         mlflow.set_tag("source", "optuna_best_trial")
