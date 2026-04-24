@@ -214,17 +214,21 @@ def train_guided_pipeline(
         input_dim=input_dim,
         encoder_hidden_dims=params["encoder_hidden_dims"],
         supervised_dim=params["supervised_dim"],
-        vae_latent_dim=params["latent_dim"],
+        latent_dim=params["latent_dim"],
         learning_rate=params["learning_rate"],
         weight_decay=params["weight_decay"],
-        learning_rate_classifier=params["learning_rate_cls"],
-        weight_decay_c=params["weight_decay_cls"],
+        learning_rate_cls=params["learning_rate_cls"],
+        weight_decay_cls=params["weight_decay_cls"],
         classification_weight=params["classification_weight"],
         mean=norm_mean,
         std=norm_std,
     )
 
-    early_stopping = EarlyStopping(monitor="val_vae_loss", patience=3, mode="min")
+    early_stopping = EarlyStopping(
+        monitor="val_vae_loss",
+        patience=config.hpo_early_stopping_patience,
+        mode="min",
+    )
 
     if sweep_mode:
         trainer = Trainer(
