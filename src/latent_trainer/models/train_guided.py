@@ -141,8 +141,8 @@ def train_guided_pipeline(
     parent_run_id: str | None = None,
     trial_tag: str | None = None,
     sweep_mode: bool = False,
-) -> float:
-    """Run one Guided-VAE trial and return ``val_vae_loss``.
+) -> dict[str, float] | None:
+    """Run one Guided-VAE trial and return all validation metrics (sweep) or None.
 
     Used by both the Ray Tune HPO trainable (``sweep_mode=True``) and the
     final best-params retraining run (``sweep_mode=False``).  Mirrors the
@@ -177,6 +177,11 @@ def train_guided_pipeline(
     run_name = f"guided_vae_{trial_tag}" if trial_tag else "guided_vae_best"
     batch_size: int = params["batch_size"]
 
+    mlflow_params = {
+        key: (str(value) if isinstance(value, list) else value)
+        for key, value in params.items()
+    }
+
     train_loader = DataLoader(
         TensorDataset(train_X, train_y),
         batch_size=batch_size,
@@ -196,6 +201,7 @@ def train_guided_pipeline(
             run_name=run_name,
             parent_run_id=parent_run_id,
             tracking_uri=config.mlflow_tracking_uri,
+            params=mlflow_params,
         )
     else:
         mlf_logger = create_mlflow_logger(
@@ -218,7 +224,7 @@ def train_guided_pipeline(
         std=norm_std,
     )
 
-    early_stopping = EarlyStopping(monitor="val_vae_loss", patience=7, mode="min")
+    early_stopping = EarlyStopping(monitor="val_vae_loss", patience=3, mode="min")
 
     if sweep_mode:
         trainer = Trainer(
@@ -236,7 +242,13 @@ def train_guided_pipeline(
             train_dataloaders=train_loader,
             val_dataloaders=val_loader,
         )
-        return trainer.callback_metrics["val_vae_loss"].item()
+        cb = trainer.callback_metrics
+        return {
+            "val_loss":     cb.get("val_loss",     float("inf")).item(),
+            "val_vae_loss": cb.get("val_vae_loss", float("inf")).item(),
+            "val_cls_loss": cb.get("val_cls_loss", float("inf")).item(),
+            "val_acc":      cb.get("val_acc",      0.0).item(),
+        }
 
     # Full training: checkpoints, TensorBoard, artifact upload
     run_checkpoint_dir = CHECKPOINTS_DIR / config.experiment_name / run_name
@@ -275,4 +287,4 @@ def train_guided_pipeline(
         model_path=best_model_path,
     )
 
-    return trainer.callback_metrics["val_vae_loss"].item()
+    return None
