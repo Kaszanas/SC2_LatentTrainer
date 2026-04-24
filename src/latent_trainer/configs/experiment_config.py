@@ -89,11 +89,16 @@ class ExperimentConfig:
     # Optuna persistence
     optuna_db: str = "sqlite:///optuna_study.db"
 
+    # Early-stopping patience for HPO screening trials.
+    # Kept separate from the full-training patience (which is hardcoded in train_guided)
+    # because screening trials need more patience to warm up without wasting time.
+    hpo_early_stopping_patience: int = 15
+
     # HPO objective: weighted sum of validation metrics.
     # Keys must match metric names logged by LitGuidedVAE:
     #   val_loss, val_vae_loss, val_cls_loss, val_acc
     # Use positive weights to minimise, negative to maximise (e.g. val_acc).
     # Default: minimise val_vae_loss only (backward-compatible).
     hpo_objective_weights: dict[str, float] = field(
-        default_factory=lambda: {"val_vae_loss": 1.0}
+        default_factory=lambda: {"val_vae_loss": 0.5, "val_cls_loss": 0.5}
     )
