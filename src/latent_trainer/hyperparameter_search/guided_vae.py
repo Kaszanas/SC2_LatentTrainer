@@ -146,10 +146,10 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
             best.config,
         )
 
-        mlflow.log_metric("best_objective",    best.metrics["objective"])
+        mlflow.log_metric("best_objective", best.metrics["objective"])
         mlflow.log_metric("best_val_vae_loss", best.metrics["val_vae_loss"])
         mlflow.log_metric("best_val_cls_loss", best.metrics["val_cls_loss"])
-        mlflow.log_metric("best_val_acc",      best.metrics["val_acc"])
+        mlflow.log_metric("best_val_acc", best.metrics["val_acc"])
         mlflow.log_params({f"best_{k}": v for k, v in best.config.items()})
 
     return optuna_search._ot_study
@@ -181,13 +181,13 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
         width_choices=VAE_HIDDEN_DIM_CHOICES,
     )
 
-    nz = reconstruct_guided_vae_nz(flat_params, encoder_hidden_dims)
-    supervised_dim = reconstruct_guided_vae_supervised_dim(flat_params, nz)
+    latent_dim = reconstruct_guided_vae_nz(flat_params, encoder_hidden_dims)
+    supervised_dim = reconstruct_guided_vae_supervised_dim(flat_params, latent_dim)
 
     params = {
         **flat_params,
         "encoder_hidden_dims": encoder_hidden_dims,
-        "nz": nz,
+        "latent_dim": latent_dim,
         "supervised_dim": supervised_dim,
     }
 
