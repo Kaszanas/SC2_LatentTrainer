@@ -24,7 +24,6 @@ from latent_trainer.configs.hyperparam_settings import VAE_HIDDEN_DIM_CHOICES
 from latent_trainer.configs.search_space import (
     get_guided_vae_search_space,
     reconstruct_guided_vae_nz,
-    reconstruct_guided_vae_supervised_dim,
     reconstruct_hidden_dims,
 )
 from latent_trainer.features.data_utils import load_and_normalize
@@ -182,7 +181,7 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
     )
 
     latent_dim = reconstruct_guided_vae_nz(flat_params, encoder_hidden_dims)
-    supervised_dim = reconstruct_guided_vae_supervised_dim(flat_params, latent_dim)
+    supervised_dim = flat_params["supervised_dim"]
 
     params = {
         **flat_params,
