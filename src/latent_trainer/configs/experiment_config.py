@@ -9,7 +9,7 @@ downstream functions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from latent_trainer.settings import DEFAULT_MLFLOW_URI
 
@@ -64,7 +64,6 @@ class ExperimentConfig:
     sweep: bool
     pipeline: str = "two_stage"
     dataset_filename: str = "cached_dataset_rich.pt"
-    
 
     # MLFlow tracking
     mlflow_tracking_uri: str = DEFAULT_MLFLOW_URI
@@ -78,8 +77,8 @@ class ExperimentConfig:
     vae_epochs: int = 200
     cls_epochs: int = 100
 
-    # Guided VAE
-    guided_vae_epochs: int = 30
+    # Guided VAE Max Epochs (both sweep and final training)
+    guided_vae_epochs: int = 100
 
     # Ray resource allocation
     # Runs 10 jobs in parallel:
@@ -89,3 +88,12 @@ class ExperimentConfig:
 
     # Optuna persistence
     optuna_db: str = "sqlite:///optuna_study.db"
+
+    # HPO objective: weighted sum of validation metrics.
+    # Keys must match metric names logged by LitGuidedVAE:
+    #   val_loss, val_vae_loss, val_cls_loss, val_acc
+    # Use positive weights to minimise, negative to maximise (e.g. val_acc).
+    # Default: minimise val_vae_loss only (backward-compatible).
+    hpo_objective_weights: dict[str, float] = field(
+        default_factory=lambda: {"val_vae_loss": 1.0}
+    )
