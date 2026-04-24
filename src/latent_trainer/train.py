@@ -34,7 +34,6 @@ from latent_trainer.configs.hyperparam_settings import (
 )
 from latent_trainer.configs.search_space import (
     reconstruct_guided_vae_nz,
-    reconstruct_guided_vae_supervised_dim,
     reconstruct_hidden_dims,
 )
 from latent_trainer.hyperparameter_search.guided_vae import (
@@ -202,7 +201,7 @@ def _train_guided_vae(config: ExperimentConfig) -> None:
             width_choices=VAE_HIDDEN_DIM_CHOICES,
         )
         nz = reconstruct_guided_vae_nz(flat_params, encoder_hidden_dims)
-        supervised_dim = reconstruct_guided_vae_supervised_dim(flat_params, nz)
+        supervised_dim = flat_params["supervised_dim"]
         log_best_trial(
             study=study,
             config=config,
