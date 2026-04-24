@@ -20,14 +20,19 @@ from ray import tune
 from ray.tune.search.optuna import OptunaSearch
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
+from latent_trainer.configs.hyperparam_settings import VAE_HIDDEN_DIM_CHOICES
 from latent_trainer.configs.search_space import (
     get_guided_vae_search_space,
+    reconstruct_guided_vae_nz,
+    reconstruct_guided_vae_supervised_dim,
     reconstruct_hidden_dims,
 )
 from latent_trainer.features.data_utils import load_and_normalize
 from latent_trainer.models.train_guided import train_guided_pipeline
 from latent_trainer.settings import DATA_DIR, OUTPUT_DIR, SEED
-from latent_trainer.tracking.mlflow_utils import start_parent_run
+from latent_trainer.tracking.mlflow_utils import (
+    start_parent_run,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +75,14 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
             val_y = ray.get(val_y_ref)
 
             pl.seed_everything(SEED)
-            trial_tag = uuid.uuid4().hex[:6]
+            # Extract the Optuna trial number (added by get_guided_vae_search_space)
+            # and strip it so the model never receives it as a hyperparameter.
+            trial_num = ray_config.pop("_trial_number", None)
+            trial_tag = (
+                str(trial_num) if trial_num is not None else uuid.uuid4().hex[:6]
+            )
 
-            val_loss = train_guided_pipeline(
+            metrics = train_guided_pipeline(
                 train_X=train_X,
                 train_y=train_y,
                 val_X=val_X,
@@ -84,12 +94,15 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
                 trial_tag=trial_tag,
                 sweep_mode=True,
             )
-            return {"val_vae_loss": val_loss}
+            objective = sum(
+                w * metrics[m] for m, w in config.hpo_objective_weights.items()
+            )
+            return {**metrics, "objective": objective}
 
         optuna_storage = optuna.storages.RDBStorage(url=config.optuna_db)
         optuna_search = OptunaSearch(
             space=get_guided_vae_search_space,
-            metric="val_vae_loss",
+            metric="objective",
             mode="min",
             storage=optuna_storage,
             study_name=config.experiment_name,
@@ -113,7 +126,7 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
             tune_config=tune.TuneConfig(
                 search_alg=optuna_search,
                 num_samples=config.n_trials,
-                metric="val_vae_loss",
+                metric="objective",
                 mode="min",
                 trial_dirname_creator=lambda trial: f"trial_{trial.trial_id}",
             ),
@@ -124,14 +137,19 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
         )
 
         results = tuner.fit()
-        best = results.get_best_result(metric="val_vae_loss", mode="min")
+        best = results.get_best_result(metric="objective", mode="min")
         logger.info(
-            "Best guided-VAE trial  val_vae_loss=%.4f  config=%s",
+            "Best guided-VAE trial  objective=%.4f  val_vae_loss=%.4f  val_cls_loss=%.4f  config=%s",
+            best.metrics["objective"],
             best.metrics["val_vae_loss"],
+            best.metrics["val_cls_loss"],
             best.config,
         )
 
+        mlflow.log_metric("best_objective",    best.metrics["objective"])
         mlflow.log_metric("best_val_vae_loss", best.metrics["val_vae_loss"])
+        mlflow.log_metric("best_val_cls_loss", best.metrics["val_cls_loss"])
+        mlflow.log_metric("best_val_acc",      best.metrics["val_acc"])
         mlflow.log_params({f"best_{k}": v for k, v in best.config.items()})
 
     return optuna_search._ot_study
@@ -152,17 +170,25 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
     best = study.best_trial
     flat_params = best.params
     logger.info(
-        "Loaded best guided-VAE trial %d  val_vae_loss=%.4f",
+        "Loaded best guided-VAE trial %d  objective=%.4f",
         best.number,
         best.value,
     )
 
+    encoder_hidden_dims = reconstruct_hidden_dims(
+        flat_params,
+        prefix="enc",
+        width_choices=VAE_HIDDEN_DIM_CHOICES,
+    )
+
+    nz = reconstruct_guided_vae_nz(flat_params, encoder_hidden_dims)
+    supervised_dim = reconstruct_guided_vae_supervised_dim(flat_params, nz)
+
     params = {
         **flat_params,
-        "encoder_hidden_dims": reconstruct_hidden_dims(
-            params=flat_params,
-            prefix="enc",
-        ),
+        "encoder_hidden_dims": encoder_hidden_dims,
+        "nz": nz,
+        "supervised_dim": supervised_dim,
     }
 
     data = load_and_normalize(DATA_DIR / config.dataset_filename)
