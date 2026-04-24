@@ -207,9 +207,9 @@ def _train_guided_vae(config: ExperimentConfig) -> None:
             study=study,
             config=config,
             additional_params={
-                "decoded_encoder_hidden_dims": str(encoder_hidden_dims),
-                "decoded_nz": nz,
-                "decoded_supervised_dim": supervised_dim,
+                "encoder_hidden_dims": str(encoder_hidden_dims),
+                "latent_dim": nz,
+                "supervised_dim": supervised_dim,
             },
         )
         logger.info(f"Guided-VAE sweep complete. Best trial: {study.best_trial.params}")
