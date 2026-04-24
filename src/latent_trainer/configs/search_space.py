@@ -124,20 +124,18 @@ def get_guided_vae_search_space(trial: optuna.Trial) -> dict:
     )
     latent_dim = max(8, int(encoder_hidden_dims[-1] * latent_dim_fraction))
 
-    # sup_fraction is the Optuna parameter; supervised_dim is derived from it.
-    # Fractions < 1 guarantee supervised_dim < nz; nz is always a multiple of 2
-    # (encoder widths are powers of 2, floor is 8), so the result is always even.
-    sup_fraction = trial.suggest_categorical("sup_fraction", choices=[0.25, 0.5])
-    supervised_dim = max(2, int(latent_dim * sup_fraction))
+    # supervised_dim is sampled directly.  All choices are < 8 (the minimum
+    # latent_dim), so the constraint supervised_dim < latent_dim is guaranteed.
+    supervised_dim = trial.suggest_categorical("supervised_dim", choices=[1, 2, 4])
 
     return {
         "_trial_number": trial.number,
         "latent_dim": latent_dim,
         "supervised_dim": supervised_dim,
         "encoder_hidden_dims": encoder_hidden_dims,
-        "batch_size": trial.suggest_categorical("batch_size", choices=[64, 128]),
+        "batch_size": trial.suggest_categorical("batch_size", choices=[64]),
         "classification_weight": trial.suggest_float(
-            "classification_weight", low=1.0, high=50.0, log=True
+            "classification_weight", low=1.0, high=250.0, log=True
         ),
         "learning_rate": trial.suggest_float(
             "learning_rate", low=1e-5, high=1e-3, log=True
@@ -193,8 +191,3 @@ def reconstruct_hidden_dims(
 def reconstruct_guided_vae_nz(params: dict, encoder_hidden_dims: list[int]) -> int:
     """Derive ``nz`` from ``nz_fraction`` and the last encoder layer width."""
     return max(8, int(encoder_hidden_dims[-1] * params["nz_fraction"]))
-
-
-def reconstruct_guided_vae_supervised_dim(params: dict, nz: int) -> int:
-    """Derive ``supervised_dim`` from ``sup_fraction`` and ``nz``."""
-    return max(2, int(nz * params["sup_fraction"]))
