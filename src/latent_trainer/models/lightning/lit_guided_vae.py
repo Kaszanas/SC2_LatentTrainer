@@ -17,11 +17,11 @@ class LitGuidedVAE(pl.LightningModule):
         input_dim: int,
         encoder_hidden_dims: list[int],
         supervised_dim: int,
-        vae_latent_dim: int,
+        latent_dim: int,
         learning_rate: float = 1e-4,
         weight_decay: float = 1e-5,
-        learning_rate_classifier: float = 1e-4,
-        weight_decay_c: float = 1e-4,
+        learning_rate_cls: float = 1e-4,
+        weight_decay_cls: float = 1e-4,
         classification_weight: float = 50.0,
         mean: torch.Tensor | None = None,
         std: torch.Tensor | None = None,
@@ -37,17 +37,17 @@ class LitGuidedVAE(pl.LightningModule):
             reverse order.  Defaults to ``[64, 128, 256, 512]``.
         supervised_dim:
             Number of latent dims (per player) reserved for supervised
-            classification.  The remaining ``vae_latent_dim - supervised_dim`` dims are
+            classification.  The remaining ``latent_dim - supervised_dim`` dims are
             adversarially disentangled.
-        vae_latent_dim:
+        latent_dim:
             Size of the VAE latent distribution.
         learning_rate:
             Learning rate for the VAE and adversarial optimizers.
         weight_decay:
             Weight decay for the VAE optimizer.
-        learning_rate_classifier:
+        learning_rate_cls:
             Learning rate for the classifier optimizer.
-        weight_decay_c:
+        weight_decay_cls:
             Weight decay for the classifier optimizer.
         classification_weight:
             Weight for the classification loss.
@@ -57,13 +57,13 @@ class LitGuidedVAE(pl.LightningModule):
             Optional pre-computed training data std for input normalisation.
         """
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["mean", "std"])
 
         # Dimensions:
         self.input_dim = input_dim
         self.encoder_hidden_dims = encoder_hidden_dims
         self.supervised_dim = supervised_dim
-        self.vae_latent_dim = vae_latent_dim
+        self.latent_dim = latent_dim
 
         # Normalization stats, needed for working with unnormalized data
         # after training (e.g. when encoding new samples with the trained model):
@@ -73,8 +73,8 @@ class LitGuidedVAE(pl.LightningModule):
         # Hyperparameters:
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
-        self.learning_rate_classifier = learning_rate_classifier
-        self.weight_decay_c = weight_decay_c
+        self.learning_rate_cls = learning_rate_cls
+        self.weight_decay_cls = weight_decay_cls
         self.classification_weight = classification_weight
 
         # Manual optimisation (3 optimizers), required for the
@@ -82,7 +82,7 @@ class LitGuidedVAE(pl.LightningModule):
         self.automatic_optimization = False
 
         self.model = suGuidedVAE(
-            vae_latent_dim=vae_latent_dim,
+            latent_dim=latent_dim,
             input_dim=input_dim,
             encoder_hidden_dims=encoder_hidden_dims,
             supervised_dim=supervised_dim,
@@ -92,7 +92,7 @@ class LitGuidedVAE(pl.LightningModule):
         # Pushes the VAE to learn class-discriminative information in the supervised dims, leaving the rest
         # free of class information and hopefully more disentangled:
         self.adversarial_classifier = Classifier(
-            vae_latent_dim=vae_latent_dim,
+            latent_dim=latent_dim,
             supervised_dim=supervised_dim,
         )
 
@@ -263,8 +263,8 @@ class LitGuidedVAE(pl.LightningModule):
         )
         opt_cls = optim.AdamW(
             self.adversarial_classifier.parameters(),
-            lr=self.learning_rate_classifier,
-            weight_decay=self.weight_decay_c,
+            lr=self.learning_rate_cls,
+            weight_decay=self.weight_decay_cls,
         )
         # Adversarial optimizer updates VAE params to fool the classifier
         opt_adv = optim.AdamW(
