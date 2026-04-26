@@ -9,6 +9,7 @@ matplotlib.use("Agg")  # non-interactive backend — safe for threads and script
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
+from scipy.stats import gaussian_kde
 
 
 def plot_main_proj(
@@ -34,40 +35,59 @@ def plot_main_proj(
         fontweight="bold",
     )
 
-    ax1.scatter(loss_c[:, 0], loss_c[:, 1], c="#e74c3c", alpha=0.2, s=5, label="Loss")
-    ax1.scatter(win_c[:, 0], win_c[:, 1], c="#3498db", alpha=0.2, s=5, label="Win")
+    # --- density background ---
+    all_pts = np.vstack([win_c, loss_c])
+    pad_x = 0.05 * (all_pts[:, 0].max() - all_pts[:, 0].min() or 1)
+    pad_y = 0.05 * (all_pts[:, 1].max() - all_pts[:, 1].min() or 1)
+    xx, yy = np.mgrid[
+        all_pts[:, 0].min() - pad_x : all_pts[:, 0].max() + pad_x : 120j,
+        all_pts[:, 1].min() - pad_y : all_pts[:, 1].max() + pad_y : 120j,
+    ]
+    pos = np.vstack([xx.ravel(), yy.ravel()])
+    if len(loss_c) >= 2:
+        z_loss = gaussian_kde(loss_c.T)(pos).reshape(xx.shape)
+        ax1.contourf(xx, yy, z_loss, levels=8, cmap="Blues", alpha=0.55)
+    if len(win_c) >= 2:
+        z_win = gaussian_kde(win_c.T)(pos).reshape(xx.shape)
+        ax1.contourf(xx, yy, z_win, levels=8, cmap="Reds", alpha=0.55)
 
-    ax1.plot(path_c[:, 0], path_c[:, 1], color="black", linewidth=2.5, zorder=5)
-    ax1.scatter(
-        path_c[1:-1, 0],
-        path_c[1:-1, 1],
-        c="gold",
-        s=50,
-        marker="D",
-        edgecolors="black",
-        linewidths=0.8,
-        zorder=6,
-        label="Improvement path",
-    )
+    # PCA components are roughly unit-normal — fix to [-3, 3] for a stable frame.
+    # Other projections (UMAP, t-SNE) use the density grid bounds.
+    if proj_label == "PC":
+        ax1.set_xlim(-3, 3)
+        ax1.set_ylim(-3, 3)
+    else:
+        ax1.set_xlim(xx[0, 0], xx[-1, 0])
+        ax1.set_ylim(yy[0, 0], yy[0, -1])
+
+    # --- improvement path ---
+    ax1.plot(path_c[:, 0], path_c[:, 1], color="black", linewidth=2, zorder=5)
+    if len(path_c) > 2:
+        ax1.scatter(
+            path_c[1:-1, 0],
+            path_c[1:-1, 1],
+            c="black",
+            s=20,
+            zorder=6,
+            label="Waypoints",
+        )
     ax1.scatter(
         path_c[0, 0],
         path_c[0, 1],
-        c="red",
-        s=140,
-        marker="*",
-        edgecolors="black",
-        linewidths=1,
+        c="#3498db",
+        s=70,
+        edgecolors="white",
+        linewidths=1.0,
         zorder=7,
         label="Start (loss)",
     )
     ax1.scatter(
         path_c[-1, 0],
         path_c[-1, 1],
-        c="blue",
-        s=140,
-        marker="*",
-        edgecolors="black",
-        linewidths=1,
+        c="#e74c3c",
+        s=70,
+        edgecolors="white",
+        linewidths=1.0,
         zorder=7,
         label="Target (win)",
     )
@@ -80,6 +100,14 @@ def plot_main_proj(
             arrowprops=dict(arrowstyle="->", color="black", lw=1.2),
         )
 
+    ax1.text(
+        0.02, 0.02,
+        "Blue = loss density  |  Red = win density",
+        transform=ax1.transAxes,
+        fontsize=7,
+        color="grey",
+        va="bottom",
+    )
     ax1.set_xlabel(f"{proj_label}1{subtitle}")
     ax1.set_ylabel(f"{proj_label}2")
     ax1.set_title(f"Latent space ({proj_label}) + improvement path", fontsize=11)
