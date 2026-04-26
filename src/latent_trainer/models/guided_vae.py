@@ -13,7 +13,7 @@ class suGuidedVAE(nn.Module):
     def __init__(
         self,
         encoder_hidden_dims: list[int],
-        vae_latent_dim: int,
+        latent_dim: int,
         input_dim: int,
         supervised_dim: int,
     ):
@@ -25,29 +25,29 @@ class suGuidedVAE(nn.Module):
         encoder_hidden_dims : list[int]
             Defines the hidden layer widths for the encoder.  The decoder mirrors these in
             reverse order.  For example, ``[64, 128, 256, 512]``.
-        vae_latent_dim : int
+        latent_dim : int
             Size of the VAE latent distribution.
         input_dim : int
             Number of input features.
         classifier_dim : int
             Number of latent dims (per player) reserved for supervised classification.
-            The remaining ``vae_latent_dim - classifier_dim`` dims are adversarially disentangled.
+            The remaining ``latent_dim - classifier_dim`` dims are adversarially disentangled.
 
         Raises
         ------
         ValueError
-            If ``classifier_dim`` is not in the range (0, ``vae_latent_dim``).
+            If ``classifier_dim`` is not in the range (0, ``latent_dim``).
         """
 
         super().__init__()
 
-        if not (0 < supervised_dim < vae_latent_dim):
+        if not (0 < supervised_dim < latent_dim):
             raise ValueError(
-                f"k_cls_dims must be in (0, n_vae_dis). Got k_cls_dims={supervised_dim}, n_vae_dis={vae_latent_dim}."
+                f"k_cls_dims must be in (0, n_vae_dis). Got k_cls_dims={supervised_dim}, n_vae_dis={latent_dim}."
             )
 
-        self.n_vae_dis = vae_latent_dim
-        self.n_free_dims = vae_latent_dim - supervised_dim
+        self.n_vae_dis = latent_dim
+        self.n_free_dims = latent_dim - supervised_dim
         self.input_dim = input_dim
 
         self.supervised_dim = supervised_dim
@@ -58,12 +58,12 @@ class suGuidedVAE(nn.Module):
         for h in encoder_hidden_dims:
             enc_layers += [nn.Linear(in_dim, h), nn.ReLU(True)]
             in_dim = h
-        enc_layers.append(nn.Linear(in_dim, vae_latent_dim * 2))
+        enc_layers.append(nn.Linear(in_dim, latent_dim * 2))
         self.encoder = nn.Sequential(*enc_layers)
 
         # Decoder: n_vae_dis → reversed(hidden_dims) → input_dim
         dec_layers: list[nn.Module] = []
-        in_dim = vae_latent_dim
+        in_dim = latent_dim
         for h in reversed(encoder_hidden_dims):
             dec_layers += [nn.Linear(in_dim, h), nn.ReLU(True)]
             in_dim = h
@@ -144,11 +144,11 @@ class suGuidedVAE(nn.Module):
 class Classifier(nn.Module):
     """Adversarial classifier operating on the non-supervised latent dims."""
 
-    def __init__(self, vae_latent_dim: int, supervised_dim: int) -> None:
+    def __init__(self, latent_dim: int, supervised_dim: int) -> None:
         super().__init__()
-        if not (0 < supervised_dim < vae_latent_dim):
+        if not (0 < supervised_dim < latent_dim):
             raise ValueError(
-                f"Classifier dimension must be in (0, vae_latent_dim). Got classifier_dim={supervised_dim}, vae_latent_dim={vae_latent_dim}."
+                f"Classifier dimension must be in (0, latent_dim). Got classifier_dim={supervised_dim}, latent_dim={latent_dim}."
             )
 
         # Adversarial classifier operates on the non supervised dimensions coming out
@@ -156,7 +156,7 @@ class Classifier(nn.Module):
         # we need to concatenate those dims for both players before classifying.
         # Therefore the input dimension is number of the number of supervised
         # dimensions subtracted from the total latent dim, multiplied by 2 for both players:
-        in_dim = (vae_latent_dim - supervised_dim) * 2
+        in_dim = (latent_dim - supervised_dim) * 2
         self.cls_sq = nn.Sequential(
             nn.Linear(in_dim, 32),
             nn.LayerNorm(32),

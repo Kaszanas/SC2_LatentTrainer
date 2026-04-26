@@ -57,7 +57,7 @@ class LitGuidedVAE(pl.LightningModule):
             Optional pre-computed training data std for input normalisation.
         """
         super().__init__()
-        self.save_hyperparameters(ignore=["mean", "std"])
+        self.save_hyperparameters()
 
         # Dimensions:
         self.input_dim = input_dim

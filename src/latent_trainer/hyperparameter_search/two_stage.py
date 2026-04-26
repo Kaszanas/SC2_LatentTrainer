@@ -185,8 +185,8 @@ def run_two_stage_best(config: ExperimentConfig) -> float:
 
     params = {
         **flat_params,
-        "vae_hidden_dims": reconstruct_hidden_dims(flat_params, "vae"),
-        "cls_hidden_dims": reconstruct_hidden_dims(flat_params, "cls"),
+        "vae_hidden_dims": reconstruct_hidden_dims(flat_params, "vae", width_choices=[64, 128, 256, 512]),
+        "cls_hidden_dims": reconstruct_hidden_dims(flat_params, "cls", width_choices=[32, 64, 128, 256]),
     }
 
     data = load_and_normalize(DATA_DIR / config.dataset_filename)

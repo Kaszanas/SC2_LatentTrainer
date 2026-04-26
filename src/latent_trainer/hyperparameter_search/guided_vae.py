@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from datetime import datetime
 
 import lightning as pl
 import mlflow
@@ -20,16 +21,12 @@ from ray import tune
 from ray.tune.search.optuna import OptunaSearch
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
-from latent_trainer.configs.hyperparam_settings import VAE_HIDDEN_DIM_CHOICES
-from latent_trainer.configs.search_space import (
-    get_guided_vae_search_space,
-    reconstruct_guided_vae_nz,
-    reconstruct_hidden_dims,
-)
+from latent_trainer.configs.search_space import get_guided_vae_search_space
 from latent_trainer.features.data_utils import load_and_normalize
 from latent_trainer.models.train_guided import train_guided_pipeline
 from latent_trainer.settings import DATA_DIR, OUTPUT_DIR, SEED
 from latent_trainer.tracking.mlflow_utils import (
+    load_guided_vae_params_from_mlflow,
     start_parent_run,
 )
 
@@ -155,43 +152,37 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
 
 
 def run_guided_vae_best(config: ExperimentConfig) -> None:
-    """Load the best Optuna trial and run a full Guided-VAE training.
+    """Load params from MLflow and run a full Guided-VAE training.
+
+    Source priority:
+    - ``config.mlflow_source_run`` set → reads from that named run.
+    - not set → reads from the most recent ``best_trial_summary`` run
+      (tagged ``source=optuna_best_trial``) in the source experiment.
 
     Uses all training epochs (``config.guided_vae_epochs``) and writes
     checkpoints + MLFlow artifacts via :func:`train_guided_pipeline`.
     """
     pl.seed_everything(SEED)
 
-    study = optuna.load_study(
-        study_name=config.experiment_name,
-        storage=config.optuna_db,
+    source_experiment = config.mlflow_source_experiment or config.experiment_name
+    params = load_guided_vae_params_from_mlflow(
+        experiment_name=source_experiment,
+        run_name=config.mlflow_source_run,
+        tracking_uri=config.mlflow_tracking_uri,
     )
-    best = study.best_trial
-    flat_params = best.params
     logger.info(
-        "Loaded best guided-VAE trial %d  objective=%.4f",
-        best.number,
-        best.value,
+        "Loaded params from MLflow  experiment=%s  run=%s  params=%s",
+        source_experiment,
+        config.mlflow_source_run or "<best_trial_summary>",
+        params,
     )
 
-    encoder_hidden_dims = reconstruct_hidden_dims(
-        flat_params,
-        prefix="enc",
-        width_choices=VAE_HIDDEN_DIM_CHOICES,
-    )
-
-    latent_dim = reconstruct_guided_vae_nz(flat_params, encoder_hidden_dims)
-    supervised_dim = flat_params["supervised_dim"]
-
-    params = {
-        **flat_params,
-        "encoder_hidden_dims": encoder_hidden_dims,
-        "latent_dim": latent_dim,
-        "supervised_dim": supervised_dim,
-    }
+    if config.run_name:
+        trial_tag = config.run_name
+    else:
+        trial_tag = f"retrain_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     data = load_and_normalize(DATA_DIR / config.dataset_filename)
-
     train_guided_pipeline(
         train_X=data.train_X,
         train_y=data.train_y,
@@ -202,6 +193,7 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
         params=params,
         norm_mean=data.mean,
         norm_std=data.std,
+        trial_tag=trial_tag,
         sweep_mode=False,
     )
     logger.info("Guided-VAE best-params run complete.")

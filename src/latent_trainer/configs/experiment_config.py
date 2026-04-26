@@ -94,6 +94,17 @@ class ExperimentConfig:
     # because screening trials need more patience to warm up without wasting time.
     hpo_early_stopping_patience: int = 15
 
+    # MLflow source for "best" mode param loading.
+    # None → uses experiment_name as source.
+    mlflow_source_experiment: str | None = None
+    # None → finds the most recent best_trial_summary run (tag source=optuna_best_trial).
+    # str  → reads params from any named run in the source experiment.
+    mlflow_source_run: str | None = None
+
+    # Explicit MLflow run name for non-sweep retraining.
+    # None → auto-generated as "{source_label}_{timestamp}".
+    run_name: str | None = None
+
     # HPO objective: weighted sum of validation metrics.
     # Keys must match metric names logged by LitGuidedVAE:
     #   val_loss, val_vae_loss, val_cls_loss, val_acc

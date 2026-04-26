@@ -109,6 +109,30 @@ logger = logging.getLogger(__name__)
     show_default=True,
     help="Optuna storage URL.",
 )
+@click.option(
+    "--source_experiment",
+    default=None,
+    help=(
+        "MLflow experiment to load params from in 'best' mode. "
+        "Defaults to --experiment_name."
+    ),
+)
+@click.option(
+    "--source_run",
+    default=None,
+    help=(
+        "MLflow run name to load params from in 'best' mode. "
+        "If omitted, uses the most recent run tagged source=optuna_best_trial."
+    ),
+)
+@click.option(
+    "--run_name",
+    default=None,
+    help=(
+        "Explicit MLflow run name for non-sweep retraining. "
+        "If omitted, auto-generated as '<source>_<timestamp>'."
+    ),
+)
 def main(
     pipeline: str,
     dataset_filename: str,
@@ -119,6 +143,9 @@ def main(
     gpus_per_trial: float,
     cpus_per_trial: int,
     optuna_db: str,
+    source_experiment: str | None,
+    source_run: str | None,
+    run_name: str | None,
 ) -> None:
     """SC2 Latent Trainer — unified training & HPO entrypoint."""
     logging.basicConfig(
@@ -141,6 +168,9 @@ def main(
         gpus_per_trial=gpus_per_trial,
         cpus_per_trial=cpus_per_trial,
         optuna_db=optuna_db,
+        mlflow_source_experiment=source_experiment,
+        mlflow_source_run=source_run,
+        run_name=run_name,
     )
 
     setup_mlflow(
