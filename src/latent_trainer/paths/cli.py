@@ -257,7 +257,7 @@ def cmd_gradient_ascent(
 @click.option(
     "--ot_reg",
     type=float,
-    default=0.0,
+    default=0.01,
     show_default=True,
     help="Entropic regularisation (0 = exact EMD).",
 )
@@ -306,7 +306,7 @@ def cmd_optimal_transport(
 @cli.command("geodesic")
 @global_options
 @click.option(
-    "--geodesic-k",
+    "--geodesic_k",
     type=int,
     default=12,
     show_default=True,
