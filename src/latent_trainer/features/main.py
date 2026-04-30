@@ -9,7 +9,7 @@ from latent_trainer.features.preprocess_dataset import (
     TransformEnumFunction,
     preprocess_dataset_chunked_profile,
 )
-from latent_trainer.settings import DATA_DIR, SEED
+from latent_trainer.settings import DATA_DIR, LOGGING_FORMAT, SEED
 
 
 @click.command(
@@ -29,7 +29,7 @@ from latent_trainer.settings import DATA_DIR, SEED
     help="Path to the single JSON dataset file.",
 )
 @click.option(
-    "--n-workers",
+    "--n_workers",
     type=int,
     default=24,
     show_default=True,
@@ -43,8 +43,10 @@ def main(
     """Pre-process Single JSON SC2_Dataset and cache the transformed tensors to drive."""
     transform_name = TransformEnumFunction._TRANSFORM_NAMES[transform]
 
-    # profiler = cProfile.Profile()
-    # profiler.enable()
+    logging.basicConfig(
+        level=logging.INFO,
+        format=LOGGING_FORMAT,
+    )
 
     pl.seed_everything(SEED)
 
@@ -58,20 +60,6 @@ def main(
         )
     except Exception as e:
         logging.error(f"Error during dataset preprocessing: {e}")
-    # finally:
-    # profiler.disable()
-
-    # profile_output = Path("preprocess_dataset_profile_no_chunk.prof").resolve()
-
-    # if profile_output is not None:
-    #     profiler.dump_stats(str(profile_output))
-    #     click.echo(f"Saved cProfile stats to: {profile_output}")
-
-    # stats_output = io.StringIO()
-    # stats = pstats.Stats(profiler, stream=stats_output).sort_stats("cumulative")
-    # stats.print_stats(30)
-    # click.echo("cProfile results (top 30 by cumulative time):")
-    # click.echo(stats_output.getvalue())
 
 
 if __name__ == "__main__":

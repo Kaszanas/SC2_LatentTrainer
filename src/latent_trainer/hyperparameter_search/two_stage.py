@@ -30,6 +30,7 @@ from latent_trainer.features.data_utils import load_and_normalize
 from latent_trainer.models.train_two_stage import train_two_stage_pipeline
 from latent_trainer.settings import DATA_DIR, OUTPUT_DIR, SEED
 from latent_trainer.tracking.mlflow_utils import (
+    create_child_mlflow_logger,
     start_parent_run,
 )
 
@@ -82,18 +83,17 @@ def run_two_stage_hyperparameter_search(config: ExperimentConfig) -> optuna.Stud
 
             # Create a trial-level run nested under the sweep parent so that
             # the VAE and classifier child runs are grouped together in MLflow.
-            mlflow.set_tracking_uri(config.mlflow_tracking_uri)
-            mlflow.set_experiment(config.experiment_name)
-            trial_run = mlflow.start_run(run_name=f"trial_{trial_tag}")
-            trial_run_id = trial_run.info.run_id
-            mlflow.set_tag("mlflow.parentRunId", parent_run_id)
-            mlflow.log_params(
-                {
+            trial_logger = create_child_mlflow_logger(
+                experiment_name=config.experiment_name,
+                run_name=f"trial_{trial_tag}",
+                parent_run_id=parent_run_id,
+                tracking_uri=config.mlflow_tracking_uri,
+                params={
                     k: str(v) if isinstance(v, list) else v
                     for k, v in ray_config.items()
                 },
             )
-            mlflow.end_run()
+            trial_run_id = trial_logger.run_id
 
             acc = train_two_stage_pipeline(
                 train_X=_train_X,
@@ -109,8 +109,9 @@ def run_two_stage_hyperparameter_search(config: ExperimentConfig) -> optuna.Stud
                 sweep_mode=True,
             )
 
-            with mlflow.start_run(run_id=trial_run_id):
-                mlflow.log_metric("val_acc", acc)
+            trial_logger.experiment.log_metric(
+                trial_run_id, "val_acc", acc,
+            )
 
             return {"val_acc": acc}
 
@@ -184,8 +185,8 @@ def run_two_stage_best(config: ExperimentConfig) -> float:
 
     params = {
         **flat_params,
-        "vae_hidden_dims": reconstruct_hidden_dims(flat_params, "vae"),
-        "cls_hidden_dims": reconstruct_hidden_dims(flat_params, "cls"),
+        "vae_hidden_dims": reconstruct_hidden_dims(flat_params, "vae", width_choices=[64, 128, 256, 512]),
+        "cls_hidden_dims": reconstruct_hidden_dims(flat_params, "cls", width_choices=[32, 64, 128, 256]),
     }
 
     data = load_and_normalize(DATA_DIR / config.dataset_filename)

@@ -28,6 +28,14 @@ import click
 import pytorch_lightning as pl
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
+from latent_trainer.configs.hyperparam_settings import (
+    CLS_HIDDEN_DIM_CHOICES,
+    VAE_HIDDEN_DIM_CHOICES,
+)
+from latent_trainer.configs.search_space import (
+    reconstruct_guided_vae_nz,
+    reconstruct_hidden_dims,
+)
 from latent_trainer.hyperparameter_search.guided_vae import (
     run_guided_vae_best,
     run_guided_vae_hyperparameter_search,
@@ -101,6 +109,30 @@ logger = logging.getLogger(__name__)
     show_default=True,
     help="Optuna storage URL.",
 )
+@click.option(
+    "--source_experiment",
+    default=None,
+    help=(
+        "MLflow experiment to load params from in 'best' mode. "
+        "Defaults to --experiment_name."
+    ),
+)
+@click.option(
+    "--source_run",
+    default=None,
+    help=(
+        "MLflow run name to load params from in 'best' mode. "
+        "If omitted, uses the most recent run tagged source=optuna_best_trial."
+    ),
+)
+@click.option(
+    "--run_name",
+    default=None,
+    help=(
+        "Explicit MLflow run name for non-sweep retraining. "
+        "If omitted, auto-generated as '<source>_<timestamp>'."
+    ),
+)
 def main(
     pipeline: str,
     dataset_filename: str,
@@ -111,6 +143,9 @@ def main(
     gpus_per_trial: float,
     cpus_per_trial: int,
     optuna_db: str,
+    source_experiment: str | None,
+    source_run: str | None,
+    run_name: str | None,
 ) -> None:
     """SC2 Latent Trainer — unified training & HPO entrypoint."""
     logging.basicConfig(
@@ -133,6 +168,9 @@ def main(
         gpus_per_trial=gpus_per_trial,
         cpus_per_trial=cpus_per_trial,
         optuna_db=optuna_db,
+        mlflow_source_experiment=source_experiment,
+        mlflow_source_run=source_run,
+        run_name=run_name,
     )
 
     setup_mlflow(
@@ -154,7 +192,25 @@ def _train_two_stage(config: ExperimentConfig) -> None:
     if config.sweep:
         logger.info(f"Starting Ray Tune + Optuna sweep ({config.n_trials} trials)...")
         study = run_two_stage_hyperparameter_search(config=config)
-        log_best_trial(study=study, config=config)
+        flat_params = study.best_trial.params
+        vae_hidden_dims = reconstruct_hidden_dims(
+            flat_params,
+            prefix="vae",
+            width_choices=VAE_HIDDEN_DIM_CHOICES,
+        )
+        cls_hidden_dims = reconstruct_hidden_dims(
+            flat_params,
+            prefix="cls",
+            width_choices=CLS_HIDDEN_DIM_CHOICES,
+        )
+        log_best_trial(
+            study=study,
+            config=config,
+            additional_params={
+                "decoded_vae_hidden_dims": str(vae_hidden_dims),
+                "decoded_cls_hidden_dims": str(cls_hidden_dims),
+            },
+        )
         logger.info(f"Sweep complete. Best trial: {study.best_trial.params}")
         return
 
@@ -168,7 +224,23 @@ def _train_guided_vae(config: ExperimentConfig) -> None:
     if config.sweep:
         logger.info(f"Starting Guided-VAE Optuna sweep ({config.n_trials} trials)...")
         study = run_guided_vae_hyperparameter_search(config=config)
-        log_best_trial(study=study, config=config)
+        flat_params = study.best_trial.params
+        encoder_hidden_dims = reconstruct_hidden_dims(
+            flat_params,
+            prefix="enc",
+            width_choices=VAE_HIDDEN_DIM_CHOICES,
+        )
+        nz = reconstruct_guided_vae_nz(flat_params, encoder_hidden_dims)
+        supervised_dim = flat_params["supervised_dim"]
+        log_best_trial(
+            study=study,
+            config=config,
+            additional_params={
+                "encoder_hidden_dims": str(encoder_hidden_dims),
+                "latent_dim": nz,
+                "supervised_dim": supervised_dim,
+            },
+        )
         logger.info(f"Guided-VAE sweep complete. Best trial: {study.best_trial.params}")
         return
 

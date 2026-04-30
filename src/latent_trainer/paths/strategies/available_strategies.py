@@ -47,3 +47,4 @@ class PathStrategy(enum.Enum):
     OPTIMAL_TRANSPORT = "optimal_transport"
     GRADIENT_ASCENT = "gradient_ascent"
     GEODESIC = "geodesic"
+    NEURAL_FLOW = "neural_flow"

@@ -9,7 +9,7 @@ downstream functions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from latent_trainer.settings import DEFAULT_MLFLOW_URI
 
@@ -64,7 +64,6 @@ class ExperimentConfig:
     sweep: bool
     pipeline: str = "two_stage"
     dataset_filename: str = "cached_dataset_rich.pt"
-    
 
     # MLFlow tracking
     mlflow_tracking_uri: str = DEFAULT_MLFLOW_URI
@@ -78,8 +77,8 @@ class ExperimentConfig:
     vae_epochs: int = 200
     cls_epochs: int = 100
 
-    # Guided VAE
-    guided_vae_epochs: int = 30
+    # Guided VAE Max Epochs (both sweep and final training)
+    guided_vae_epochs: int = 100
 
     # Ray resource allocation
     # Runs 10 jobs in parallel:
@@ -89,3 +88,28 @@ class ExperimentConfig:
 
     # Optuna persistence
     optuna_db: str = "sqlite:///optuna_study.db"
+
+    # Early-stopping patience for HPO screening trials.
+    # Kept separate from the full-training patience (which is hardcoded in train_guided)
+    # because screening trials need more patience to warm up without wasting time.
+    hpo_early_stopping_patience: int = 15
+
+    # MLflow source for "best" mode param loading.
+    # None → uses experiment_name as source.
+    mlflow_source_experiment: str | None = None
+    # None → finds the most recent best_trial_summary run (tag source=optuna_best_trial).
+    # str  → reads params from any named run in the source experiment.
+    mlflow_source_run: str | None = None
+
+    # Explicit MLflow run name for non-sweep retraining.
+    # None → auto-generated as "{source_label}_{timestamp}".
+    run_name: str | None = None
+
+    # HPO objective: weighted sum of validation metrics.
+    # Keys must match metric names logged by LitGuidedVAE:
+    #   val_loss, val_vae_loss, val_cls_loss, val_acc
+    # Use positive weights to minimise, negative to maximise (e.g. val_acc).
+    # Default: minimise val_vae_loss only (backward-compatible).
+    hpo_objective_weights: dict[str, float] = field(
+        default_factory=lambda: {"val_vae_loss": 0.5, "val_cls_loss": 0.5}
+    )

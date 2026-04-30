@@ -19,6 +19,7 @@ from latent_trainer.features.type import (
     CachedSC2Dataset,
     Encoder,
     NormalizedData,
+    NormalizedDataloaders,
     NormalizedDataWithLabels,
 )
 
@@ -67,11 +68,9 @@ def normalize(
     return normalized_data
 
 
-# ------------------------------------------------------------------
 # Dataset loading
-# ------------------------------------------------------------------
 def load_and_normalize(
-    cache_path: Path | str,
+    cached_dataset_filepath: Path,
 ) -> NormalizedDataWithLabels:
     """
     Load a cached ``.pt`` dataset and normalise features.
@@ -91,8 +90,11 @@ def load_and_normalize(
     NormalizedDataWithLabels
         Normalised tensors and normalisation parameters.
     """
-    logger.info(f"Loading data from {cache_path}")
-    cached: dict[str, torch.Tensor] = torch.load(f=str(cache_path), weights_only=True)
+    logger.info(f"Loading data from {cached_dataset_filepath}")
+    cached: dict[str, torch.Tensor] = torch.load(
+        f=str(cached_dataset_filepath),
+        weights_only=True,
+    )
 
     cached_data_spec = CachedDatasetFileSpec(**cached)
 
@@ -125,7 +127,7 @@ def load_and_normalize(
 def load_cached_dataloaders(
     cache_path: Path,
     batch_size: int,
-) -> NormalizedData:
+) -> NormalizedDataloaders:
     """
     Load cached dataset, normalise, and return ready-to-use DataLoaders.
 
@@ -145,7 +147,7 @@ def load_cached_dataloaders(
         Contains the DataLoaders and normalisation parameters.
     """
 
-    normalized_data = load_and_normalize(cache_path)
+    normalized_data = load_and_normalize(cached_dataset_filepath=cache_path)
     input_dim = normalized_data.train_X.shape[-1]
 
     train_loader = DataLoader(
@@ -164,7 +166,14 @@ def load_cached_dataloaders(
         batch_size=batch_size,
         shuffle=False,
     )
-    return train_loader, val_loader, input_dim
+
+    return NormalizedDataloaders(
+        train_loader=train_loader,
+        val_loader=val_loader,
+        input_dim=input_dim,
+        mean=normalized_data.mean,
+        std=normalized_data.std,
+    )
 
 
 # Latent extraction

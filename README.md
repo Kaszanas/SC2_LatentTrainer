@@ -62,7 +62,7 @@ All training runs are logged to a local SQLite database (`mlflow.db`) by
 default.  To use a remote tracking server, pass `--mlflow-uri`:
 
 ```bash
-uv run python src/latent_trainer/train.py --mlflow_uri http://localhost:5000
+python src/latent_trainer/train.py --mlflow_uri http://localhost:5000
 ```
 
 ## Feedback Path Finder
@@ -72,10 +72,10 @@ guidance for a losing sample:
 
 ```bash
 # Linear interpolation (fast, deterministic):
-uv run python feedback_path.py --strategy linear --method centroid
+python src/latent_trainer/paths/main.py linear --method centroid
 
 # Gradient ascent + KDE density (manifold-following, 3-signal feedback):
-uv run python feedback_path.py --strategy gradient_kde --top-k 15
+python src/latent_trainer/paths/main.py gradient_kde --top-k 15
 ```
 
 The `gradient_kde` strategy computes:
@@ -86,14 +86,3 @@ The `gradient_kde` strategy computes:
 Both strategies are opponent-aware — P(win) is computed using both
 players' latent codes.
 
-## Advanced Usage
-
-You can customize your training run with various options (see `--help`):
-
-```bash
-uv run python -m latent_trainer --help
-uv run python -m latent_trainer.models.train_model --help
-uv run python feedback_path.py --help
-```
-
-Note: Currently only the `economy_average_vs_outcome` transform is fully functional.
