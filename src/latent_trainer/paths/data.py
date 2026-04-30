@@ -58,10 +58,16 @@ def load_model_and_data(
     # TODO: will need to take the model class as an argument instead of hardcoding:
     vae_model = LitGuidedVAE.load_from_checkpoint(checkpoint_path=model_path)
     vae_model.eval()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    vae_model = vae_model.to(device)
+    print(f"  Model device: {device}")
 
     data = load_and_normalize(cached_dataset_filepath=cached_dataset_filepath)
+    test_X = data.test_X.to(device)
+    test_y = data.test_y.to(device)
+    print(f"  Data device: X={test_X.device}, y={test_y.device}")
 
-    return vae_model, data.test_X, data.test_y
+    return vae_model, test_X, test_y
 
 
 # Opponent-aware score / logit functions
@@ -85,6 +91,7 @@ def opponent_aware_score(
     """
 
     classifier = guided_vae.model.classifier
+    z = z.to(opponent_z.device)
 
     sup_dim = classifier[0].in_features // 2
     n = z.shape[0]
@@ -112,6 +119,7 @@ def opponent_aware_logit(
     """
 
     classifier = guided_vae.model.classifier
+    z = z.to(opponent_z.device)
 
     sup_dim = classifier[0].in_features // 2
     n = z.shape[0]
@@ -170,6 +178,36 @@ def compute_loss_latents(
     )
 
 
+def build_path_context(
+    *,
+    guided_vae: "LitGuidedVAE",
+    X: torch.Tensor,
+    labels: "np.ndarray",
+    labels_tensor: torch.Tensor,
+    latents_p0: torch.Tensor,
+    latents_p1: torch.Tensor,
+    chosen: int,
+) -> "PathContext":
+    """Build a PathContext from pre-encoded latents.
+
+    Extracted so the orchestrator can reuse a single encode pass across all
+    samples instead of reloading the model per sample.
+    """
+    player_idx = int(labels[chosen])
+    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
+    return PathContext(
+        guided_vae=guided_vae,
+        X=X,
+        labels=labels,
+        labels_tensor=labels_tensor,
+        latents_p0=latents_p0,
+        latents_p1=latents_p1,
+        chosen=chosen,
+        player_idx=player_idx,
+        sample_z=sample_z,
+    )
+
+
 def prepare_path_context(
     model_path: Path,
     dataset_path: Path,
@@ -186,8 +224,8 @@ def prepare_path_context(
         model_path=model_path,
         cached_dataset_filepath=dataset_path,
     )
-    labels = y.numpy()
-    labels_tensor = torch.tensor(labels)
+    labels = y.cpu().numpy()
+    labels_tensor = y
     print(f"Validation: {len(X)}")
 
     print("Encoding into latent space...")
@@ -200,13 +238,11 @@ def prepare_path_context(
         if (sample_idx is not None and sample_idx < n)
         else torch.randint(n, (1,)).item()
     )
-    player_idx = int(labels[chosen])
-    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
     print(
-        f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
+        f"Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {int(labels[chosen])})"
     )
 
-    return PathContext(
+    return build_path_context(
         guided_vae=guided_vae,
         X=X,
         labels=labels,
@@ -214,6 +250,4 @@ def prepare_path_context(
         latents_p0=latents_p0,
         latents_p1=latents_p1,
         chosen=chosen,
-        player_idx=player_idx,
-        sample_z=sample_z,
     )

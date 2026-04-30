@@ -76,7 +76,7 @@ def run_path_charting_pipeline(
     alphas = np.linspace(0.0, 1.0, n_steps)
 
     with torch.no_grad():
-        win_probs = score_fn(path_z_tensor).numpy()
+        win_probs = score_fn(path_z_tensor).cpu().numpy()
     print(f"  P(win): {win_probs[0]:.3f} -> {win_probs[-1]:.3f}")
 
     print("Computing feedback...")

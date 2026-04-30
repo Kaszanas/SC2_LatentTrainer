@@ -15,6 +15,9 @@ from latent_trainer.paths.data import (
     prepare_path_context,
 )
 from latent_trainer.paths.flow import LitOTFlowMatching
+from latent_trainer.paths.options import (
+    global_options,
+)
 from latent_trainer.paths.pipeline import run_path_charting_pipeline
 from latent_trainer.paths.strategies import path_linear
 from latent_trainer.paths.strategies.geodesic import path_geodesic
@@ -22,53 +25,6 @@ from latent_trainer.paths.strategies.gradient_ascent import path_gradient_ascent
 from latent_trainer.paths.strategies.neural_flow import path_neural_flow
 from latent_trainer.paths.strategies.optimal_transport import path_optimal_transport
 from latent_trainer.settings import DATA_DIR
-
-PATH_CHARTING_CLI_COMMON_OPTIONS = [
-    click.option(
-        "--model_path",
-        help="Filename of the trained model.",
-        type=click.Path(
-            exists=True,
-            dir_okay=False,
-            path_type=Path,
-            resolve_path=True,
-        ),
-    ),
-    click.option(
-        "--dataset_filename",
-        default="cached_dataset_rich.pt",
-        show_default=True,
-        help="Filename of the cached dataset placed in the DATA_DIR (set in settings.py).",
-        type=str,
-    ),
-    click.option(
-        "--sample_idx",
-        type=int,
-        default=None,
-        help="Index of the game to analyse. If omitted, a game is chosen at random.",
-    ),
-    click.option(
-        "--n_steps",
-        type=int,
-        default=20,
-        show_default=True,
-        help="Number of waypoints along the path.",
-    ),
-    click.option(
-        "--top_k",
-        type=int,
-        default=10,
-        show_default=True,
-        help="Number of features requiring improvement to display.",
-    ),
-]
-
-
-def global_options(fn):
-    """Decorator that attaches all global options to a sub-command."""
-    for option in reversed(PATH_CHARTING_CLI_COMMON_OPTIONS):
-        fn = option(fn)
-    return fn
 
 
 @click.group()
@@ -118,14 +74,18 @@ def cmd_linear(
     match method:
         case "centroid":
             print("Target: centroid")
-            target_z = win_centroid.numpy()
+            target_z = win_centroid.cpu().numpy()
         case "nearest":
             print(f"Target: nearest (k={k_neighbours})")
-            target_z = nearest_winning_target(
-                sample_z=path_context.sample_z,
-                win_latents=win_latents,
-                k=k_neighbours,
-            ).numpy()
+            target_z = (
+                nearest_winning_target(
+                    sample_z=path_context.sample_z,
+                    win_latents=win_latents,
+                    k=k_neighbours,
+                )
+                .cpu()
+                .numpy()
+            )
         case _:
             raise click.ClickException(f"Invalid method: {method}")
 
@@ -411,6 +371,9 @@ def cmd_neural_flow(
     print(f"Loading flow model from {flow_checkpoint}...")
     flow_model = LitOTFlowMatching.load_from_checkpoint(flow_checkpoint)
     flow_model.eval()
+    flow_model = flow_model.to(
+        torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    )
 
     print("Integrating velocity field...")
     z_start_np = path_context.sample_z.detach().cpu().numpy()
@@ -430,7 +393,9 @@ def cmd_neural_flow(
         )
 
     if diagnose:
-        _print_path_trace(path_z_np=path_z_np, score_fn=score_fn, path_context=path_context)
+        _print_path_trace(
+            path_z_np=path_z_np, score_fn=score_fn, path_context=path_context
+        )
 
     run_path_charting_pipeline(
         path_context=path_context,
@@ -452,7 +417,7 @@ def _print_diagnostics(path_context, score_fn) -> None:
     )
 
     with torch.no_grad():
-        win_scores = score_fn(win_latents).numpy()
+        win_scores = score_fn(win_latents).cpu().numpy()
 
     pct_above_50 = (win_scores > 0.5).mean() * 100
     print("\n" + "═" * 60)
@@ -477,14 +442,14 @@ def _print_path_trace(path_z_np, score_fn, path_context) -> None:
 
     path_z = torch.tensor(path_z_np, dtype=torch.float32)
     with torch.no_grad():
-        win_probs = score_fn(path_z).numpy()
+        win_probs = score_fn(path_z).cpu().numpy()
 
     n = len(win_probs)
     indices = np.linspace(0, n - 1, min(10, n), dtype=int)
     print("  P(win) trace along path:")
     for i in indices:
         bar = "█" * int(win_probs[i] * 20)
-        print(f"    step {i:>4d}/{n-1}  P(win)={win_probs[i]:.3f}  {bar}")
+        print(f"    step {i:>4d}/{n - 1}  P(win)={win_probs[i]:.3f}  {bar}")
 
     win_latents = compute_win_latents(
         labels_tensor=path_context.labels_tensor,
@@ -498,5 +463,19 @@ def _print_path_trace(path_z_np, score_fn, path_context) -> None:
     print("\n  Distance to nearest winning latent:")
     print(f"    start:    {start_dists.min():.3f}")
     print(f"    endpoint: {dists.min():.3f}")
-    print(f"    win centroid dist (endpoint): {torch.norm(path_z[-1] - win_latents.mean(0)):.3f}")
+    print(
+        f"    win centroid dist (endpoint): {torch.norm(path_z[-1] - win_latents.mean(0)):.3f}"
+    )
     print()
+
+
+# Register comparison sub-commands (imported here to avoid circular imports)
+from latent_trainer.paths.compare.cli import (  # noqa: E402
+    cmd_compare,
+    cmd_compare_datasets,
+    cmd_tune,
+)
+
+cli.add_command(cmd_compare)
+cli.add_command(cmd_tune)
+cli.add_command(cmd_compare_datasets)
