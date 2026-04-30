@@ -108,12 +108,16 @@ def path_optimal_transport(
     for _ in range(n_waypoints - 1):
         # 1. Compute distance from current position to all target points
         M = ot.dist(z_current.reshape(1, -1), Z_win, metric="sqeuclidean")
+        # Normalise so scale of latent space does not cause exp(-M/reg) underflow
+        M = M / (M.max() + 1e-9)
 
-        # 2. Compute the OT plan from current point to target cloud
-        T = ot.sinkhorn(a, b, M, reg=reg) if reg > 0 else ot.emd(a, b, M)
+        # 2. Compute the OT plan — log-domain Sinkhorn is numerically stable at any reg
+        if reg > 0:
+            T = ot.sinkhorn_log(a, b, M, reg=reg)
+        else:
+            T = ot.emd(a, b, M)
 
         # 3. Compute the local barycentric target
-        # T[0] gives the coupling weights for our current z
         weights = T[0] / (T[0].sum() + 1e-9)
         z_target = weights @ Z_win
 
