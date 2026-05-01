@@ -113,7 +113,7 @@ def path_optimal_transport(
 
         # 2. Compute the OT plan — log-domain Sinkhorn is numerically stable at any reg
         if reg > 0:
-            T = ot.sinkhorn_log(a, b, M, reg=reg)
+            T = ot.bregman.sinkhorn_log(a, b, M, reg=reg)
         else:
             T = ot.emd(a, b, M)
 
