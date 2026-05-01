@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import click
 import torch
 from lightning import Trainer
 from lightning.pytorch.callbacks import (
@@ -12,9 +13,15 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader, TensorDataset
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
+from latent_trainer.features.data_utils import load_and_normalize
 from latent_trainer.features.type import NormalizedDataloaders
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
-from latent_trainer.settings import CHECKPOINTS_DIR, DEFAULT_MLFLOW_URI, OUTPUT_DIR
+from latent_trainer.settings import (
+    CHECKPOINTS_DIR,
+    DATA_DIR,
+    DEFAULT_MLFLOW_URI,
+    OUTPUT_DIR,
+)
 from latent_trainer.tracking.mlflow_utils import (
     create_child_mlflow_logger,
     create_mlflow_logger,
@@ -248,10 +255,10 @@ def train_guided_pipeline(
         )
         cb = trainer.callback_metrics
         return {
-            "val_loss":     cb.get("val_loss",     float("inf")).item(),
+            "val_loss": cb.get("val_loss", float("inf")).item(),
             "val_vae_loss": cb.get("val_vae_loss", float("inf")).item(),
             "val_cls_loss": cb.get("val_cls_loss", float("inf")).item(),
-            "val_acc":      cb.get("val_acc",      0.0).item(),
+            "val_acc": cb.get("val_acc", 0.0).item(),
         }
 
     # Full training: checkpoints, TensorBoard, artifact upload
@@ -292,3 +299,145 @@ def train_guided_pipeline(
     )
 
     return None
+
+
+@click.command(help="Retrain the Guided VAE with fixed best-known hyperparameters.")
+@click.option(
+    "--dataset_filename",
+    default="cached_dataset_rich.pt",
+    show_default=True,
+    help="Cached dataset filename inside DATA_DIR.",
+)
+@click.option("--experiment_name", required=True, help="MLFlow experiment name.")
+@click.option(
+    "--run_name", default="guided_vae_best", show_default=True, help="MLFlow run name."
+)
+@click.option(
+    "--latent_dim",
+    type=int,
+    default=32,
+    show_default=True,
+    help="VAE latent dimensionality.",
+)
+@click.option(
+    "--encoder_hidden_dims",
+    default="256,128,64",
+    show_default=True,
+    help="Encoder hidden layer sizes, comma-separated (e.g. '256,128,64').",
+)
+@click.option(
+    "--supervised_dim",
+    type=int,
+    default=2,
+    show_default=True,
+    help="Supervised head output dimension.",
+)
+@click.option("--batch_size", type=int, default=64, show_default=True)
+@click.option(
+    "--learning_rate",
+    type=float,
+    default=1e-4,
+    show_default=True,
+    help="VAE learning rate.",
+)
+@click.option(
+    "--weight_decay",
+    type=float,
+    default=1e-5,
+    show_default=True,
+    help="VAE weight decay.",
+)
+@click.option(
+    "--learning_rate_cls",
+    type=float,
+    default=1e-4,
+    show_default=True,
+    help="Classifier learning rate.",
+)
+@click.option(
+    "--weight_decay_cls",
+    type=float,
+    default=1e-4,
+    show_default=True,
+    help="Classifier weight decay.",
+)
+@click.option(
+    "--classification_weight",
+    type=float,
+    default=0.5,
+    show_default=True,
+    help="Weight of classification loss relative to reconstruction loss.",
+)
+@click.option(
+    "--epochs",
+    type=int,
+    default=100,
+    show_default=True,
+    help="Maximum training epochs.",
+)
+@click.option(
+    "--mlflow_uri",
+    default=DEFAULT_MLFLOW_URI,
+    show_default=True,
+    help="MLFlow tracking URI.",
+)
+def main(
+    dataset_filename: str,
+    experiment_name: str,
+    run_name: str,
+    latent_dim: int,
+    encoder_hidden_dims: str,
+    supervised_dim: int,
+    batch_size: int,
+    learning_rate: float,
+    weight_decay: float,
+    learning_rate_cls: float,
+    weight_decay_cls: float,
+    classification_weight: float,
+    epochs: int,
+    mlflow_uri: str,
+) -> None:
+
+    hidden_dims = [int(d) for d in encoder_hidden_dims.split(",")]
+
+    dataset_path = DATA_DIR / dataset_filename
+    data = load_and_normalize(cached_dataset_filepath=dataset_path)
+
+    config = ExperimentConfig(
+        sweep=False,
+        pipeline="guided_vae",
+        dataset_filename=dataset_filename,
+        experiment_name=experiment_name,
+        mlflow_tracking_uri=mlflow_uri,
+        guided_vae_epochs=epochs,
+        run_name=run_name,
+    )
+
+    params = {
+        "latent_dim": latent_dim,
+        "encoder_hidden_dims": hidden_dims,
+        "supervised_dim": supervised_dim,
+        "batch_size": batch_size,
+        "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+        "learning_rate_cls": learning_rate_cls,
+        "weight_decay_cls": weight_decay_cls,
+        "classification_weight": classification_weight,
+    }
+
+    train_guided_pipeline(
+        train_X=data.train_X,
+        train_y=data.train_y,
+        val_X=data.val_X,
+        val_y=data.val_y,
+        input_dim=data.train_X.shape[-1],
+        config=config,
+        params=params,
+        norm_mean=data.mean,
+        norm_std=data.std,
+        sweep_mode=False,
+    )
+
+
+if __name__ == "__main__":
+    main()
