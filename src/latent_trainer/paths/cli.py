@@ -1,6 +1,3 @@
-# ---------------------------------------------------------------------------
-# CLI group + sub-commands
-# ---------------------------------------------------------------------------
 from functools import partial
 from pathlib import Path
 
@@ -473,9 +470,11 @@ def _print_path_trace(path_z_np, score_fn, path_context) -> None:
 from latent_trainer.paths.compare.cli import (  # noqa: E402
     cmd_compare,
     cmd_compare_datasets,
+    cmd_replot,
     cmd_tune,
 )
 
 cli.add_command(cmd_compare)
 cli.add_command(cmd_tune)
 cli.add_command(cmd_compare_datasets)
+cli.add_command(cmd_replot)

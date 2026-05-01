@@ -27,11 +27,11 @@ def _suggest_params(trial: optuna.Trial, strategy: str) -> dict:
         case "linear":
             return {
                 "method": trial.suggest_categorical("method", ["centroid", "nearest"]),
-                "k_neighbours": trial.suggest_int("k_neighbours", 3, 20),
+                "k_neighbours": trial.suggest_int("k_neighbours", 5, 5),
             }
         case "gradient_ascent":
             return {
-                "steps": 500,
+                "steps": 2000,
                 "lr": trial.suggest_float("lr", 1e-4, 0.1, log=True),
                 "momentum": trial.suggest_float("momentum", 0.0, 0.95),
                 "density_weight": trial.suggest_float("density_weight", 0.0, 1.0),
@@ -45,11 +45,11 @@ def _suggest_params(trial: optuna.Trial, strategy: str) -> dict:
             }
         case "geodesic":
             return {
-                "k": trial.suggest_int("k", 5, 30),
+                "k": trial.suggest_int("k", 5, 5),
             }
         case "neural_flow":
             return {
-                "guidance_scale": trial.suggest_float("guidance_scale", 0.0, 1.0),
+                "guidance_scale": trial.suggest_float("guidance_scale", 1.0, 1.0),
             }
         case _:
             return {}

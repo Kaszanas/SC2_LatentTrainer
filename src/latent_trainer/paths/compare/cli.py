@@ -291,6 +291,46 @@ def cmd_compare_datasets(
     print(f"\nDone. Outputs in {output_dir}/")
 
 
+@click.command("replot")
+@click.argument(
+    "report_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path, resolve_path=True),
+)
+@click.option(
+    "--output_dir",
+    type=click.Path(path_type=Path, resolve_path=True),
+    default=None,
+    help="Directory for plots and tables. Defaults to the same directory as report.pkl.",
+)
+def cmd_replot(report_path: Path, output_dir: Path | None) -> None:
+    """Re-render all plots and LaTeX tables from a saved report.pkl without rerunning computation.
+
+    Use 'compare --save_raw' to produce the report.pkl first.
+    """
+    output_dir = output_dir or report_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Loading report from {report_path}...")
+    report = load_report(report_path)
+    stats = summarise(report)
+
+    print("Generating plots...")
+    render_all(report, stats, output_dir=output_dir)
+
+    print("Generating LaTeX tables...")
+    write_summary_table(
+        stats,
+        output_path=output_dir / "table_summary.tex",
+        n_samples=report.n_samples_evaluated,
+    )
+    jac_df = jaccard_between_methods(report, signal="raw")
+    write_jaccard_table(jac_df, output_path=output_dir / "table_jaccard.tex")
+
+    print("\nSummary:")
+    _print_summary(stats)
+    print(f"\nDone. Outputs in {output_dir}/")
+
+
 def _print_summary(stats) -> None:
     header = f"  {'Method':<24} {'Success':>8}  {'Crossover α':>12}  {'ΔP(win)':>10}  {'AUC':>8}"
     print(header)

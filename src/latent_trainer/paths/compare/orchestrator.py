@@ -140,6 +140,8 @@ def run_comparison(
                     else "  no crossover"
                 )
             )
+            if result.error is not None and run_idx == 0:
+                print(f"  [ERROR traceback for first failure]\n{result.error}")
 
     return ComparisonReport(
         n_samples_requested=n_samples,

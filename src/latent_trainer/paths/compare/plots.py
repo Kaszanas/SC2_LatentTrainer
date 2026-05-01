@@ -127,16 +127,16 @@ def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path
         n_tot = total_counts[method_name]
         ax.text(
             pos,
-            -0.08,
+            1.03,
             f"{n_ok}/{n_tot}\n({100 * n_ok / max(n_tot, 1):.0f}%)",
             ha="center",
-            va="top",
+            va="bottom",
             fontsize=7,
             transform=ax.get_xaxis_transform(),
         )
 
     ax.set_xticks(positions)
-    ax.set_xticklabels([names[m] for m in method_names], rotation=15, ha="right")
+    ax.set_xticklabels([names[m] for m in method_names], rotation=45, ha="right")
     ax.set_ylabel("Crossover α (normalised step where P(win) ≥ 0.5)")
     ax.set_ylim(-0.02, 1.05)
     ax.set_title(
