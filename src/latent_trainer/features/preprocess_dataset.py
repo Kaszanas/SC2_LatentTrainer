@@ -517,6 +517,18 @@ def process_set_chunked_single_pool(
     return set_features, set_labels, skipped, errors
 
 
+def _subsample_indices(
+    indices: list[int],
+    n_target: int,
+    generator: torch.Generator,
+) -> list[int]:
+    """Return a sorted random subset of *indices* of size *n_target* using *generator*."""
+    if n_target <= 0 or n_target >= len(indices):
+        return indices
+    perm = torch.randperm(len(indices), generator=generator)[:n_target]
+    return sorted(torch.tensor(indices)[perm].tolist())
+
+
 def preprocess_dataset_chunked_profile(
     transform_name: str,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
@@ -525,6 +537,8 @@ def preprocess_dataset_chunked_profile(
     n_workers: int = 8,
     chunk_size: int = 64,
     max_inflight_tasks: int | None = None,
+    n_samples: int = 0,
+    seed: int = 42,
 ) -> None:
     """Alternative preprocess entrypoint for performance profiling.
 
@@ -558,6 +572,25 @@ def preprocess_dataset_chunked_profile(
         test_dataset=test_dataset,
         val_dataset=val_dataset,
     )
+
+    if n_samples > 0:
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+        n_train = round(n_samples * len(train_dataset.indices) / total)
+        n_test = round(n_samples * len(test_dataset.indices) / total)
+        n_val = n_samples - n_train - n_test
+        train_dataset.indices = _subsample_indices(
+            train_dataset.indices, n_train, generator
+        )
+        test_dataset.indices = _subsample_indices(
+            test_dataset.indices, n_test, generator
+        )
+        val_dataset.indices = _subsample_indices(val_dataset.indices, n_val, generator)
+        logging.info(
+            f"  Sampled {len(train_dataset.indices)} train / "
+            f"{len(test_dataset.indices)} test / "
+            f"{len(val_dataset.indices)} val from {total} total (seed={seed})"
+        )
 
     val_features, val_labels, skipped_val, errors_val = process_set_chunked_single_pool(
         dataset_object=val_dataset,
@@ -651,7 +684,8 @@ def preprocess_dataset_chunked_profile(
     )
 
     os.makedirs(os.path.dirname(output_directory), exist_ok=True)
-    path_to_save = output_directory / f"cached_dataset_{transform_name}.pt"
+    suffix = f"_{n_samples}" if n_samples > 0 else ""
+    path_to_save = output_directory / f"cached_dataset_{transform_name}{suffix}.pt"
     torch.save(asdict(file_spec), path_to_save)
 
     logging.info(f"\n{'=' * 60}")

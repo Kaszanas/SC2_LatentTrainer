@@ -35,10 +35,26 @@ from latent_trainer.settings import DATA_DIR, LOGGING_FORMAT, SEED
     show_default=True,
     help="Number of parallel workers for processing replays.",
 )
+@click.option(
+    "--n_samples",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Total games to randomly sample before processing. 0 = use all.",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=42,
+    show_default=True,
+    help="Random seed for reproducible sampling.",
+)
 def main(
     transform: Callable,
     single_json_dataset_path: Path,
     n_workers: int,
+    n_samples: int,
+    seed: int,
 ) -> None:
     """Pre-process Single JSON SC2_Dataset and cache the transformed tensors to drive."""
     transform_name = TransformEnumFunction._TRANSFORM_NAMES[transform]
@@ -57,6 +73,8 @@ def main(
             transform_fn=transform,
             transform_name=transform_name,
             n_workers=n_workers,
+            n_samples=n_samples,
+            seed=seed,
         )
     except Exception as e:
         logging.error(f"Error during dataset preprocessing: {e}")
