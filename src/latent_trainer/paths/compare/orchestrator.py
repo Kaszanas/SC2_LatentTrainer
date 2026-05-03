@@ -18,6 +18,7 @@ from latent_trainer.paths.compare.results import (
 from latent_trainer.paths.compare.runners import run_method
 from latent_trainer.paths.data import (
     build_path_context,
+    compute_loss_latents,
     compute_win_latents,
     encode_player,
     load_model_and_data,
@@ -59,6 +60,11 @@ def run_comparison(
 
     # Compute shared tensors once:
     win_latents = compute_win_latents(
+        labels_tensor=labels_tensor,
+        latents_p0=latents_p0,
+        latents_p1=latents_p1,
+    )
+    loss_latents = compute_loss_latents(
         labels_tensor=labels_tensor,
         latents_p0=latents_p0,
         latents_p1=latents_p1,
@@ -125,6 +131,7 @@ def run_comparison(
                 top_k=top_k,
                 flow_model=flow_model,
                 win_latents=win_latents,
+                loss_latents=loss_latents,
                 all_latents=all_latents,
                 win_kde=win_kde,
             )

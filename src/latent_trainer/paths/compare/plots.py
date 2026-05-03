@@ -8,71 +8,105 @@ from typing import Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import seaborn as sns
 
 from latent_trainer.paths.compare.aggregate import (
     MethodStats,
     jaccard_between_methods,
 )
-from latent_trainer.paths.compare.results import ComparisonReport
+from latent_trainer.paths.compare.results import (
+    DEFAULT_METHOD_SPECS,
+    ComparisonReport,
+)
 
-# Consistent colour map keyed by method name
-_PALETTE = [
-    "#2196F3",  # blue        — linear_centroid
-    "#03A9F4",  # light-blue  — linear_nearest
-    "#F44336",  # red         — gradient_ascent
-    "#FF9800",  # orange      — optimal_transport
-    "#4CAF50",  # green       — geodesic
-    "#9C27B0",  # purple      — neural_flow
+_CANONICAL_ORDER: list[str] = [s.display_name for s in DEFAULT_METHOD_SPECS]
+
+
+def _ordered_methods(report: ComparisonReport) -> list[str]:
+    """Return display names in DEFAULT_METHOD_SPECS order, unknowns appended last."""
+    present = {s.display_name for s in report.methods}
+    ordered = [n for n in _CANONICAL_ORDER if n in present]
+    ordered += sorted(present - set(ordered))
+    return ordered
+
+
+def _sort_stats(stats: Sequence[MethodStats]) -> list[MethodStats]:
+    """Sort MethodStats by DEFAULT_METHOD_SPECS order, unknowns appended last."""
+    order = {name: i for i, name in enumerate(_CANONICAL_ORDER)}
+    return sorted(stats, key=lambda s: order.get(s.display_name, len(_CANONICAL_ORDER)))
+
+sns.set_theme(style="whitegrid", context="paper")
+
+_METHOD_COLOURS: dict[str, str] = {
+    "linear_centroid":   "#2196F3",  # blue
+    "linear_nearest":    "#03A9F4",  # light-blue
+    "optimal_transport": "#FF9800",  # orange
+    "geodesic":          "#4CAF50",  # green
+    "neural_flow":       "#9C27B0",  # purple
+    "gradient_ascent":   "#F44336",  # red
+}
+
+_PALETTE_FALLBACK = [
+    "#2196F3", "#03A9F4", "#F44336", "#FF9800", "#4CAF50", "#9C27B0",
+    "#0D47A1", "#006064", "#E65100",
 ]
 
 _DPI = 150
-_ALPHA_BAND = 0.25
 _GRID_POINTS = 100
 
 
-def _method_colours(report: ComparisonReport) -> dict[str, str]:
-    return {s.name: _PALETTE[i % len(_PALETTE)] for i, s in enumerate(report.methods)}
+def _build_palette(report: ComparisonReport) -> dict[str, str]:
+    """Return {display_name: hex_colour} stable across any subset of methods."""
+    result = {}
+    fallback_idx = 0
+    for s in report.methods:
+        if s.name in _METHOD_COLOURS:
+            result[s.display_name] = _METHOD_COLOURS[s.name]
+        else:
+            result[s.display_name] = _PALETTE_FALLBACK[fallback_idx % len(_PALETTE_FALLBACK)]
+            fallback_idx += 1
+    return result
 
 
-def _display_name(report: ComparisonReport) -> dict[str, str]:
+def _name_map(report: ComparisonReport) -> dict[str, str]:
+    """Return {method_name: display_name}."""
     return {s.name: s.display_name for s in report.methods}
 
 
-# P(win) curves — mean ± 1 SD band per method
 def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path:
-    colours = _method_colours(report)
-    names = _display_name(report)
+    names = _name_map(report)
+    palette = _build_palette(report)
     grid = np.linspace(0.0, 1.0, _GRID_POINTS)
 
-    # Group p_win_curves by method, interpolating to common grid
-    method_curves: dict[str, list[np.ndarray]] = {s.name: [] for s in report.methods}
+    rows = []
     for r in report.results:
         if r.error is not None or len(r.p_win_curve) < 2:
             continue
-        interpolated = np.interp(grid, r.alphas, r.p_win_curve)
-        method_curves[r.method_name].append(interpolated)
+        interp = np.interp(grid, r.alphas, r.p_win_curve)
+        display = names.get(r.method_name, r.method_name)
+        for alpha_val, p_val in zip(grid, interp):
+            rows.append({"α": alpha_val, "P(win)": p_val, "Method": display})
 
+    if not rows:
+        return output_dir / "compare_pwin_curves.png"
+
+    df = pd.DataFrame(rows)
     fig, ax = plt.subplots(figsize=(9, 5))
     ax.axhline(
         0.5, color="k", linestyle="--", linewidth=0.8, alpha=0.5, label="P(win)=0.5"
     )
-
-    for method_name, curves in method_curves.items():
-        if not curves:
-            continue
-        arr = np.stack(curves)  # (n_runs, 100)
-        mean = arr.mean(axis=0)
-        sd = arr.std(axis=0)
-        c = colours[method_name]
-        n = len(curves)
-        ax.plot(
-            grid, mean, color=c, linewidth=1.8, label=f"{names[method_name]} (n={n})"
-        )
-        ax.fill_between(grid, mean - sd, mean + sd, color=c, alpha=_ALPHA_BAND)
-
-    ax.set_xlabel("Path progress α")
-    ax.set_ylabel("P(win)")
+    sns.lineplot(
+        data=df,
+        x="α",
+        y="P(win)",
+        hue="Method",
+        hue_order=[m for m in _ordered_methods(report) if m in df["Method"].values],
+        errorbar="sd",
+        palette=palette,
+        linewidth=1.8,
+        ax=ax,
+    )
     ax.set_xlim(0, 1)
     ax.set_ylim(-0.05, 1.05)
     ax.legend(fontsize=8, loc="upper left")
@@ -85,43 +119,50 @@ def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path
     return out
 
 
-# Crossover α violin — only successful runs
 def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
-    colours = _method_colours(report)
-    names = _display_name(report)
+    names = _name_map(report)
+    palette = _build_palette(report)
 
-    data: dict[str, list[float]] = {s.name: [] for s in report.methods}
     success_counts: dict[str, int] = {s.name: 0 for s in report.methods}
     total_counts: dict[str, int] = {s.name: 0 for s in report.methods}
-
+    rows = []
     for r in report.results:
         if r.error is not None:
             continue
         total_counts[r.method_name] += 1
         if r.success and r.crossover_alpha is not None:
-            data[r.method_name].append(r.crossover_alpha)
             success_counts[r.method_name] += 1
+            rows.append(
+                {
+                    "Crossover α": r.crossover_alpha,
+                    "Method": names.get(r.method_name, r.method_name),
+                }
+            )
 
-    method_names = [s.name for s in report.methods if data[s.name]]
-    if not method_names:
+    if not rows:
         return output_dir / "compare_crossover_violin.png"
 
-    fig, ax = plt.subplots(figsize=(max(6, len(method_names) * 1.4), 5))
-    positions = list(range(len(method_names)))
+    df = pd.DataFrame(rows)
+    method_order = _ordered_methods(report)
 
-    for pos, method_name in zip(positions, method_names):
-        vals = data[method_name]
-        parts = ax.violinplot([vals], positions=[pos], showmedians=True, widths=0.7)
-        for pc in parts["bodies"]:
-            pc.set_facecolor(colours[method_name])
-            pc.set_alpha(0.7)
-        for part in ("cmedians", "cbars", "cmins", "cmaxes"):
-            if part in parts:
-                parts[part].set_color(colours[method_name])
-        n_ok = success_counts[method_name]
-        n_tot = total_counts[method_name]
+    fig, ax = plt.subplots(figsize=(max(6, df["Method"].nunique() * 1.4), 5))
+    sns.violinplot(
+        data=df,
+        x="Method",
+        y="Crossover α",
+        hue="Method",
+        order=method_order,
+        palette=palette,
+        inner="quart",
+        legend=False,
+        ax=ax,
+    )
+
+    for i, s in enumerate(report.methods):
+        n_ok = success_counts[s.name]
+        n_tot = total_counts[s.name]
         ax.text(
-            pos,
+            i,
             1.03,
             f"{n_ok}/{n_tot}\n({100 * n_ok / max(n_tot, 1):.0f}%)",
             ha="center",
@@ -130,12 +171,11 @@ def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path
             transform=ax.get_xaxis_transform(),
         )
 
-    ax.set_xticks(positions)
-    ax.set_xticklabels([names[m] for m in method_names], rotation=45, ha="right")
-    ax.set_ylabel("Crossover α (normalised step where P(win) ≥ 0.5)")
     ax.set_ylim(-0.02, 1.05)
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=45)
     ax.set_title(
-        "Crossover position distribution — successful runs only\n(n/total and success rate shown below)"
+        "Crossover position distribution — successful runs only\n(n/total and success rate shown above)"
     )
     fig.tight_layout()
 
@@ -145,14 +185,34 @@ def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path
     return out
 
 
-# Success rate bar chart
 def plot_success_rate_bar(stats: Sequence[MethodStats], *, output_dir: Path) -> Path:
-    fig, ax = plt.subplots(figsize=(max(6, len(stats) * 1.4), 4.5))
-    x = np.arange(len(stats))
-    colours = _PALETTE[: len(stats)]
+    if not stats:
+        return output_dir / "compare_success_rate.png"
 
-    bars = ax.bar(x, [s.success_rate * 100 for s in stats], color=colours, alpha=0.85)
-    for bar, s in zip(bars, stats):
+    stats = _sort_stats(stats)
+    palette = [
+        _METHOD_COLOURS.get(s.method_name, _PALETTE_FALLBACK[i % len(_PALETTE_FALLBACK)])
+        for i, s in enumerate(stats)
+    ]
+    df = pd.DataFrame(
+        {
+            "Method": [s.display_name for s in stats],
+            "Success rate (%)": [s.success_rate * 100 for s in stats],
+        }
+    )
+
+    fig, ax = plt.subplots(figsize=(max(6, len(stats) * 1.4), 4.5))
+    bars = sns.barplot(
+        data=df,
+        x="Method",
+        y="Success rate (%)",
+        hue="Method",
+        palette=palette,
+        errorbar=None,
+        legend=False,
+        ax=ax,
+    )
+    for bar, s in zip(bars.patches, stats):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 1,
@@ -162,11 +222,10 @@ def plot_success_rate_bar(stats: Sequence[MethodStats], *, output_dir: Path) -> 
             fontsize=8,
         )
 
-    ax.set_xticks(x)
-    ax.set_xticklabels([s.display_name for s in stats], rotation=15, ha="right")
-    ax.set_ylabel("Success rate (%)")
-    ax.set_ylim(0, 115)
     ax.axhline(50, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
+    ax.set_ylim(0, 115)
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=15)
     ax.set_title("Fraction of samples where P(win) ≥ 0.5 was reached")
     fig.tight_layout()
 
@@ -176,36 +235,36 @@ def plot_success_rate_bar(stats: Sequence[MethodStats], *, output_dir: Path) -> 
     return out
 
 
-# P(win) gain violin
 def plot_pwin_gain_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
-    colours = _method_colours(report)
-    names = _display_name(report)
+    names = _name_map(report)
+    palette = _build_palette(report)
 
-    data: dict[str, list[float]] = {s.name: [] for s in report.methods}
-    for r in report.results:
-        if r.error is None and not math.isnan(r.p_win_gain):
-            data[r.method_name].append(r.p_win_gain)
-
-    method_names = [s.name for s in report.methods if data[s.name]]
-    if not method_names:
+    rows = [
+        {"ΔP(win)": r.p_win_gain, "Method": names.get(r.method_name, r.method_name)}
+        for r in report.results
+        if r.error is None and not math.isnan(r.p_win_gain)
+    ]
+    if not rows:
         return output_dir / "compare_pwin_gain.png"
 
-    fig, ax = plt.subplots(figsize=(max(6, len(method_names) * 1.4), 5))
-    positions = list(range(len(method_names)))
+    df = pd.DataFrame(rows)
+    method_order = [m for m in _ordered_methods(report) if m in df["Method"].values]
 
-    for pos, method_name in zip(positions, method_names):
-        vals = data[method_name]
-        parts = ax.violinplot([vals], positions=[pos], showmedians=True, widths=0.7)
-        for pc in parts["bodies"]:
-            pc.set_facecolor(colours[method_name])
-            pc.set_alpha(0.7)
-        for part in ("cmedians", "cbars", "cmins", "cmaxes"):
-            if part in parts:
-                parts[part].set_color(colours[method_name])
-
+    fig, ax = plt.subplots(figsize=(max(6, df["Method"].nunique() * 1.4), 5))
+    sns.violinplot(
+        data=df,
+        x="Method",
+        y="ΔP(win)",
+        hue="Method",
+        order=method_order,
+        palette=palette,
+        inner="quart",
+        legend=False,
+        ax=ax,
+    )
     ax.axhline(0, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
-    ax.set_xticks(positions)
-    ax.set_xticklabels([names[m] for m in method_names], rotation=15, ha="right")
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=15)
     ax.set_ylabel("ΔP(win) = P(win) at end − P(win) at start")
     ax.set_title("P(win) gain distribution (all runs)")
     fig.tight_layout()
@@ -216,67 +275,51 @@ def plot_pwin_gain_violin(report: ComparisonReport, *, output_dir: Path) -> Path
     return out
 
 
-# Nearest-win distance: start vs. end (paired)
 def plot_nearest_win_distance(report: ComparisonReport, *, output_dir: Path) -> Path:
-    colours = _method_colours(report)
-    names = _display_name(report)
-    method_names = [s.name for s in report.methods]
+    names = _name_map(report)
 
-    starts: dict[str, list[float]] = {m: [] for m in method_names}
-    ends: dict[str, list[float]] = {m: [] for m in method_names}
+    rows = []
     for r in report.results:
         if r.error is None and not math.isnan(r.dist_to_nearest_win_start):
-            starts[r.method_name].append(r.dist_to_nearest_win_start)
-            ends[r.method_name].append(r.dist_to_nearest_win_end)
+            display = names.get(r.method_name, r.method_name)
+            rows.append(
+                {
+                    "Method": display,
+                    "Phase": "Start",
+                    "Distance": r.dist_to_nearest_win_start,
+                }
+            )
+            rows.append(
+                {
+                    "Method": display,
+                    "Phase": "End",
+                    "Distance": r.dist_to_nearest_win_end,
+                }
+            )
 
-    active = [m for m in method_names if starts[m]]
-    if not active:
+    if not rows:
         return output_dir / "compare_nearest_win_dist.png"
 
-    fig, ax = plt.subplots(figsize=(max(6, len(active) * 1.4), 5))
-    x = np.arange(len(active))
-    w = 0.35
+    df = pd.DataFrame(rows)
+    method_order = [m for m in _ordered_methods(report) if m in df["Method"].values]
 
-    for i, method_name in enumerate(active):
-        c = colours[method_name]
-        mean_s = np.mean(starts[method_name])
-        mean_e = np.mean(ends[method_name])
-        sd_s = np.std(starts[method_name])
-        sd_e = np.std(ends[method_name])
-        ax.bar(
-            x[i] - w / 2,
-            mean_s,
-            w,
-            yerr=sd_s,
-            color=c,
-            alpha=0.4,
-            capsize=3,
-            label="_nolegend_",
-        )
-        ax.bar(
-            x[i] + w / 2,
-            mean_e,
-            w,
-            yerr=sd_e,
-            color=c,
-            alpha=0.9,
-            capsize=3,
-            label="_nolegend_",
-        )
-
-    # Legend patches
-    import matplotlib.patches as mpatches
-
-    start_p = mpatches.Patch(color="grey", alpha=0.4, label="Start")
-    end_p = mpatches.Patch(color="grey", alpha=0.9, label="End")
-    ax.legend(handles=[start_p, end_p])
-
-    ax.set_xticks(x)
-    ax.set_xticklabels([names[m] for m in active], rotation=15, ha="right")
+    fig, ax = plt.subplots(figsize=(max(6, len(method_order) * 1.4), 5))
+    sns.barplot(
+        data=df,
+        x="Method",
+        y="Distance",
+        hue="Phase",
+        order=method_order,
+        palette=["#90CAF9", "#1565C0"],
+        errorbar="sd",
+        capsize=0.1,
+        ax=ax,
+    )
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=15)
     ax.set_ylabel("Mean nearest-win distance (± 1 SD)")
     ax.set_title(
-        "Distance to nearest winning latent: start vs. end\n"
-        "(topology-agnostic; lower end = better)"
+        "Distance to nearest winning latent: start vs. end\n(topology-agnostic; lower end = better)"
     )
     fig.tight_layout()
 
@@ -286,47 +329,38 @@ def plot_nearest_win_distance(report: ComparisonReport, *, output_dir: Path) -> 
     return out
 
 
-# P(win) start vs. end paired bar
 def plot_pwin_start_end(report: ComparisonReport, *, output_dir: Path) -> Path:
-    colours = _method_colours(report)
-    names = _display_name(report)
-    method_names = [s.name for s in report.methods]
+    names = _name_map(report)
 
-    starts: dict[str, list[float]] = {m: [] for m in method_names}
-    ends: dict[str, list[float]] = {m: [] for m in method_names}
+    rows = []
     for r in report.results:
         if r.error is None and not math.isnan(r.p_win_start):
-            starts[r.method_name].append(r.p_win_start)
-            ends[r.method_name].append(r.p_win_end)
+            display = names.get(r.method_name, r.method_name)
+            rows.append({"Method": display, "Phase": "Start", "P(win)": r.p_win_start})
+            rows.append({"Method": display, "Phase": "End", "P(win)": r.p_win_end})
 
-    active = [m for m in method_names if starts[m]]
-    if not active:
+    if not rows:
         return output_dir / "compare_pwin_start_end.png"
 
-    fig, ax = plt.subplots(figsize=(max(6, len(active) * 1.4), 5))
-    x = np.arange(len(active))
-    w = 0.35
+    df = pd.DataFrame(rows)
+    method_order = [m for m in _ordered_methods(report) if m in df["Method"].values]
 
-    for i, method_name in enumerate(active):
-        c = colours[method_name]
-        mean_s = np.mean(starts[method_name])
-        mean_e = np.mean(ends[method_name])
-        sd_s = np.std(starts[method_name])
-        sd_e = np.std(ends[method_name])
-        ax.bar(x[i] - w / 2, mean_s, w, yerr=sd_s, color=c, alpha=0.4, capsize=3)
-        ax.bar(x[i] + w / 2, mean_e, w, yerr=sd_e, color=c, alpha=0.9, capsize=3)
-
-    import matplotlib.patches as mpatches
-
-    start_p = mpatches.Patch(color="grey", alpha=0.4, label="Start")
-    end_p = mpatches.Patch(color="grey", alpha=0.9, label="End")
-    ax.legend(handles=[start_p, end_p])
-    ax.axhline(0.5, color="black", linestyle="--", linewidth=0.8, alpha=0.6)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels([names[m] for m in active], rotation=15, ha="right")
-    ax.set_ylabel("Mean P(win) (± 1 SD)")
+    fig, ax = plt.subplots(figsize=(max(6, len(method_order) * 1.4), 5))
+    sns.barplot(
+        data=df,
+        x="Method",
+        y="P(win)",
+        hue="Phase",
+        order=method_order,
+        palette=["#90CAF9", "#1565C0"],
+        errorbar="sd",
+        capsize=0.1,
+        ax=ax,
+    )
+    ax.axhline(0.5, color="k", linestyle="--", linewidth=0.8, alpha=0.6)
     ax.set_ylim(0, 1)
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=15)
     ax.set_title(
         "P(win) at path start vs. end\n(higher end = better; dashed = 0.5 threshold)"
     )
@@ -338,37 +372,90 @@ def plot_pwin_start_end(report: ComparisonReport, *, output_dir: Path) -> Path:
     return out
 
 
-# KDE density shift violin
-def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Path:
-    colours = _method_colours(report)
-    names = _display_name(report)
+def plot_pwin_distribution(report: ComparisonReport, *, output_dir: Path) -> Path:
+    names = _name_map(report)
 
-    data: dict[str, list[float]] = {s.name: [] for s in report.methods}
+    rows = []
     for r in report.results:
-        if r.error is None and not math.isnan(r.kde_density_start):
-            data[r.method_name].append(r.kde_density_end - r.kde_density_start)
+        if r.error is None and not math.isnan(r.p_win_start):
+            display = names.get(r.method_name, r.method_name)
+            rows.append({"P(win)": r.p_win_start, "Phase": "Start", "Method": display})
+            rows.append({"P(win)": r.p_win_end,   "Phase": "End",   "Method": display})
 
-    method_names = [s.name for s in report.methods if data[s.name]]
-    if not method_names:
+    if not rows:
+        return output_dir / "compare_pwin_distribution.png"
+
+    df = pd.DataFrame(rows)
+    method_order = [m for m in _ordered_methods(report) if m in df["Method"].values]
+    n_methods = len(method_order)
+    ncols = min(3, n_methods)
+    nrows = math.ceil(n_methods / ncols) if n_methods else 1
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 5.5, nrows * 4.0), squeeze=False)
+    for ax in axes.flat:
+        ax.set_visible(False)
+
+    for mi, method_name in enumerate(method_order):
+        ax = axes[mi // ncols][mi % ncols]
+        ax.set_visible(True)
+        method_df = df[df["Method"] == method_name]
+        sns.kdeplot(
+            data=method_df, x="P(win)", hue="Phase",
+            fill=True, alpha=0.4, common_norm=False,
+            clip=(0, 1),  # prevent kernel from spilling past valid probability range
+            palette={"Start": "#90CAF9", "End": "#1565C0"},
+            hue_order=["Start", "End"], linewidth=1.5, ax=ax,
+        )
+        ax.axvline(0.5, color="k", linestyle="--", linewidth=0.8, alpha=0.6)
+        ax.set_xlim(0, 1)
+        ax.set_title(method_name, fontsize=11)
+        ax.set_xlabel("P(win)" if mi // ncols == nrows - 1 else "")
+        ax.set_ylabel("Density" if mi % ncols == 0 else "")
+        if mi != 0:
+            ax.get_legend().remove() if ax.get_legend() else None
+
+    fig.suptitle("P(win) distribution: start vs. end of path", y=1.01, fontsize=13)
+    fig.tight_layout()
+
+    out = output_dir / "compare_pwin_distribution.png"
+    fig.savefig(out, dpi=_DPI, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
+def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Path:
+    names = _name_map(report)
+    palette = _build_palette(report)
+
+    rows = [
+        {
+            "Log-density shift": r.kde_density_end - r.kde_density_start,
+            "Method": names.get(r.method_name, r.method_name),
+        }
+        for r in report.results
+        if r.error is None and not math.isnan(r.kde_density_start)
+    ]
+    if not rows:
         return output_dir / "compare_kde_shift.png"
 
-    fig, ax = plt.subplots(figsize=(max(6, len(method_names) * 1.4), 5))
-    positions = list(range(len(method_names)))
+    df = pd.DataFrame(rows)
+    method_order = [m for m in _ordered_methods(report) if m in df["Method"].values]
 
-    for pos, method_name in zip(positions, method_names):
-        vals = data[method_name]
-        parts = ax.violinplot([vals], positions=[pos], showmedians=True, widths=0.7)
-        for pc in parts["bodies"]:
-            pc.set_facecolor(colours[method_name])
-            pc.set_alpha(0.7)
-        for part in ("cmedians", "cbars", "cmins", "cmaxes"):
-            if part in parts:
-                parts[part].set_color(colours[method_name])
-
+    fig, ax = plt.subplots(figsize=(max(6, df["Method"].nunique() * 1.4), 5))
+    sns.violinplot(
+        data=df,
+        x="Method",
+        y="Log-density shift",
+        hue="Method",
+        order=method_order,
+        palette=palette,
+        inner="quart",
+        legend=False,
+        ax=ax,
+    )
     ax.axhline(0, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
-    ax.set_xticks(positions)
-    ax.set_xticklabels([names[m] for m in method_names], rotation=15, ha="right")
-    ax.set_ylabel("Log-density shift (end − start)")
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=15)
     ax.set_title(
         "KDE density shift on winning distribution\n(positive = moved into denser winning region)"
     )
@@ -380,12 +467,8 @@ def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Pat
     return out
 
 
-# Feature Jaccard heatmap
 def plot_feature_jaccard_heatmap(
-    report: ComparisonReport,
-    *,
-    signal: str = "raw",
-    output_dir: Path,
+    report: ComparisonReport, *, signal: str = "raw", output_dir: Path
 ) -> Path:
     df = jaccard_between_methods(report, signal=signal)  # type: ignore[arg-type]
     if df.empty:
@@ -404,8 +487,7 @@ def plot_feature_jaccard_heatmap(
         cbar_kws={"label": "Jaccard similarity"},
     )
     ax.set_title(
-        f"Feature agreement across methods — top-k features ({signal} signal)\n"
-        f"(1.0 = identical feature sets)"
+        f"Feature agreement across methods — top-k features ({signal} signal)\n(1.0 = identical feature sets)"
     )
     ax.tick_params(axis="x", rotation=30)
     ax.tick_params(axis="y", rotation=0)
@@ -417,61 +499,49 @@ def plot_feature_jaccard_heatmap(
     return out
 
 
-# Conditional + SD-adjusted success rate bar
 def plot_cond_success_rate_bar(
-    report: ComparisonReport,
-    stats: Sequence[MethodStats],
-    *,
-    output_dir: Path,
+    stats: Sequence[MethodStats], *, output_dir: Path
 ) -> Path:
-    import matplotlib.patches as mpatches
-
     if not stats:
         return output_dir / "compare_cond_success_rate.png"
 
+    stats = _sort_stats(stats)
     threshold = stats[0].p_win_threshold
-    colours = {s.name: _PALETTE[i % len(_PALETTE)] for i, s in enumerate(report.methods)}
 
-    n = len(stats)
-    x = np.arange(n)
-    w = 0.26
+    uncond_map = {s.display_name: (s.n_success, s.n_runs) for s in stats}
+    sd_adj_map = {s.display_name: (s.sd_adj_n_success, s.sd_adj_n_eligible) for s in stats}
 
-    fig, ax = plt.subplots(figsize=(max(6, n * 1.8), 5))
+    rows = []
+    for s in stats:
+        rows.append({"Method": s.display_name, "Tier": "Any waypoint ≥ 0.50", "Rate (%)": s.success_rate * 100})
+        sd = s.sd_adj_success_rate * 100 if not math.isnan(s.sd_adj_success_rate) else 0.0
+        rows.append({"Method": s.display_name, "Tier": f"Any waypoint ≥ {threshold:.2f} (+1σ)", "Rate (%)": sd})
 
-    for i, s in enumerate(stats):
-        c = colours.get(s.method_name, "#888888")
-        # unconditional
-        ax.bar(x[i] - w, s.success_rate * 100, w, color=c, alpha=0.3)
-        # conditional (P(win_start) < 0.5)
-        cond_pct = s.cond_success_rate * 100 if not math.isnan(s.cond_success_rate) else 0
-        ax.bar(x[i], cond_pct, w, color=c, alpha=0.6)
-        # SD-adjusted
-        sd_pct = s.sd_adj_success_rate * 100 if not math.isnan(s.sd_adj_success_rate) else 0
-        ax.bar(x[i] + w, sd_pct, w, color=c, alpha=0.95)
-        ax.text(
-            x[i] + w,
-            sd_pct + 1.5,
-            f"{s.sd_adj_n_success}/{s.sd_adj_n_eligible}",
-            ha="center",
-            va="bottom",
-            fontsize=7,
-        )
+    df = pd.DataFrame(rows)
+    tier_order = ["Any waypoint ≥ 0.50", f"Any waypoint ≥ {threshold:.2f} (+1σ)"]
+    method_order = [s.display_name for s in stats]
 
-    legend_handles = [
-        mpatches.Patch(color="grey", alpha=0.3, label="Unconditional"),
-        mpatches.Patch(color="grey", alpha=0.6, label="Cond. (start < 0.5)"),
-        mpatches.Patch(color="grey", alpha=0.95, label=f"SD-adj. (start < 0.5, max ≥ {threshold:.2f})"),
-    ]
-    ax.legend(handles=legend_handles, fontsize=8)
-    ax.axhline(50, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
-    ax.set_xticks(x)
-    ax.set_xticklabels([s.display_name for s in stats], rotation=15, ha="right")
-    ax.set_ylabel("Success rate (%)")
-    ax.set_ylim(0, 115)
-    ax.set_title(
-        f"Success rate: unconditional / conditional / SD-adjusted\n"
-        f"(σ = {threshold - 0.5:.3f}, threshold = {threshold:.3f})"
+    fig, ax = plt.subplots(figsize=(max(6, len(stats) * 1.8), 5))
+    sns.barplot(
+        data=df, x="Method", y="Rate (%)", hue="Tier",
+        order=method_order, hue_order=tier_order, errorbar=None, ax=ax,
     )
+
+    for bar, name in zip(ax.patches[:len(stats)], [s.display_name for s in stats]):
+        n_ok, n_tot = uncond_map[name]
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1.5,
+                f"{n_ok}/{n_tot}", ha="center", va="bottom", fontsize=7)
+
+    for bar, name in zip(ax.patches[len(stats):], [s.display_name for s in stats]):
+        n_ok, n_el = sd_adj_map[name]
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1.5,
+                f"{n_ok}/{n_el}", ha="center", va="bottom", fontsize=7)
+
+    ax.axhline(50, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
+    ax.set_ylim(0, 115)
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=0)
+    ax.set_title("Fraction of paths successfully raising P(win)")
     fig.tight_layout()
 
     out = output_dir / "compare_cond_success_rate.png"
@@ -480,27 +550,28 @@ def plot_cond_success_rate_bar(
     return out
 
 
-# Latent norm band — off-manifold diagnostic
 def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
-    colours = _method_colours(report)
-    names = _display_name(report)
+    names = _name_map(report)
+    palette = _build_palette(report)
     grid = np.linspace(0.0, 1.0, _GRID_POINTS)
 
-    method_norm_curves: dict[str, list[np.ndarray]] = {s.name: [] for s in report.methods}
+    rows = []
     ref_norms: list[float] = []
 
     for r in report.results:
         if r.error is not None or r.path_z is None or len(r.path_z) < 2:
             continue
         norms = np.linalg.norm(r.path_z, axis=1)
-        interpolated = np.interp(grid, r.alphas, norms)
-        method_norm_curves[r.method_name].append(interpolated)
-        ref_norms.append(float(norms[0]))  # z_start is a real encoded point
+        interp = np.interp(grid, r.alphas, norms)
+        display = names.get(r.method_name, r.method_name)
+        ref_norms.append(float(norms[0]))
+        for alpha_val, norm_val in zip(grid, interp):
+            rows.append({"α": alpha_val, "‖z(α)‖": norm_val, "Method": display})
 
-    active = [s.name for s in report.methods if method_norm_curves[s.name]]
-    if not active:
+    if not rows:
         return output_dir / "compare_z_norm_band.png"
 
+    df = pd.DataFrame(rows)
     ref_line = float(np.mean(ref_norms)) if ref_norms else None
 
     fig, ax = plt.subplots(figsize=(9, 5))
@@ -513,23 +584,21 @@ def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
             alpha=0.5,
             label=f"Mean ‖z_start‖ = {ref_line:.2f} (real data)",
         )
-
-    for method_name in active:
-        arr = np.stack(method_norm_curves[method_name])
-        mean = arr.mean(axis=0)
-        sd = arr.std(axis=0)
-        c = colours[method_name]
-        n = len(method_norm_curves[method_name])
-        ax.plot(grid, mean, color=c, linewidth=1.8, label=f"{names[method_name]} (n={n})")
-        ax.fill_between(grid, mean - sd, mean + sd, color=c, alpha=_ALPHA_BAND)
-
-    ax.set_xlabel("Path progress α")
-    ax.set_ylabel("‖z(α)‖  (latent norm)")
+    sns.lineplot(
+        data=df,
+        x="α",
+        y="‖z(α)‖",
+        hue="Method",
+        hue_order=[m for m in _ordered_methods(report) if m in df["Method"].values],
+        errorbar="sd",
+        palette=palette,
+        linewidth=1.8,
+        ax=ax,
+    )
     ax.set_xlim(0, 1)
     ax.legend(fontsize=8, loc="upper right")
     ax.set_title(
-        "Latent norm along path — mean ± 1 SD\n"
-        "(excursion above reference line = off-manifold)"
+        "Latent norm along path — mean ± 1 SD\n(excursion above reference line = off-manifold)"
     )
     fig.tight_layout()
 
@@ -539,12 +608,8 @@ def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
     return out
 
 
-# Convenience: render all plots:
 def render_all(
-    report: ComparisonReport,
-    stats: Sequence[MethodStats],
-    *,
-    output_dir: Path,
+    report: ComparisonReport, stats: Sequence[MethodStats], *, output_dir: Path
 ) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = []
@@ -557,7 +622,7 @@ def render_all(
         ),
         (lambda: plot_success_rate_bar(stats, output_dir=output_dir), "success rate"),
         (
-            lambda: plot_cond_success_rate_bar(report, stats, output_dir=output_dir),
+            lambda: plot_cond_success_rate_bar(stats, output_dir=output_dir),
             "cond. success rate",
         ),
         (lambda: plot_z_norm_band(report, output_dir=output_dir), "latent norm band"),
@@ -569,6 +634,10 @@ def render_all(
         (
             lambda: plot_pwin_start_end(report, output_dir=output_dir),
             "P(win) start/end",
+        ),
+        (
+            lambda: plot_pwin_distribution(report, output_dir=output_dir),
+            "P(win) distribution",
         ),
         (lambda: plot_kde_density_shift(report, output_dir=output_dir), "KDE shift"),
         (

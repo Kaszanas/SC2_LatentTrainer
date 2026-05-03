@@ -7,17 +7,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import seaborn as sns
 
 from latent_trainer.paths.compare.aggregate import summarise
 from latent_trainer.paths.compare.latex import format_mean_sd
 from latent_trainer.paths.compare.results import ComparisonReport
 
+sns.set_theme(style="whitegrid", context="paper")
+
 _DPI = 150
-_ALPHA_BAND = 0.25
 _GRID_POINTS = 100
+
+_DS_PALETTE = ["#2196F3", "#F44336", "#4CAF50", "#FF9800", "#9C27B0", "#00BCD4"]
 
 
 @dataclass
@@ -45,59 +49,65 @@ def build_cross_dataset(
             "Cross-dataset comparison assumes the same model."
         )
 
-    model_path = reports[0].model_path
     return CrossDatasetComparison(
         reports=reports,
         labels=labels,
-        model_path=model_path,
+        model_path=reports[0].model_path,
     )
 
 
-def _dataset_colours(cdc: CrossDatasetComparison) -> list[str]:
-    base = ["#2196F3", "#F44336", "#4CAF50", "#FF9800", "#9C27B0", "#00BCD4"]
-    return [base[i % len(base)] for i in range(len(cdc.reports))]
+def _ds_palette(cdc: CrossDatasetComparison) -> dict[str, str]:
+    return {lbl: _DS_PALETTE[i % len(_DS_PALETTE)] for i, lbl in enumerate(cdc.labels)}
 
 
-def _method_names(cdc: CrossDatasetComparison) -> list[str]:
-    seen = {}
+def _method_display(cdc: CrossDatasetComparison) -> dict[str, str]:
+    seen: dict[str, str] = {}
     for r in cdc.reports:
         for s in r.methods:
             seen[s.name] = s.display_name
-    return list(seen.keys()), seen
+    return seen
 
 
-# 1. Grouped success rate bar chart
 def plot_cross_success_rate(cdc: CrossDatasetComparison, *, output_dir: Path) -> Path:
     all_stats = [summarise(r) for r in cdc.reports]
+    display = _method_display(cdc)
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
-    display = {s.name: s.display_name for s in cdc.reports[0].methods}
-    ds_colours = _dataset_colours(cdc)
 
-    x = np.arange(len(method_names_list))
-    n_ds = len(cdc.reports)
-    w = 0.8 / max(n_ds, 1)
+    rows = []
+    for stats, label in zip(all_stats, cdc.labels):
+        stat_map = {s.method_name: s for s in stats}
+        for m in method_names_list:
+            rate = stat_map[m].success_rate * 100 if m in stat_map else 0.0
+            rows.append(
+                {
+                    "Method": display.get(m, m),
+                    "Dataset": label,
+                    "Success rate (%)": rate,
+                }
+            )
+
+    if not rows:
+        return output_dir / "cross_success_rate.png"
+
+    df = pd.DataFrame(rows)
+    palette = _ds_palette(cdc)
+    method_order = [display.get(m, m) for m in method_names_list]
 
     fig, ax = plt.subplots(figsize=(max(7, len(method_names_list) * 1.5), 5))
-
-    for ds_idx, (stats, label, colour) in enumerate(
-        zip(all_stats, cdc.labels, ds_colours)
-    ):
-        stat_map = {s.method_name: s for s in stats}
-        offsets = x + (ds_idx - (n_ds - 1) / 2) * w
-        heights = [
-            stat_map[m].success_rate * 100 if m in stat_map else 0.0
-            for m in method_names_list
-        ]
-        ax.bar(offsets, heights, w * 0.9, color=colour, alpha=0.8, label=label)
-
-    ax.axhline(50, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
-    ax.set_xticks(x)
-    ax.set_xticklabels(
-        [display.get(m, m) for m in method_names_list], rotation=15, ha="right"
+    sns.barplot(
+        data=df,
+        x="Method",
+        y="Success rate (%)",
+        hue="Dataset",
+        order=method_order,
+        palette=palette,
+        errorbar=None,
+        ax=ax,
     )
-    ax.set_ylabel("Success rate (%)")
+    ax.axhline(50, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
     ax.set_ylim(0, 115)
-    ax.legend(title="Dataset")
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=15)
     ax.set_title("Success rate by method and dataset")
     fig.tight_layout()
 
@@ -107,16 +117,15 @@ def plot_cross_success_rate(cdc: CrossDatasetComparison, *, output_dir: Path) ->
     return out
 
 
-# 2. P(win) curves — one subplot per method, one band per dataset
 def plot_cross_pwin_curves(cdc: CrossDatasetComparison, *, output_dir: Path) -> Path:
+    display = _method_display(cdc)
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
-    display = {s.name: s.display_name for s in cdc.reports[0].methods}
-    ds_colours = _dataset_colours(cdc)
+    palette = _ds_palette(cdc)
     grid = np.linspace(0.0, 1.0, _GRID_POINTS)
 
     n_methods = len(method_names_list)
     ncols = min(3, n_methods)
-    nrows = math.ceil(n_methods / ncols)
+    nrows = math.ceil(n_methods / ncols) if n_methods else 1
     fig, axes = plt.subplots(
         nrows, ncols, figsize=(ncols * 4.5, nrows * 3.5), squeeze=False
     )
@@ -129,34 +138,39 @@ def plot_cross_pwin_curves(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
         ax.set_visible(True)
         ax.axhline(0.5, color="k", linestyle="--", linewidth=0.7, alpha=0.5)
 
-        for ds_idx, (report, label, colour) in enumerate(
-            zip(cdc.reports, cdc.labels, ds_colours)
-        ):
-            curves = []
+        rows = []
+        for report, label in zip(cdc.reports, cdc.labels):
             for r in report.results:
                 if (
                     r.method_name == method_name
                     and r.error is None
                     and len(r.p_win_curve) >= 2
                 ):
-                    curves.append(np.interp(grid, r.alphas, r.p_win_curve))
-            if not curves:
-                continue
-            arr = np.stack(curves)
-            mean = arr.mean(axis=0)
-            sd = arr.std(axis=0)
-            ax.plot(grid, mean, color=colour, linewidth=1.5, label=label)
-            ax.fill_between(grid, mean - sd, mean + sd, color=colour, alpha=_ALPHA_BAND)
+                    interp = np.interp(grid, r.alphas, r.p_win_curve)
+                    for alpha_val, p_val in zip(grid, interp):
+                        rows.append({"α": alpha_val, "P(win)": p_val, "Dataset": label})
+
+        if rows:
+            df = pd.DataFrame(rows)
+            sns.lineplot(
+                data=df,
+                x="α",
+                y="P(win)",
+                hue="Dataset",
+                errorbar="sd",
+                palette=palette,
+                linewidth=1.5,
+                legend=(mi == 0),
+                ax=ax,
+            )
+            if mi == 0:
+                ax.legend(fontsize=7)
 
         ax.set_title(display.get(method_name, method_name), fontsize=9)
         ax.set_xlim(0, 1)
         ax.set_ylim(-0.05, 1.05)
-        if mi % ncols == 0:
-            ax.set_ylabel("P(win)")
-        if mi // ncols == nrows - 1:
-            ax.set_xlabel("α")
-        if mi == 0:
-            ax.legend(fontsize=7)
+        ax.set_ylabel("P(win)" if mi % ncols == 0 else "")
+        ax.set_xlabel("α" if mi // ncols == nrows - 1 else "")
 
     fig.suptitle("P(win) along path — mean ± 1 SD per dataset", y=1.01)
     fig.tight_layout()
@@ -167,54 +181,45 @@ def plot_cross_pwin_curves(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
     return out
 
 
-# 3. P(win) gain — grouped violin
 def plot_cross_gain_violin(cdc: CrossDatasetComparison, *, output_dir: Path) -> Path:
+    display = _method_display(cdc)
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
-    display = {s.name: s.display_name for s in cdc.reports[0].methods}
-    ds_colours = _dataset_colours(cdc)
-    n_ds = len(cdc.reports)
+    palette = _ds_palette(cdc)
 
-    fig, ax = plt.subplots(figsize=(max(8, len(method_names_list) * n_ds * 0.8), 5))
+    rows = []
+    for report, label in zip(cdc.reports, cdc.labels):
+        for r in report.results:
+            if r.error is None and not math.isnan(r.p_win_gain):
+                rows.append(
+                    {
+                        "Method": display.get(r.method_name, r.method_name),
+                        "Dataset": label,
+                        "ΔP(win)": r.p_win_gain,
+                    }
+                )
 
-    x_base = np.arange(len(method_names_list))
-    width = 0.8 / max(n_ds, 1)
+    if not rows:
+        return output_dir / "cross_pwin_gain.png"
 
-    for ds_idx, (report, label, colour) in enumerate(
-        zip(cdc.reports, cdc.labels, ds_colours)
-    ):
-        for mi, method_name in enumerate(method_names_list):
-            vals = [
-                r.p_win_gain
-                for r in report.results
-                if r.method_name == method_name
-                and r.error is None
-                and not math.isnan(r.p_win_gain)
-            ]
-            if not vals:
-                continue
-            pos = x_base[mi] + (ds_idx - (n_ds - 1) / 2) * width
-            parts = ax.violinplot(
-                [vals], positions=[pos], showmedians=True, widths=width * 0.85
-            )
-            for pc in parts["bodies"]:
-                pc.set_facecolor(colour)
-                pc.set_alpha(0.65)
-            for part in ("cmedians", "cbars", "cmins", "cmaxes"):
-                if part in parts:
-                    parts[part].set_color(colour)
+    df = pd.DataFrame(rows)
+    method_order = [display.get(m, m) for m in method_names_list]
 
-    # Legend
-    patches = [
-        mpatches.Patch(color=c, label=lbl) for c, lbl in zip(ds_colours, cdc.labels)
-    ]
-    ax.legend(handles=patches, title="Dataset", fontsize=8)
-
-    ax.axhline(0, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
-    ax.set_xticks(x_base)
-    ax.set_xticklabels(
-        [display.get(m, m) for m in method_names_list], rotation=15, ha="right"
+    fig, ax = plt.subplots(
+        figsize=(max(8, len(method_names_list) * len(cdc.reports) * 0.8), 5)
     )
-    ax.set_ylabel("ΔP(win)")
+    sns.violinplot(
+        data=df,
+        x="Method",
+        y="ΔP(win)",
+        hue="Dataset",
+        order=method_order,
+        palette=palette,
+        inner="quart",
+        ax=ax,
+    )
+    ax.axhline(0, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=15)
     ax.set_title("P(win) gain distribution by method and dataset")
     fig.tight_layout()
 
@@ -224,54 +229,47 @@ def plot_cross_gain_violin(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
     return out
 
 
-# 4. Crossover α — grouped violin
 def plot_cross_crossover_violin(
     cdc: CrossDatasetComparison, *, output_dir: Path
 ) -> Path:
+    display = _method_display(cdc)
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
-    display = {s.name: s.display_name for s in cdc.reports[0].methods}
-    ds_colours = _dataset_colours(cdc)
-    n_ds = len(cdc.reports)
+    palette = _ds_palette(cdc)
 
-    fig, ax = plt.subplots(figsize=(max(8, len(method_names_list) * n_ds * 0.8), 5))
-    x_base = np.arange(len(method_names_list))
-    width = 0.8 / max(n_ds, 1)
+    rows = []
+    for report, label in zip(cdc.reports, cdc.labels):
+        for r in report.results:
+            if r.success and r.crossover_alpha is not None:
+                rows.append(
+                    {
+                        "Method": display.get(r.method_name, r.method_name),
+                        "Dataset": label,
+                        "Crossover α": r.crossover_alpha,
+                    }
+                )
 
-    for ds_idx, (report, label, colour) in enumerate(
-        zip(cdc.reports, cdc.labels, ds_colours)
-    ):
-        for mi, method_name in enumerate(method_names_list):
-            vals = [
-                r.crossover_alpha
-                for r in report.results
-                if r.method_name == method_name
-                and r.success
-                and r.crossover_alpha is not None
-            ]
-            if not vals:
-                continue
-            pos = x_base[mi] + (ds_idx - (n_ds - 1) / 2) * width
-            parts = ax.violinplot(
-                [vals], positions=[pos], showmedians=True, widths=width * 0.85
-            )
-            for pc in parts["bodies"]:
-                pc.set_facecolor(colour)
-                pc.set_alpha(0.65)
-            for part in ("cmedians", "cbars", "cmins", "cmaxes"):
-                if part in parts:
-                    parts[part].set_color(colour)
+    if not rows:
+        return output_dir / "cross_crossover.png"
 
-    patches = [
-        mpatches.Patch(color=c, label=lbl) for c, lbl in zip(ds_colours, cdc.labels)
-    ]
-    ax.legend(handles=patches, title="Dataset", fontsize=8)
+    df = pd.DataFrame(rows)
+    method_order = [display.get(m, m) for m in method_names_list]
 
-    ax.set_xticks(x_base)
-    ax.set_xticklabels(
-        [display.get(m, m) for m in method_names_list], rotation=15, ha="right"
+    fig, ax = plt.subplots(
+        figsize=(max(8, len(method_names_list) * len(cdc.reports) * 0.8), 5)
+    )
+    sns.violinplot(
+        data=df,
+        x="Method",
+        y="Crossover α",
+        hue="Dataset",
+        order=method_order,
+        palette=palette,
+        inner="quart",
+        ax=ax,
     )
     ax.set_ylim(-0.02, 1.05)
-    ax.set_ylabel("Crossover α")
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=15)
     ax.set_title("Crossover position by method and dataset — successful runs only")
     fig.tight_layout()
 
@@ -281,7 +279,6 @@ def plot_cross_crossover_violin(
     return out
 
 
-# LaTeX cross-dataset table
 def write_cross_dataset_table(
     cdc: CrossDatasetComparison,
     *,
@@ -292,12 +289,11 @@ def write_cross_dataset_table(
     """Write a cross-dataset comparison table with Δ columns."""
     all_stats = [summarise(r) for r in cdc.reports]
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
-    display = {s.name: s.display_name for s in cdc.reports[0].methods}
+    display = _method_display(cdc)
 
     ds_labels = list(cdc.labels)
     n_ds = len(ds_labels)
 
-    # Build header
     ds_cols = " & ".join(f"\\textbf{{{lab}}}" for lab in ds_labels)
     header = (
         r"\textbf{Method} & \textbf{Metric} & "
@@ -323,11 +319,9 @@ def write_cross_dataset_table(
     ]
 
     for method_name in method_names_list:
-        stat_per_ds = []
-        for stats in all_stats:
-            stat_map = {s.method_name: s for s in stats}
-            stat_per_ds.append(stat_map.get(method_name))
-
+        stat_per_ds = [
+            {s.method_name: s for s in stats}.get(method_name) for stats in all_stats
+        ]
         first_metric = True
         for metric_label, fmt_fn, delta_attr in metrics:
             vals_str = " & ".join(
@@ -384,7 +378,6 @@ def write_cross_dataset_table(
     return output_path
 
 
-# Convenience: render all cross-dataset plots
 def render_all_cross(cdc: CrossDatasetComparison, *, output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = []
