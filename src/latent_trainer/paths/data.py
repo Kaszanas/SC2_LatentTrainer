@@ -34,6 +34,22 @@ def nearest_winning_target(sample_z, win_latents, k=5) -> torch.Tensor:
     return win_latents[indices.squeeze()].mean(dim=0)
 
 
+def opponent_filtered_win_target(
+    opponent_z: torch.Tensor,
+    win_latents: torch.Tensor,
+    loss_latents: torch.Tensor,
+    k: int = 50,
+) -> torch.Tensor:
+    """Centroid of the k winning latents whose beaten opponent is closest to opponent_z.
+
+    Filters the winner pool to games where the opponent profile matches the
+    current opponent, making the target opponent-aware.
+    """
+    dists = torch.cdist(opponent_z.unsqueeze(0), loss_latents).squeeze(0)
+    _, indices = dists.topk(k, largest=False)
+    return win_latents[indices].mean(dim=0)
+
+
 @torch.no_grad()
 def encode_player(vae, data: torch.Tensor) -> torch.Tensor:
     mus = []

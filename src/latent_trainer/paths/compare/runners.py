@@ -48,6 +48,7 @@ def run_method(
     top_k: int,
     flow_model: "LitOTFlowMatching | None",
     win_latents: torch.Tensor,
+    loss_latents: torch.Tensor,
     all_latents: torch.Tensor,
     win_kde: KernelDensity,
 ) -> PathRunResult:
@@ -64,6 +65,7 @@ def run_method(
             top_k=top_k,
             flow_model=flow_model,
             win_latents=win_latents,
+            loss_latents=loss_latents,
             all_latents=all_latents,
             win_kde=win_kde,
         )
@@ -109,6 +111,7 @@ def _run_method_inner(
     top_k: int,
     flow_model: "LitOTFlowMatching | None",
     win_latents: torch.Tensor,
+    loss_latents: torch.Tensor,
     all_latents: torch.Tensor,
     win_kde: KernelDensity,
 ) -> PathRunResult:
@@ -139,16 +142,20 @@ def _run_method_inner(
 
     match spec.strategy:
         case "linear":
+            k_opp = int(spec.params.get("k_opponents", 50))
+            opp_dists = torch.cdist(
+                opponent_z.unsqueeze(0), loss_latents
+            ).squeeze(0)
+            opp_indices = opp_dists.topk(k_opp, largest=False).indices
+            filtered_wins = win_latents[opp_indices]
             if spec.params.get("method") == "nearest":
-                k = int(spec.params.get("k_neighbours", 5))
+                k_nn = int(spec.params.get("k_neighbours", 5))
                 target_z = (
-                    nearest_winning_target(ctx.sample_z, win_latents, k=k)
-                    .detach()
-                    .cpu()
-                    .numpy()
+                    nearest_winning_target(ctx.sample_z, filtered_wins, k=k_nn)
+                    .detach().cpu().numpy()
                 )
             else:
-                target_z = win_latents.mean(dim=0).detach().cpu().numpy()
+                target_z = filtered_wins.mean(dim=0).detach().cpu().numpy()
             path_z_np = path_linear(
                 z_start=z_start_np, z_target=target_z, n_waypoints=n_steps
             )
@@ -177,6 +184,9 @@ def _run_method_inner(
                 reg=float(p.get("reg", 0.01)),
                 n_waypoints=n_steps,
                 step_size=float(p.get("step_size", 0.1)),
+                opponent_z=opponent_z.detach().cpu().numpy(),
+                Z_loss=loss_latents.detach().cpu().numpy(),
+                k_opponents=int(p.get("k_opponents", 50)),
             )
 
         case "geodesic":

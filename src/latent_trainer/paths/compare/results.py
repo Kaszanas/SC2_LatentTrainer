@@ -25,32 +25,19 @@ DEFAULT_METHOD_SPECS: tuple[MethodSpec, ...] = (
         name="linear_centroid",
         display_name="Linear (centroid)",
         strategy="linear",
-        params={"method": "centroid"},
+        params={"method": "centroid", "k_opponents": 50},
     ),
     MethodSpec(
         name="linear_nearest",
         display_name="Linear (k-NN)",
         strategy="linear",
-        params={"method": "nearest", "k_neighbours": 5},
-    ),
-    MethodSpec(
-        name="gradient_ascent",
-        display_name="Gradient Ascent",
-        strategy="gradient_ascent",
-        params={
-            "steps": 1000,
-            "lr": 0.005,
-            "momentum": 0.5,
-            "density_weight": 0.3,
-            "kde_bandwidth": 0.5,
-            "convergence_threshold": 0.95,
-        },
+        params={"method": "nearest", "k_neighbours": 5, "k_opponents": 50},
     ),
     MethodSpec(
         name="optimal_transport",
         display_name="Optimal Transport",
         strategy="optimal_transport",
-        params={"reg": 0.01, "step_size": 0.1},
+        params={"reg": 0.01, "step_size": 0.1, "k_opponents": 50},
     ),
     MethodSpec(
         name="geodesic",
@@ -64,6 +51,19 @@ DEFAULT_METHOD_SPECS: tuple[MethodSpec, ...] = (
         strategy="neural_flow",
         params={"guidance_scale": 0.0},
         requires_flow_checkpoint=True,
+    ),
+    MethodSpec(
+        name="gradient_ascent",
+        display_name="Gradient Ascent",
+        strategy="gradient_ascent",
+        params={
+            "steps": 1000,
+            "lr": 0.005,
+            "momentum": 0.5,
+            "density_weight": 0.3,
+            "kde_bandwidth": 0.5,
+            "convergence_threshold": 0.95,
+        },
     ),
 )
 

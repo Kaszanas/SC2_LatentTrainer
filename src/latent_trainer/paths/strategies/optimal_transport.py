@@ -92,16 +92,29 @@ def path_optimal_transport(
     *,
     reg: float = 0.05,
     n_waypoints: int = 20,
-    step_size: float = 0.1,  # How far to move toward the target at each step
+    step_size: float = 0.1,
+    opponent_z: np.ndarray | None = None,
+    Z_loss: np.ndarray | None = None,
+    k_opponents: int = 50,
 ) -> np.ndarray:
-    """
-    Generates a path by iteratively recalculating the OT target.
-    This mimics a vector field flow rather than a linear interpolation.
+    """Iterative OT barycentric flow from z_start toward the winning distribution.
+
+    If opponent_z and Z_loss are provided, b is uniform over the k_opponents
+    winners whose beaten opponent is most similar to the current opponent.
+    This keeps b well-conditioned (no near-zero weights) so Sinkhorn converges
+    under the same reg/numItermax as the baseline.
     """
     path = [z_start.copy()]
     z_current = z_start.copy()
 
-    # We treat Z_win as a fixed target distribution (uniform)
+    if opponent_z is not None and Z_loss is not None:
+        # Restrict the target set to the k_opponents winners whose beaten opponent
+        # is most similar to the current opponent, then use a clean uniform b.
+        # This avoids log(0) in sinkhorn_log that arises from zeros in a padded b.
+        dists_opp = np.linalg.norm(Z_loss - opponent_z, axis=1)
+        k = min(k_opponents, len(Z_win))
+        top_k_idx = np.argpartition(dists_opp, k)[:k]
+        Z_win = Z_win[top_k_idx]
     b = ot.unif(len(Z_win))
     a = np.array([1.0])
 
@@ -113,7 +126,7 @@ def path_optimal_transport(
 
         # 2. Compute the OT plan — log-domain Sinkhorn is numerically stable at any reg
         if reg > 0:
-            T = ot.bregman.sinkhorn_log(a, b, M, reg=reg)
+            T = ot.bregman.sinkhorn_log(a, b, M, reg=reg, numItermax=2000)
         else:
             T = ot.emd(a, b, M)
 
