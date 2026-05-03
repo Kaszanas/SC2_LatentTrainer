@@ -61,7 +61,7 @@ python src/latent_trainer/train.py --help
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--pipeline` | `two_stage` | `two_stage` or `guided_vae` |
+| `--pipeline` | `guided_vae` | `guided_vae` |
 | `--dataset_filename` | `cached_dataset_rich.pt` | Cached dataset file in `data/` |
 | `--sweep` | off | Enable Ray+Optuna hyperparameter search |
 | `--n_trials` | `20` | Number of Optuna trials (sweep mode) |
