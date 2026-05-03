@@ -25,7 +25,6 @@ from pathlib import Path
 import click
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 import torch
 import torch.nn as nn
 
@@ -263,43 +262,7 @@ def _beeswarm(
     print(f"  Saved -> {save_path}")
 
 
-def _recon_heatmap(
-    shap_vals: np.ndarray,
-    feature_names: list[str],
-    input_dim: int,
-    save_path: Path,
-) -> None:
-    # shap_vals: [n_out, N, 2*input_dim]  (multi-output DeepExplainer result)
-    # Player 0 input features are the first input_dim columns.
-    shap_p0_in = np.abs(shap_vals[:, :, :input_dim])  # [n_out, N, input_dim]
-    attr = shap_p0_in.mean(axis=1)  # [n_out, input_dim]
-
-    fig, ax = plt.subplots(figsize=(15, 13))
-    sns.heatmap(
-        attr,
-        ax=ax,
-        cmap="viridis",
-        xticklabels=feature_names,
-        yticklabels=feature_names,
-        linewidths=0,
-        cbar_kws={"label": "Mean |SHAP|"},
-    )
-    ax.set_xlabel("Input feature (drives reconstruction of →)", fontsize=9)
-    ax.set_ylabel("Reconstructed feature", fontsize=9)
-    ax.set_title(
-        "Reconstruction SHAP Attribution Matrix  (player 0)\n"
-        "Row i, Col j: how much input feature j affects reconstruction error of feature i",
-        fontweight="bold",
-    )
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=90, fontsize=3)
-    ax.set_yticklabels(ax.get_yticklabels(), rotation=0, fontsize=3)
-    plt.tight_layout()
-    fig.savefig(save_path, dpi=150)
-    plt.close(fig)
-    print(f"  Saved -> {save_path}")
-
-
-def analyse_pwin(
+def analyze_pwin(
     guided_vae: LitGuidedVAE,
     background: torch.Tensor,
     explain_set: torch.Tensor,
@@ -324,9 +287,11 @@ def analyse_pwin(
         shap_vals = shap_vals.reshape(shap_vals.shape[0], -1)
         break
 
-    logger.info(f"SHAP P(win) array shape: {shap_vals.shape}  (expected [N, {2*input_dim}])")
+    logger.info(
+        f"SHAP P(win) array shape: {shap_vals.shape}  (expected [N, {2 * input_dim}])"
+    )
 
-    mean_abs = np.abs(shap_vals).mean(0).ravel()   # always 1-D
+    mean_abs = np.abs(shap_vals).mean(0).ravel()  # always 1-D
     # Split into per-player halves if the full [N, 2*input_dim] is present;
     # fall back to player-0-only if the explainer collapsed the player axis.
     if len(mean_abs) >= 2 * input_dim:
@@ -334,7 +299,7 @@ def analyse_pwin(
         imp_p1 = mean_abs[input_dim : 2 * input_dim]
     else:
         logger.warning(
-            f"SHAP values have {len(mean_abs)} columns instead of {2*input_dim}. "
+            f"SHAP values have {len(mean_abs)} columns instead of {2 * input_dim}. "
             "Treating all as player-0 features; opponent bar omitted."
         )
         imp_p0 = mean_abs[:input_dim]
@@ -361,59 +326,6 @@ def analyse_pwin(
     )
 
 
-def analyse_reconstruction(
-    guided_vae: LitGuidedVAE,
-    background: torch.Tensor,
-    explain_set: torch.Tensor,
-    feature_names: list[str],
-    top_k: int,
-    output_dir: Path,
-    full_matrix: bool = True,
-) -> None:
-    input_dim = guided_vae.model.input_dim
-    bg_flat = background.reshape(len(background), -1)
-    ex_flat = explain_set.reshape(len(explain_set), -1)
-
-    # Bar chart — total MSE
-    wrapper_total = ReconExplainer(guided_vae).eval()
-    logger.info("Running SHAP for reconstruction (total MSE)...")
-    shap_raw_total = _run_explainer(wrapper_total, bg_flat, ex_flat)
-    if isinstance(shap_raw_total, list):
-        shap_total = np.asarray(shap_raw_total[0])
-    else:
-        shap_total = np.asarray(shap_raw_total)
-    while shap_total.ndim > 2:
-        shap_total = shap_total[0]
-
-    imp_p0 = np.abs(shap_total).mean(0)[:input_dim]
-    _bar_chart(
-        importances=imp_p0,
-        feature_names=feature_names,
-        top_k=top_k,
-        title=f"Reconstruction SHAP — Top-{top_k} Features (Player 0, total MSE)",
-        xlabel="Mean |SHAP value|  (contribution to total reconstruction error)",
-        save_path=output_dir / "shap_recon_bar.png",
-    )
-
-    if not full_matrix:
-        return
-
-    # Heatmap — per-feature MSE SHAP
-    wrapper_pf = ReconPerFeatureExplainer(guided_vae).eval()
-    logger.info(
-        "Running DeepExplainer for per-feature reconstruction "
-        f"({input_dim} outputs × {len(ex_flat)} samples) — may take several minutes..."
-    )
-    shap_pf = _run_explainer(wrapper_pf, bg_flat, ex_flat)
-    # shap_pf: [input_dim, N, 2*input_dim]  (multi-output)
-    _recon_heatmap(
-        shap_vals=shap_pf,
-        feature_names=feature_names,
-        input_dim=input_dim,
-        save_path=output_dir / "shap_recon_heatmap.png",
-    )
-
-
 @click.command()
 @click.option(
     "--model_path",
@@ -426,13 +338,6 @@ def analyse_reconstruction(
     default="cached_dataset_rich.pt",
     show_default=True,
     help="Filename of the cached dataset placed in DATA_DIR.",
-)
-@click.option(
-    "--target",
-    type=click.Choice(["p_win", "reconstruction", "both"]),
-    default="both",
-    show_default=True,
-    help="Which model output to explain.",
 )
 @click.option(
     "--n_background",
@@ -456,12 +361,6 @@ def analyse_reconstruction(
     help="Features shown in bar and beeswarm plots.",
 )
 @click.option(
-    "--no_heatmap",
-    is_flag=True,
-    default=False,
-    help="Skip the per-feature reconstruction attribution heatmap (expensive).",
-)
-@click.option(
     "--output_dir",
     default=str(PLOTS_DIR),
     show_default=True,
@@ -471,11 +370,9 @@ def analyse_reconstruction(
 def main(
     model_path: Path,
     dataset_filename: str,
-    target: str,
     n_background: int,
     n_explain: int,
     top_k: int,
-    no_heatmap: bool,
     output_dir: Path,
 ) -> None:
     """SHAP attribution analysis for the GuidedVAE (P(win) and/or reconstruction)."""
@@ -508,26 +405,14 @@ def main(
         f"input_dim={input_dim}  background={len(background)}  explain={len(explain_set)}"
     )
 
-    if target in ("p_win", "both"):
-        analyse_pwin(
-            guided_vae=guided_vae,
-            background=background,
-            explain_set=explain_set,
-            feature_names=feature_names,
-            top_k=top_k,
-            output_dir=output_dir,
-        )
-
-    if target in ("reconstruction", "both"):
-        analyse_reconstruction(
-            guided_vae=guided_vae,
-            background=background,
-            explain_set=explain_set,
-            feature_names=feature_names,
-            top_k=top_k,
-            output_dir=output_dir,
-            full_matrix=not no_heatmap,
-        )
+    analyze_pwin(
+        guided_vae=guided_vae,
+        background=background,
+        explain_set=explain_set,
+        feature_names=feature_names,
+        top_k=top_k,
+        output_dir=output_dir,
+    )
 
     print(f"\nDone! SHAP plots saved to {output_dir}/")
 
