@@ -48,6 +48,27 @@ class MethodStats:
     kde_density_shift_mean: float  # mean(density_end - density_start)
     kde_density_shift_sd: float
 
+    # Conditional success — only samples where P(win_start) < 0.5
+    cond_n_eligible: int
+    cond_n_success: int
+    cond_success_rate: float
+
+    # SD-adjusted success — threshold = 0.5 + std(P(win_start)) across all runs
+    p_win_threshold: float  # 0.5 + σ used as the bar
+    sd_adj_n_eligible: int
+    sd_adj_n_success: int
+    sd_adj_success_rate: float
+
+    # Normalised gain: ΔP(win) / (1 − P(win_start))
+    p_win_gain_norm_mean: float
+    p_win_gain_norm_sd: float
+
+    # Latent norm along path (off-manifold diagnostic; computed from path_z)
+    mean_z_norm_mean: float
+    mean_z_norm_sd: float
+    max_z_norm_mean: float
+    max_z_norm_sd: float
+
     # Cost
     wall_time_mean_s: float
     wall_time_sd_s: float
@@ -63,6 +84,15 @@ def _mean_sd(values: list[float]) -> tuple[float, float]:
 
 def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
     """Aggregate results into per-method statistics."""
+    # Compute SD-adjusted threshold once from all runs (method-agnostic)
+    all_starts = [
+        r.p_win_start
+        for r in report.results
+        if r.error is None and not math.isnan(r.p_win_start)
+    ]
+    p_win_sd = statistics.stdev(all_starts) if len(all_starts) > 1 else 0.0
+    p_win_threshold = 0.5 + p_win_sd
+
     method_display = {s.name: s.display_name for s in report.methods}
     groups: dict[str, list[PathRunResult]] = {s.name: [] for s in report.methods}
     for r in report.results:
@@ -107,6 +137,37 @@ def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
         shifts = [r.kde_density_end - r.kde_density_start for r in good]
         shift_mean, shift_sd = _mean_sd(shifts)
 
+        cond_eligible = [
+            r for r in good
+            if not math.isnan(r.p_win_start) and r.p_win_start < 0.5
+        ]
+        cond_success_lst = [r for r in cond_eligible if r.success]
+        cond_n_eligible = len(cond_eligible)
+        cond_n_success = len(cond_success_lst)
+        cond_success_rate = cond_n_success / cond_n_eligible if cond_n_eligible > 0 else math.nan
+
+        sd_adj_success_lst = [r for r in cond_eligible if r.p_win_max >= p_win_threshold]
+        sd_adj_n_eligible = cond_n_eligible
+        sd_adj_n_success = len(sd_adj_success_lst)
+        sd_adj_success_rate = sd_adj_n_success / sd_adj_n_eligible if sd_adj_n_eligible > 0 else math.nan
+
+        norm_gains = [
+            r.p_win_gain / (1.0 - r.p_win_start)
+            for r in good
+            if not math.isnan(r.p_win_start) and r.p_win_start < 1.0
+        ]
+        norm_gain_mean, norm_gain_sd = _mean_sd(norm_gains)
+
+        mean_z_norms: list[float] = []
+        max_z_norms: list[float] = []
+        for r in good:
+            if r.path_z is not None and len(r.path_z) > 0:
+                norms = np.linalg.norm(r.path_z, axis=1)
+                mean_z_norms.append(float(norms.mean()))
+                max_z_norms.append(float(norms.max()))
+        mean_z_mean, mean_z_sd = _mean_sd(mean_z_norms)
+        max_z_mean, max_z_sd = _mean_sd(max_z_norms)
+
         times = [r.wall_time_s for r in good if not math.isnan(r.wall_time_s)]
         time_mean, time_sd = _mean_sd(times)
 
@@ -135,6 +196,19 @@ def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
                 dist_nearest_win_end_sd=dist_sd,
                 kde_density_shift_mean=shift_mean,
                 kde_density_shift_sd=shift_sd,
+                cond_n_eligible=cond_n_eligible,
+                cond_n_success=cond_n_success,
+                cond_success_rate=cond_success_rate,
+                p_win_threshold=p_win_threshold,
+                sd_adj_n_eligible=sd_adj_n_eligible,
+                sd_adj_n_success=sd_adj_n_success,
+                sd_adj_success_rate=sd_adj_success_rate,
+                p_win_gain_norm_mean=norm_gain_mean,
+                p_win_gain_norm_sd=norm_gain_sd,
+                mean_z_norm_mean=mean_z_mean,
+                mean_z_norm_sd=mean_z_sd,
+                max_z_norm_mean=max_z_mean,
+                max_z_norm_sd=max_z_sd,
                 wall_time_mean_s=time_mean,
                 wall_time_sd_s=time_sd,
             )

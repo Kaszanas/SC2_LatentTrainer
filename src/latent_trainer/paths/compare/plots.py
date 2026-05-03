@@ -417,6 +417,128 @@ def plot_feature_jaccard_heatmap(
     return out
 
 
+# Conditional + SD-adjusted success rate bar
+def plot_cond_success_rate_bar(
+    report: ComparisonReport,
+    stats: Sequence[MethodStats],
+    *,
+    output_dir: Path,
+) -> Path:
+    import matplotlib.patches as mpatches
+
+    if not stats:
+        return output_dir / "compare_cond_success_rate.png"
+
+    threshold = stats[0].p_win_threshold
+    colours = {s.name: _PALETTE[i % len(_PALETTE)] for i, s in enumerate(report.methods)}
+
+    n = len(stats)
+    x = np.arange(n)
+    w = 0.26
+
+    fig, ax = plt.subplots(figsize=(max(6, n * 1.8), 5))
+
+    for i, s in enumerate(stats):
+        c = colours.get(s.method_name, "#888888")
+        # unconditional
+        ax.bar(x[i] - w, s.success_rate * 100, w, color=c, alpha=0.3)
+        # conditional (P(win_start) < 0.5)
+        cond_pct = s.cond_success_rate * 100 if not math.isnan(s.cond_success_rate) else 0
+        ax.bar(x[i], cond_pct, w, color=c, alpha=0.6)
+        # SD-adjusted
+        sd_pct = s.sd_adj_success_rate * 100 if not math.isnan(s.sd_adj_success_rate) else 0
+        ax.bar(x[i] + w, sd_pct, w, color=c, alpha=0.95)
+        ax.text(
+            x[i] + w,
+            sd_pct + 1.5,
+            f"{s.sd_adj_n_success}/{s.sd_adj_n_eligible}",
+            ha="center",
+            va="bottom",
+            fontsize=7,
+        )
+
+    legend_handles = [
+        mpatches.Patch(color="grey", alpha=0.3, label="Unconditional"),
+        mpatches.Patch(color="grey", alpha=0.6, label="Cond. (start < 0.5)"),
+        mpatches.Patch(color="grey", alpha=0.95, label=f"SD-adj. (start < 0.5, max ≥ {threshold:.2f})"),
+    ]
+    ax.legend(handles=legend_handles, fontsize=8)
+    ax.axhline(50, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels([s.display_name for s in stats], rotation=15, ha="right")
+    ax.set_ylabel("Success rate (%)")
+    ax.set_ylim(0, 115)
+    ax.set_title(
+        f"Success rate: unconditional / conditional / SD-adjusted\n"
+        f"(σ = {threshold - 0.5:.3f}, threshold = {threshold:.3f})"
+    )
+    fig.tight_layout()
+
+    out = output_dir / "compare_cond_success_rate.png"
+    fig.savefig(out, dpi=_DPI)
+    plt.close(fig)
+    return out
+
+
+# Latent norm band — off-manifold diagnostic
+def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
+    colours = _method_colours(report)
+    names = _display_name(report)
+    grid = np.linspace(0.0, 1.0, _GRID_POINTS)
+
+    method_norm_curves: dict[str, list[np.ndarray]] = {s.name: [] for s in report.methods}
+    ref_norms: list[float] = []
+
+    for r in report.results:
+        if r.error is not None or r.path_z is None or len(r.path_z) < 2:
+            continue
+        norms = np.linalg.norm(r.path_z, axis=1)
+        interpolated = np.interp(grid, r.alphas, norms)
+        method_norm_curves[r.method_name].append(interpolated)
+        ref_norms.append(float(norms[0]))  # z_start is a real encoded point
+
+    active = [s.name for s in report.methods if method_norm_curves[s.name]]
+    if not active:
+        return output_dir / "compare_z_norm_band.png"
+
+    ref_line = float(np.mean(ref_norms)) if ref_norms else None
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    if ref_line is not None:
+        ax.axhline(
+            ref_line,
+            color="k",
+            linestyle="--",
+            linewidth=0.8,
+            alpha=0.5,
+            label=f"Mean ‖z_start‖ = {ref_line:.2f} (real data)",
+        )
+
+    for method_name in active:
+        arr = np.stack(method_norm_curves[method_name])
+        mean = arr.mean(axis=0)
+        sd = arr.std(axis=0)
+        c = colours[method_name]
+        n = len(method_norm_curves[method_name])
+        ax.plot(grid, mean, color=c, linewidth=1.8, label=f"{names[method_name]} (n={n})")
+        ax.fill_between(grid, mean - sd, mean + sd, color=c, alpha=_ALPHA_BAND)
+
+    ax.set_xlabel("Path progress α")
+    ax.set_ylabel("‖z(α)‖  (latent norm)")
+    ax.set_xlim(0, 1)
+    ax.legend(fontsize=8, loc="upper right")
+    ax.set_title(
+        "Latent norm along path — mean ± 1 SD\n"
+        "(excursion above reference line = off-manifold)"
+    )
+    fig.tight_layout()
+
+    out = output_dir / "compare_z_norm_band.png"
+    fig.savefig(out, dpi=_DPI)
+    plt.close(fig)
+    return out
+
+
 # Convenience: render all plots:
 def render_all(
     report: ComparisonReport,
@@ -434,6 +556,11 @@ def render_all(
             "crossover violin",
         ),
         (lambda: plot_success_rate_bar(stats, output_dir=output_dir), "success rate"),
+        (
+            lambda: plot_cond_success_rate_bar(report, stats, output_dir=output_dir),
+            "cond. success rate",
+        ),
+        (lambda: plot_z_norm_band(report, output_dir=output_dir), "latent norm band"),
         (lambda: plot_pwin_gain_violin(report, output_dir=output_dir), "P(win) gain"),
         (
             lambda: plot_nearest_win_distance(report, output_dir=output_dir),

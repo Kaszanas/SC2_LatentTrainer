@@ -337,23 +337,23 @@ def cmd_replot(report_path: Path, output_dir: Path | None) -> None:
 
 
 def _print_summary(stats) -> None:
+    if not stats:
+        return
+    threshold = stats[0].p_win_threshold
+    print(f"  SD-adjusted threshold: {threshold:.3f}  (0.5 + σ, σ = {threshold - 0.5:.3f})")
     header = (
-        f"  {'Method':<24} {'Success':>8}  {'Crossover α':>12}  "
-        f"{'P(win) start':>13}  {'P(win) end':>11}  {'ΔP(win)':>10}  {'AUC':>8}"
+        f"  {'Method':<24} {'Uncond.':>8}  {'Cond.':>7}  {'SD-adj.':>8}  "
+        f"{'Crossover α':>12}  {'P(win) start':>13}  {'P(win) end':>11}  {'ΔP(win)':>10}  {'AUC':>8}"
     )
     print(header)
-    print("  " + "─" * 92)
+    print("  " + "─" * 112)
     for s in stats:
-        ca = (
-            f"{s.crossover_alpha_mean:.3f}"
-            if not math.isnan(s.crossover_alpha_mean)
-            else "—"
-        )
-        pw_s = (
-            f"{s.p_win_start_mean:.3f}" if not math.isnan(s.p_win_start_mean) else "—"
-        )
+        ca = f"{s.crossover_alpha_mean:.3f}" if not math.isnan(s.crossover_alpha_mean) else "—"
+        pw_s = f"{s.p_win_start_mean:.3f}" if not math.isnan(s.p_win_start_mean) else "—"
         pw_e = f"{s.p_win_end_mean:.3f}" if not math.isnan(s.p_win_end_mean) else "—"
+        cond = f"{s.cond_success_rate:.1%}" if not math.isnan(s.cond_success_rate) else "—"
+        sd_adj = f"{s.sd_adj_success_rate:.1%}" if not math.isnan(s.sd_adj_success_rate) else "—"
         print(
-            f"  {s.display_name:<24} {s.success_rate:>7.1%}  {ca:>12}  "
-            f"{pw_s:>13}  {pw_e:>11}  {s.p_win_gain_mean:>+10.3f}  {s.auc_mean:>8.3f}"
+            f"  {s.display_name:<24} {s.success_rate:>7.1%}  {cond:>7}  {sd_adj:>8}  "
+            f"{ca:>12}  {pw_s:>13}  {pw_e:>11}  {s.p_win_gain_mean:>+10.3f}  {s.auc_mean:>8.3f}"
         )
