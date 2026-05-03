@@ -10,7 +10,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
-from latent_trainer.paths.compare.aggregate import MethodStats, jaccard_between_methods
+from latent_trainer.paths.compare.aggregate import (
+    MethodStats,
+    jaccard_between_methods,
+)
 from latent_trainer.paths.compare.results import ComparisonReport
 
 # Consistent colour map keyed by method name
@@ -36,11 +39,7 @@ def _display_name(report: ComparisonReport) -> dict[str, str]:
     return {s.name: s.display_name for s in report.methods}
 
 
-# ---------------------------------------------------------------------------
-# 1. P(win) curves — mean ± 1 SD band per method
-# ---------------------------------------------------------------------------
-
-
+# P(win) curves — mean ± 1 SD band per method
 def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path:
     colours = _method_colours(report)
     names = _display_name(report)
@@ -86,11 +85,7 @@ def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path
     return out
 
 
-# ---------------------------------------------------------------------------
-# 2. Crossover α violin — only successful runs
-# ---------------------------------------------------------------------------
-
-
+# Crossover α violin — only successful runs
 def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
     colours = _method_colours(report)
     names = _display_name(report)
@@ -150,11 +145,7 @@ def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path
     return out
 
 
-# ---------------------------------------------------------------------------
-# 3. Success rate bar chart
-# ---------------------------------------------------------------------------
-
-
+# Success rate bar chart
 def plot_success_rate_bar(stats: Sequence[MethodStats], *, output_dir: Path) -> Path:
     fig, ax = plt.subplots(figsize=(max(6, len(stats) * 1.4), 4.5))
     x = np.arange(len(stats))
@@ -185,11 +176,7 @@ def plot_success_rate_bar(stats: Sequence[MethodStats], *, output_dir: Path) -> 
     return out
 
 
-# ---------------------------------------------------------------------------
-# 4. P(win) gain violin
-# ---------------------------------------------------------------------------
-
-
+# P(win) gain violin
 def plot_pwin_gain_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
     colours = _method_colours(report)
     names = _display_name(report)
@@ -229,11 +216,7 @@ def plot_pwin_gain_violin(report: ComparisonReport, *, output_dir: Path) -> Path
     return out
 
 
-# ---------------------------------------------------------------------------
-# 5. Nearest-win distance: start vs. end (paired)
-# ---------------------------------------------------------------------------
-
-
+# Nearest-win distance: start vs. end (paired)
 def plot_nearest_win_distance(report: ComparisonReport, *, output_dir: Path) -> Path:
     colours = _method_colours(report)
     names = _display_name(report)
@@ -303,11 +286,59 @@ def plot_nearest_win_distance(report: ComparisonReport, *, output_dir: Path) -> 
     return out
 
 
-# ---------------------------------------------------------------------------
-# 6. KDE density shift violin
-# ---------------------------------------------------------------------------
+# P(win) start vs. end paired bar
+def plot_pwin_start_end(report: ComparisonReport, *, output_dir: Path) -> Path:
+    colours = _method_colours(report)
+    names = _display_name(report)
+    method_names = [s.name for s in report.methods]
+
+    starts: dict[str, list[float]] = {m: [] for m in method_names}
+    ends: dict[str, list[float]] = {m: [] for m in method_names}
+    for r in report.results:
+        if r.error is None and not math.isnan(r.p_win_start):
+            starts[r.method_name].append(r.p_win_start)
+            ends[r.method_name].append(r.p_win_end)
+
+    active = [m for m in method_names if starts[m]]
+    if not active:
+        return output_dir / "compare_pwin_start_end.png"
+
+    fig, ax = plt.subplots(figsize=(max(6, len(active) * 1.4), 5))
+    x = np.arange(len(active))
+    w = 0.35
+
+    for i, method_name in enumerate(active):
+        c = colours[method_name]
+        mean_s = np.mean(starts[method_name])
+        mean_e = np.mean(ends[method_name])
+        sd_s = np.std(starts[method_name])
+        sd_e = np.std(ends[method_name])
+        ax.bar(x[i] - w / 2, mean_s, w, yerr=sd_s, color=c, alpha=0.4, capsize=3)
+        ax.bar(x[i] + w / 2, mean_e, w, yerr=sd_e, color=c, alpha=0.9, capsize=3)
+
+    import matplotlib.patches as mpatches
+
+    start_p = mpatches.Patch(color="grey", alpha=0.4, label="Start")
+    end_p = mpatches.Patch(color="grey", alpha=0.9, label="End")
+    ax.legend(handles=[start_p, end_p])
+    ax.axhline(0.5, color="black", linestyle="--", linewidth=0.8, alpha=0.6)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([names[m] for m in active], rotation=15, ha="right")
+    ax.set_ylabel("Mean P(win) (± 1 SD)")
+    ax.set_ylim(0, 1)
+    ax.set_title(
+        "P(win) at path start vs. end\n(higher end = better; dashed = 0.5 threshold)"
+    )
+    fig.tight_layout()
+
+    out = output_dir / "compare_pwin_start_end.png"
+    fig.savefig(out, dpi=_DPI)
+    plt.close(fig)
+    return out
 
 
+# KDE density shift violin
 def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Path:
     colours = _method_colours(report)
     names = _display_name(report)
@@ -349,11 +380,7 @@ def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Pat
     return out
 
 
-# ---------------------------------------------------------------------------
-# 7. Feature Jaccard heatmap
-# ---------------------------------------------------------------------------
-
-
+# Feature Jaccard heatmap
 def plot_feature_jaccard_heatmap(
     report: ComparisonReport,
     *,
@@ -390,11 +417,7 @@ def plot_feature_jaccard_heatmap(
     return out
 
 
-# ---------------------------------------------------------------------------
-# Convenience: render all seven plots
-# ---------------------------------------------------------------------------
-
-
+# Convenience: render all plots:
 def render_all(
     report: ComparisonReport,
     stats: Sequence[MethodStats],
@@ -415,6 +438,10 @@ def render_all(
         (
             lambda: plot_nearest_win_distance(report, output_dir=output_dir),
             "nearest-win dist",
+        ),
+        (
+            lambda: plot_pwin_start_end(report, output_dir=output_dir),
+            "P(win) start/end",
         ),
         (lambda: plot_kde_density_shift(report, output_dir=output_dir), "KDE shift"),
         (
