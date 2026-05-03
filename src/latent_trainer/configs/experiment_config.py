@@ -21,7 +21,7 @@ class ExperimentConfig:
     Parameters
     ----------
     pipeline:
-        Which training pipeline to use (``"two_stage"`` or ``"guided_vae"``).
+        Which training pipeline to use (``"guided_vae"``).
     cache_path:
         Path to the pre-processed ``.pt`` dataset cache.
     mode:
@@ -62,7 +62,7 @@ class ExperimentConfig:
 
     # Pipeline selection
     sweep: bool
-    pipeline: str = "two_stage"
+    pipeline: str = "guided_vae"
     dataset_filename: str = "cached_dataset_rich.pt"
 
     # MLFlow tracking

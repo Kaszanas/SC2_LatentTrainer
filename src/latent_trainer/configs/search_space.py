@@ -11,7 +11,6 @@ from __future__ import annotations
 import optuna
 
 from latent_trainer.configs.hyperparam_settings import (
-    CLS_HIDDEN_DIM_CHOICES,
     VAE_HIDDEN_DIM_CHOICES,
 )
 
@@ -56,40 +55,6 @@ def build_hidden_layers(
     start_idx = width_choices.index(start_width)
     actual_start = max(n_layers - 1, start_idx)
     return [width_choices[actual_start - i] for i in range(n_layers)]
-
-
-def get_two_stage_search_space(trial: optuna.Trial) -> dict:
-    """Return a params dict for the two-stage (VAE → Classifier) pipeline.
-
-    Searched parameters:
-    - ``latent_dim``: 8-64
-    - ``vae_lr`` / ``cls_lr``: log-uniform 1e-4 … 1e-2
-    - ``batch_size``: categorical {64, 128, 256, 512}
-    - ``dropout``: uniform 0.1-0.5
-    - ``vae_hidden_dims``: 1-3 layers, decreasing from {64, 128, 256, 512}
-    - ``cls_hidden_dims``: 1-3 layers, decreasing from {32, 64, 128, 256}
-    """
-    return {
-        "latent_dim": trial.suggest_int("latent_dim", low=8, high=64),
-        "vae_lr": trial.suggest_float("vae_lr", low=1e-4, high=1e-2, log=True),
-        "cls_lr": trial.suggest_float("cls_lr", low=1e-4, high=1e-2, log=True),
-        "batch_size": trial.suggest_categorical("batch_size", choices=[64, 128]),
-        "dropout": trial.suggest_float("dropout", low=0.1, high=0.5),
-        "vae_hidden_dims": build_hidden_layers(
-            trial,
-            "vae",
-            width_choices=VAE_HIDDEN_DIM_CHOICES,
-            min_layers=1,
-            max_layers=3,
-        ),
-        "cls_hidden_dims": build_hidden_layers(
-            trial,
-            "cls",
-            width_choices=CLS_HIDDEN_DIM_CHOICES,
-            min_layers=1,
-            max_layers=3,
-        ),
-    }
 
 
 def get_guided_vae_search_space(trial: optuna.Trial) -> dict:

@@ -152,8 +152,7 @@ def train_guided_pipeline(
     """Run one Guided-VAE trial and return all validation metrics (sweep) or None.
 
     Used by both the Ray Tune HPO trainable (``sweep_mode=True``) and the
-    final best-params retraining run (``sweep_mode=False``).  Mirrors the
-    ``train_two_stage_pipeline`` contract in the two-stage pipeline.
+    final best-params retraining run (``sweep_mode=False``).
 
     Parameters
     ----------

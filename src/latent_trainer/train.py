@@ -29,7 +29,6 @@ import pytorch_lightning as pl
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
 from latent_trainer.configs.hyperparam_settings import (
-    CLS_HIDDEN_DIM_CHOICES,
     VAE_HIDDEN_DIM_CHOICES,
 )
 from latent_trainer.configs.search_space import (
@@ -40,10 +39,6 @@ from latent_trainer.hyperparameter_search.guided_vae import (
     run_guided_vae_best,
     run_guided_vae_hyperparameter_search,
 )
-from latent_trainer.hyperparameter_search.two_stage import (
-    run_two_stage_best,
-    run_two_stage_hyperparameter_search,
-)
 from latent_trainer.settings import DEFAULT_MLFLOW_URI, LOGGING_FORMAT, SEED
 from latent_trainer.tracking.mlflow_utils import log_best_trial, setup_mlflow
 
@@ -53,8 +48,8 @@ logger = logging.getLogger(__name__)
 @click.command()
 @click.option(
     "--pipeline",
-    type=click.Choice(["two_stage", "guided_vae"]),
-    default="two_stage",
+    type=click.Choice(["guided_vae"]),
+    default="guided_vae",
     show_default=True,
     help="Training pipeline to use.",
 )
@@ -179,44 +174,10 @@ def main(
     )
 
     match pipeline:
-        case "two_stage":
-            _train_two_stage(config=config)
         case "guided_vae":
             _train_guided_vae(config=config)
         case _:
             raise click.BadParameter(f"Unknown pipeline: {pipeline}")
-
-
-def _train_two_stage(config: ExperimentConfig) -> None:
-    """Dispatch between sweep and best for the two-stage pipeline."""
-    if config.sweep:
-        logger.info(f"Starting Ray Tune + Optuna sweep ({config.n_trials} trials)...")
-        study = run_two_stage_hyperparameter_search(config=config)
-        flat_params = study.best_trial.params
-        vae_hidden_dims = reconstruct_hidden_dims(
-            flat_params,
-            prefix="vae",
-            width_choices=VAE_HIDDEN_DIM_CHOICES,
-        )
-        cls_hidden_dims = reconstruct_hidden_dims(
-            flat_params,
-            prefix="cls",
-            width_choices=CLS_HIDDEN_DIM_CHOICES,
-        )
-        log_best_trial(
-            study=study,
-            config=config,
-            additional_params={
-                "decoded_vae_hidden_dims": str(vae_hidden_dims),
-                "decoded_cls_hidden_dims": str(cls_hidden_dims),
-            },
-        )
-        logger.info(f"Sweep complete. Best trial: {study.best_trial.params}")
-        return
-
-    logger.info("Retraining two-stage pipeline with best Optuna params...")
-    acc = run_two_stage_best(config=config)
-    logger.info(f"Best-params run complete. val_acc={acc:.4f}")
 
 
 def _train_guided_vae(config: ExperimentConfig) -> None:
