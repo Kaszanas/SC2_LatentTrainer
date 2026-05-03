@@ -517,6 +517,142 @@ def process_set_chunked_single_pool(
     return set_features, set_labels, skipped, errors
 
 
+def preprocess_dataset_test_only(
+    transform_name: str,
+    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
+    single_json_dataset_path: Path | str,
+    output_directory: Path | str = DATA_DIR,
+    n_workers: int = 8,
+    chunk_size: int = 64,
+    max_inflight_tasks: int | None = None,
+    n_samples: int = 0,
+    seed: int = 42,
+) -> None:
+    """Extract a test-only cached dataset from any SC2EGSet JSON file.
+
+    Pools all available indices (train + val + test splits), optionally
+    subsamples *n_samples* of them, processes every selected replay through
+    the transform, and stores the result exclusively in the ``test_features``
+    / ``test_labels`` fields.  ``train_*`` and ``val_*`` tensors are left
+    empty.
+
+    Use this when you already have a trained model and want to evaluate
+    path-charting on an independent dataset without re-splitting it 80/10/10.
+    """
+    logging.info(
+        "SC2EGSet Dataset Pre-processing (test-only): "
+        f"transform={transform_name}, n_workers={n_workers}, n_samples={n_samples}"
+    )
+
+    datamodule = SC2EGSetDataModuleSingleJSON(
+        json_path=single_json_dataset_path,
+        download=False,
+    )
+    datamodule.prepare_data()
+    datamodule.setup("fit")
+
+    train_dataset = datamodule.train_dataset
+    test_dataset = datamodule.test_dataset
+    val_dataset = datamodule.val_dataset
+
+    all_indices: list[int] = sorted(
+        list(train_dataset.indices)
+        + list(test_dataset.indices)
+        + list(val_dataset.indices)
+    )
+    total = len(all_indices)
+    logging.info(f"  Total available replays: {total}")
+
+    # Shuffle once with the seeded generator so each batch draws new indices
+    # without repeats and without rebuilding a "used" set.
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    perm = torch.randperm(total, generator=generator).tolist()
+    shuffled: list[int] = [all_indices[i] for i in perm]
+
+    # Iterative batched processing: keep pulling batches from the shuffled
+    # list until we have n_samples valid results (or the pool is exhausted).
+    # The initial batch size is 1.5× the target to account for skips; subsequent
+    # batches are sized from the observed yield rate.
+    target = n_samples if n_samples > 0 else total
+    batch_size = min(int(target * 1.5) + 1, total)
+
+    all_features: list[torch.Tensor] = []
+    all_labels: list = []
+    total_skipped = 0
+    total_errors = 0
+    offset = 0
+
+    while len(all_features) < target and offset < total:
+        batch = shuffled[offset : offset + batch_size]
+        offset += len(batch)
+
+        test_dataset.indices = sorted(batch)
+        batch_features, batch_labels, batch_skipped, batch_errors = process_set_chunked_single_pool(
+            dataset_object=test_dataset,
+            executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
+            transform_fn=transform_fn,
+            n_workers=n_workers,
+            chunk_size=chunk_size,
+            max_inflight_tasks=max_inflight_tasks,
+            set_name="test",
+        )
+        all_features.extend(batch_features)
+        all_labels.extend(batch_labels)
+        total_skipped += batch_skipped
+        total_errors += batch_errors
+
+        logging.info(
+            f"  Progress: {len(all_features)}/{target} valid "
+            f"({total_skipped} skipped, {total_errors} errors, {offset}/{total} processed)"
+        )
+
+        if len(all_features) < target and offset < total:
+            remaining_needed = target - len(all_features)
+            yield_rate = len(all_features) / max(offset, 1)
+            batch_size = min(
+                int(remaining_needed / max(yield_rate, 0.01) * 1.2) + 1,
+                total - offset,
+            )
+
+    # Truncate to exactly target if we overshot
+    all_features = all_features[:target]
+    all_labels = all_labels[:target]
+
+    logging.info(
+        f"  Done: {len(all_features)} valid, {total_skipped} skipped, {total_errors} errors."
+    )
+
+    test_features_tensor = torch.stack(all_features)
+    test_labels_tensor = torch.tensor(all_labels, dtype=torch.long)
+    empty_features = torch.empty(0, *test_features_tensor.shape[1:])
+    empty_labels = torch.empty(0, dtype=torch.long)
+
+    file_spec = CachedDatasetFileSpec(
+        train_features=empty_features,
+        train_labels=empty_labels,
+        test_features=test_features_tensor,
+        test_labels=test_labels_tensor,
+        val_features=empty_features,
+        val_labels=empty_labels,
+        transform=transform_name,
+    )
+
+    os.makedirs(os.path.dirname(output_directory), exist_ok=True)
+    n_tag = f"_{len(all_features)}" if n_samples > 0 else ""
+    path_to_save = output_directory / f"cached_dataset_{transform_name}_test{n_tag}.pt"
+    torch.save(asdict(file_spec), path_to_save)
+
+    file_size_mb = os.path.getsize(path_to_save) / (1024 * 1024)
+    logging.info(f"\n{'=' * 60}")
+    logging.info("Test-only pre-processing complete!")
+    logging.info(f"  Transform:     {transform_name}")
+    logging.info(f"  Valid test:    {len(test_features_tensor)}")
+    logging.info(f"  Feature shape: {test_features_tensor.shape}")
+    logging.info(f"  Cache file:    {path_to_save} ({file_size_mb:.1f} MB)")
+    logging.info(f"{'=' * 60}")
+
+
 def _subsample_indices(
     indices: list[int],
     n_target: int,
