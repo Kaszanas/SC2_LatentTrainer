@@ -42,7 +42,7 @@ def run_comparison(
     n_samples:
         Number of samples to analyse. 0 means use all samples in the dataset.
     """
-    # --- Load model and data once ---
+    # Load model and data once:
     print("Loading model and data...")
     guided_vae, X, y = load_model_and_data(
         model_path=model_path,
@@ -52,12 +52,12 @@ def run_comparison(
     labels_tensor = y
     print(f"  Dataset size: {len(X)} samples")
 
-    # --- Encode both players once ---
+    # Encode both players once:
     print("Encoding latent space...")
     latents_p0 = encode_player(vae=guided_vae.model, data=X[:, 0, :])
     latents_p1 = encode_player(vae=guided_vae.model, data=X[:, 1, :])
 
-    # --- Compute shared tensors once ---
+    # Compute shared tensors once:
     win_latents = compute_win_latents(
         labels_tensor=labels_tensor,
         latents_p0=latents_p0,
@@ -70,7 +70,7 @@ def run_comparison(
     win_kde = KernelDensity(kernel="gaussian", bandwidth=0.5).fit(win_np)
     print(f"  Winning latents: {len(win_np)}")
 
-    # --- Filter / sample indices ---
+    # Filter / sample indices:
     all_indices = np.arange(len(labels))
     if n_samples == 0 or n_samples >= len(all_indices):
         sample_indices = all_indices
@@ -85,7 +85,7 @@ def run_comparison(
         f"= {n_evaluated * len(method_specs)} runs"
     )
 
-    # --- Load flow model once if needed ---
+    # Load flow model once if needed:
     flow_model = None
     needs_flow = any(s.requires_flow_checkpoint for s in method_specs)
     if needs_flow:
@@ -104,7 +104,7 @@ def run_comparison(
                 torch.device("cuda" if torch.cuda.is_available() else "cpu")
             )
 
-    # --- Main loop ---
+    # Main loop:
     results: list[PathRunResult] = []
     for run_idx, chosen in enumerate(sample_indices):
         chosen = int(chosen)

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import click
+import pytorch_lightning as pl
 
 from latent_trainer.paths.compare.aggregate import jaccard_between_methods, summarise
 from latent_trainer.paths.compare.cross_dataset import (
@@ -102,6 +104,9 @@ def cmd_compare(
     save_raw: bool,
 ):
     """Aggregate path-charting metrics across N samples and all methods."""
+
+    pl.seed_everything(seed)
+
     output_dir = output_dir or (OUTPUT_DIR / "compare")
     output_dir.mkdir(parents=True, exist_ok=True)
     dataset_path = DATA_DIR / dataset_filename
@@ -332,16 +337,23 @@ def cmd_replot(report_path: Path, output_dir: Path | None) -> None:
 
 
 def _print_summary(stats) -> None:
-    header = f"  {'Method':<24} {'Success':>8}  {'Crossover α':>12}  {'ΔP(win)':>10}  {'AUC':>8}"
+    header = (
+        f"  {'Method':<24} {'Success':>8}  {'Crossover α':>12}  "
+        f"{'P(win) start':>13}  {'P(win) end':>11}  {'ΔP(win)':>10}  {'AUC':>8}"
+    )
     print(header)
-    print("  " + "─" * 66)
+    print("  " + "─" * 92)
     for s in stats:
         ca = (
             f"{s.crossover_alpha_mean:.3f}"
-            if not (s.crossover_alpha_mean != s.crossover_alpha_mean)
+            if not math.isnan(s.crossover_alpha_mean)
             else "—"
         )
+        pw_s = (
+            f"{s.p_win_start_mean:.3f}" if not math.isnan(s.p_win_start_mean) else "—"
+        )
+        pw_e = f"{s.p_win_end_mean:.3f}" if not math.isnan(s.p_win_end_mean) else "—"
         print(
             f"  {s.display_name:<24} {s.success_rate:>7.1%}  {ca:>12}  "
-            f"{s.p_win_gain_mean:>+10.3f}  {s.auc_mean:>8.3f}"
+            f"{pw_s:>13}  {pw_e:>11}  {s.p_win_gain_mean:>+10.3f}  {s.auc_mean:>8.3f}"
         )

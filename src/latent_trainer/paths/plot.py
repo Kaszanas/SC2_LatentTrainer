@@ -1,7 +1,3 @@
-# ---------------------------------------------------------------------------
-# Visualisation
-# ---------------------------------------------------------------------------
-
 import matplotlib
 
 matplotlib.use("Agg")  # non-interactive backend — safe for threads and scripts
@@ -60,7 +56,7 @@ def plot_main_proj(
         ax1.set_xlim(xx[0, 0], xx[-1, 0])
         ax1.set_ylim(yy[0, 0], yy[0, -1])
 
-    # --- improvement path ---
+    # improvement path
     ax1.plot(path_c[:, 0], path_c[:, 1], color="black", linewidth=2, zorder=5)
     if len(path_c) > 2:
         ax1.scatter(
@@ -101,7 +97,8 @@ def plot_main_proj(
         )
 
     ax1.text(
-        0.02, 0.02,
+        0.02,
+        0.02,
         "Blue = loss density  |  Red = win density",
         transform=ax1.transAxes,
         fontsize=7,

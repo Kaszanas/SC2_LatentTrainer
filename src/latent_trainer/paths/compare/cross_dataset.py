@@ -224,11 +224,7 @@ def plot_cross_gain_violin(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
     return out
 
 
-# ---------------------------------------------------------------------------
 # 4. Crossover α — grouped violin
-# ---------------------------------------------------------------------------
-
-
 def plot_cross_crossover_violin(
     cdc: CrossDatasetComparison, *, output_dir: Path
 ) -> Path:

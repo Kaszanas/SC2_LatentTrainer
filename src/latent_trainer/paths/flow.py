@@ -57,7 +57,9 @@ class LitOTFlowMatching(LightningModule):
     def forward(self, z: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.net(z, t)
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(
+        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
         z0, z1 = batch
         batch_size = z0.shape[0]
 
@@ -78,7 +80,9 @@ class LitOTFlowMatching(LightningModule):
         self.log("train_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+    def validation_step(
+        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> None:
         z0, z1 = batch
         batch_size = z0.shape[0]
         t = torch.rand((batch_size, 1), device=self.device)
@@ -191,7 +195,7 @@ class LitOTFlowMatching(LightningModule):
             grad = z_g.grad.detach()
             grad_unit = grad / (grad.norm(dim=-1, keepdim=True) + 1e-8)
 
-            z = (z.detach() + dt * (v + guidance_scale * grad_unit))
+            z = z.detach() + dt * (v + guidance_scale * grad_unit)
             trajectory.append(z.detach().cpu().numpy().squeeze())
 
         return np.array(trajectory)
