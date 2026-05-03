@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from latent_trainer.features.data_utils import load_and_normalize
+from latent_trainer.features.type import CachedDatasetFileSpec
 from latent_trainer.features.rich_transform import (
     META_FEATURE_NAMES,
     SORTED_PLAYERSTATS_KEYS,
@@ -62,9 +62,17 @@ def load_model_and_data(
     vae_model = vae_model.to(device)
     print(f"  Model device: {device}")
 
-    data = load_and_normalize(cached_dataset_filepath=cached_dataset_filepath)
-    test_X = data.test_X.to(device)
-    test_y = data.test_y.to(device)
+    cached: dict[str, torch.Tensor] = torch.load(
+        str(cached_dataset_filepath), weights_only=True
+    )
+    spec = CachedDatasetFileSpec(**cached)
+
+    mean = vae_model.mean.cpu()
+    std = vae_model.std.cpu()
+    shape = spec.test_features.shape
+    test_flat = spec.test_features.float().reshape(-1, shape[-1])
+    test_X = ((test_flat - mean) / std).reshape(shape).to(device)
+    test_y = spec.test_labels.float().to(device)
     print(f"  Data device: X={test_X.device}, y={test_y.device}")
 
     return vae_model, test_X, test_y
