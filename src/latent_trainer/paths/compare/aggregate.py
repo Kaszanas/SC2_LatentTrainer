@@ -21,9 +21,11 @@ class MethodStats:
     n_runs: int
     n_success: int
     success_rate: float
+
     # Crossover (over successful runs only)
     crossover_alpha_mean: float
     crossover_alpha_sd: float
+
     # P(win) metrics
     p_win_gain_mean: float
     p_win_gain_sd: float
@@ -33,11 +35,19 @@ class MethodStats:
     auc_sd: float
     monotonicity_mean: float
     monotonicity_sd: float
+
+    # P(win) absolute values at path start and end
+    p_win_start_mean: float
+    p_win_start_sd: float
+    p_win_end_mean: float
+    p_win_end_sd: float
+
     # Geometry (nearest-win; centroid omitted as unreliable for non-convex distributions)
     dist_nearest_win_end_mean: float
     dist_nearest_win_end_sd: float
     kde_density_shift_mean: float  # mean(density_end - density_start)
     kde_density_shift_sd: float
+
     # Cost
     wall_time_mean_s: float
     wall_time_sd_s: float
@@ -85,6 +95,12 @@ def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
         monos = [r.monotonicity for r in good]
         mono_mean, mono_sd = _mean_sd(monos)
 
+        starts_pw = [r.p_win_start for r in good]
+        start_pw_mean, start_pw_sd = _mean_sd(starts_pw)
+
+        ends_pw = [r.p_win_end for r in good]
+        end_pw_mean, end_pw_sd = _mean_sd(ends_pw)
+
         dists = [r.dist_to_nearest_win_end for r in good]
         dist_mean, dist_sd = _mean_sd(dists)
 
@@ -103,6 +119,10 @@ def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
                 success_rate=success_rate,
                 crossover_alpha_mean=ca_mean,
                 crossover_alpha_sd=ca_sd,
+                p_win_start_mean=start_pw_mean,
+                p_win_start_sd=start_pw_sd,
+                p_win_end_mean=end_pw_mean,
+                p_win_end_sd=end_pw_sd,
                 p_win_gain_mean=gain_mean,
                 p_win_gain_sd=gain_sd,
                 p_win_max_mean=max_mean,
@@ -125,9 +145,9 @@ def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
 
 def jaccard_between_methods(
     report: ComparisonReport,
-    signal: Literal["raw", "mv", "weighted"] = "raw",
+    signal: Literal["raw", "mv", "weighted"] = "weighted",
 ) -> pd.DataFrame:
-    """Compute a methods × methods Jaccard similarity matrix for top-k features."""
+    """Compute a methods x methods Jaccard similarity matrix for top-k features."""
     method_names = [s.name for s in report.methods]
     method_display = {s.name: s.display_name for s in report.methods}
 
