@@ -28,6 +28,11 @@ def _build_feature_names() -> list[str]:
 FEATURE_NAMES: list[str] = _build_feature_names()
 
 
+def get_supervised_dim(vae: LitGuidedVAE) -> int:
+    """Number of supervised latent dimensions in the trained model."""
+    return vae.model.supervised_dim
+
+
 def nearest_winning_target(sample_z, win_latents, k=5) -> torch.Tensor:
     dists = torch.cdist(sample_z.unsqueeze(0), win_latents.unsqueeze(0)).squeeze(0)
     _, indices = dists.topk(k, largest=False)

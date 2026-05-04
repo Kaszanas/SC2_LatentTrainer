@@ -23,6 +23,7 @@ from latent_trainer.paths.compare.results import MethodSpec, PathRunResult
 from latent_trainer.paths.data import (
     FEATURE_NAMES,
     PathContext,
+    get_supervised_dim,
     nearest_winning_target,
     opponent_aware_logit,
     opponent_aware_score,
@@ -138,35 +139,43 @@ def _run_method_inner(
     win_np = win_latents.detach().cpu().numpy()
     all_np = all_latents.detach().cpu().numpy()
 
+    # Partition latent space: strategies operate only on supervised dims;
+    # free dims are pinned to the starting value and reattached after.
+    sup_dim = get_supervised_dim(ctx.guided_vae)
+    z_free = z_start_np[sup_dim:]
+
     t0 = time.perf_counter()
 
     match spec.strategy:
         case "linear":
             k_opp = int(spec.params.get("k_opponents", 50))
+            # Opponent filtering in supervised subspace — free dims carry style/race
+            # noise that is irrelevant to outcome-driven similarity matching.
             opp_dists = torch.cdist(
-                opponent_z.unsqueeze(0), loss_latents
+                opponent_z[:sup_dim].unsqueeze(0),
+                loss_latents[:, :sup_dim],
             ).squeeze(0)
             opp_indices = opp_dists.topk(k_opp, largest=False).indices
-            filtered_wins = win_latents[opp_indices]
+            filtered_wins_sup = win_latents[opp_indices, :sup_dim]
             if spec.params.get("method") == "nearest":
                 k_nn = int(spec.params.get("k_neighbours", 5))
                 target_z = (
-                    nearest_winning_target(ctx.sample_z, filtered_wins, k=k_nn)
+                    nearest_winning_target(ctx.sample_z[:sup_dim], filtered_wins_sup, k=k_nn)
                     .detach().cpu().numpy()
                 )
             else:
-                target_z = filtered_wins.mean(dim=0).detach().cpu().numpy()
+                target_z = filtered_wins_sup.mean(dim=0).detach().cpu().numpy()
             path_z_np = path_linear(
-                z_start=z_start_np, z_target=target_z, n_waypoints=n_steps
+                z_start=z_start_np[:sup_dim], z_target=target_z, n_waypoints=n_steps
             )
 
         case "gradient_ascent":
             p = spec.params
             path_z_np = path_gradient_ascent(
-                z_start=z_start_np,
+                z_start=z_start_np[:sup_dim],
                 score_fn=score_fn,
                 logit_fn=logit_fn,
-                Z_all=win_np,
+                Z_all=win_np[:, :sup_dim],
                 steps=int(p.get("steps", 1000)),
                 lr=float(p.get("lr", 0.005)),
                 momentum=float(p.get("momentum", 0.5)),
@@ -179,22 +188,22 @@ def _run_method_inner(
         case "optimal_transport":
             p = spec.params
             path_z_np = path_optimal_transport(
-                z_start=z_start_np,
-                Z_win=win_np,
+                z_start=z_start_np[:sup_dim],
+                Z_win=win_np[:, :sup_dim],
                 reg=float(p.get("reg", 0.01)),
                 n_waypoints=n_steps,
                 step_size=float(p.get("step_size", 0.1)),
-                opponent_z=opponent_z.detach().cpu().numpy(),
-                Z_loss=loss_latents.detach().cpu().numpy(),
+                opponent_z=opponent_z.detach().cpu().numpy()[:sup_dim],
+                Z_loss=loss_latents.detach().cpu().numpy()[:, :sup_dim],
                 k_opponents=int(p.get("k_opponents", 50)),
             )
 
         case "geodesic":
             p = spec.params
             path_z_np = path_geodesic(
-                z_start=z_start_np,
-                Z_win=win_np,
-                Z_all=all_np,
+                z_start=z_start_np[:sup_dim],
+                Z_win=win_np[:, :sup_dim],
+                Z_all=all_np[:, :sup_dim],
                 k=int(p.get("k", 12)),
                 n_waypoints=n_steps,
             )
@@ -207,20 +216,26 @@ def _run_method_inner(
             guidance_scale = float(spec.params.get("guidance_scale", 0.0))
             if guidance_scale > 0.0:
                 path_z_np = flow_model.predict_path_guided(
-                    z_start=z_start_np,
+                    z_start=z_start_np[:sup_dim],
                     score_fn=score_fn,
                     guidance_scale=guidance_scale,
                     steps=n_steps - 1,
                 )
             else:
                 path_z_np = path_neural_flow(
-                    z_start=z_start_np, flow_model=flow_model, n_waypoints=n_steps
+                    z_start=z_start_np[:sup_dim], flow_model=flow_model, n_waypoints=n_steps
                 )
 
         case _:
             raise ValueError(f"Unknown strategy: {spec.strategy!r}")
 
     wall_time_s = time.perf_counter() - t0
+
+    # Reattach the fixed free dims so downstream decoding and scoring receive
+    # full-dim latent vectors as the model expects.
+    path_z_np = np.concatenate(
+        [path_z_np, np.tile(z_free, (len(path_z_np), 1))], axis=1
+    )
 
     # Ensure path has the expected number of waypoints
     path_z_np = _ensure_waypoints(path_z_np, n_steps)
@@ -248,9 +263,10 @@ def _run_method_inner(
     knn_start = float(np.sort(dists_start)[:_KNN_K].mean())
     knn_end = float(np.sort(dists_end)[:_KNN_K].mean())
 
-    # KDE density at start and end
-    kde_start = float(win_kde.score_samples(z_start_np.reshape(1, -1))[0])
-    kde_end = float(win_kde.score_samples(path_z_np[-1].reshape(1, -1))[0])
+    # KDE density at start and end — evaluated in supervised subspace only,
+    # matching how win_kde was fitted in the orchestrator.
+    kde_start = float(win_kde.score_samples(z_start_np[:sup_dim].reshape(1, -1))[0])
+    kde_end = float(win_kde.score_samples(path_z_np[-1, :sup_dim].reshape(1, -1))[0])
 
     # Feedback (lightweight — no PNG plots)
     feedback = compute_feedback(

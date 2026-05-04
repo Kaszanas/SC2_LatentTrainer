@@ -728,7 +728,10 @@ def plot_cond_success_rate_bar(
 
 
 def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Line plot of the mean latent-vector norm ‖z(α)‖ along the path, with ±1 SD.
+    """Line plot of the mean latent-vector norm ‖z(α)‖ along the path for all methods.
+
+    SD bands are omitted here to keep the combined view readable — see
+    plot_z_norm_band_per_method for per-method ±1 SD detail.
 
     Interpretation: the dashed reference line marks the mean norm of the starting
     latents (real data).  A method that keeps its curve near the reference line stays
@@ -777,15 +780,15 @@ def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
         y="‖z(α)‖",
         hue="Method",
         hue_order=[m for m in _ordered_methods(report) if m in df["Method"].values],
-        errorbar="sd",
+        errorbar=None,
         palette=palette,
         linewidth=1.8,
         ax=ax,
     )
     ax.set_xlim(0, 1)
-    ax.legend(fontsize=8, loc="upper right")
+    ax.legend(fontsize=8, loc="upper left")
     ax.set_title(
-        "Latent norm along path — mean ± 1 SD\n(excursion above reference line = off-manifold)"
+        "Latent norm along path — mean across samples\n(excursion above reference line = off-manifold)"
     )
     fig.tight_layout()
 
@@ -793,6 +796,80 @@ def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
     fig.savefig(out, dpi=_DPI)
     plt.close(fig)
     return out
+
+
+def plot_z_norm_band_per_method(
+    report: ComparisonReport, *, output_dir: Path
+) -> list[Path]:
+    """Per-method line plots of latent-vector norm ‖z(α)‖ with ±1 SD band along the path.
+
+    Interpretation: the shaded band shows run-to-run variability for this method in
+    isolation.  A narrow band close to the reference line (mean ‖z_start‖ of real data)
+    indicates the method stays on the manifold consistently.  A wide band or one that
+    rises steeply signals that some runs produce off-manifold latents — the SD reveals
+    which methods are erratic even when their mean looks well-behaved.
+    """
+    names = _name_map(report)
+    palette = _build_palette(report)
+    grid = np.linspace(0.0, 1.0, _GRID_POINTS)
+    name_to_internal = {v: k for k, v in names.items()}
+
+    rows = []
+    ref_norms: list[float] = []
+
+    for r in report.results:
+        if r.error is not None or r.path_z is None or len(r.path_z) < 2:
+            continue
+        norms = np.linalg.norm(r.path_z, axis=1)
+        interp = np.interp(grid, r.alphas, norms)
+        display = names.get(r.method_name, r.method_name)
+        ref_norms.append(float(norms[0]))
+        for alpha_val, norm_val in zip(grid, interp):
+            rows.append({"α": alpha_val, "‖z(α)‖": norm_val, "Method": display})
+
+    if not rows:
+        return []
+
+    df = pd.DataFrame(rows)
+    ref_line = float(np.mean(ref_norms)) if ref_norms else None
+    method_order = [m for m in _ordered_methods(report) if m in df["Method"].values]
+
+    saved: list[Path] = []
+    for display_name in method_order:
+        method_df = df[df["Method"] == display_name]
+        colour = palette.get(display_name, _PALETTE_FALLBACK[0])
+        internal = name_to_internal.get(display_name, display_name)
+
+        fig, ax = plt.subplots(figsize=(9, 5))
+        if ref_line is not None:
+            ax.axhline(
+                ref_line,
+                color="k",
+                linestyle="--",
+                linewidth=0.8,
+                alpha=0.5,
+                label=f"Mean ‖z_start‖ = {ref_line:.2f} (real data)",
+            )
+        sns.lineplot(
+            data=method_df,
+            x="α",
+            y="‖z(α)‖",
+            errorbar="sd",
+            color=colour,
+            linewidth=1.8,
+            ax=ax,
+        )
+        ax.set_xlim(0, 1)
+        ax.legend(fontsize=8, loc="upper right")
+        ax.set_title(f"Latent norm along path — {display_name} (mean ± 1 SD)")
+        fig.tight_layout()
+
+        out = output_dir / f"compare_z_norm_band_{internal}.png"
+        fig.savefig(out, dpi=_DPI)
+        plt.close(fig)
+        saved.append(out)
+
+    return saved
 
 
 def render_all(
@@ -813,7 +890,8 @@ def render_all(
             lambda: plot_cond_success_rate_bar(stats, output_dir=output_dir),
             "cond. success rate",
         ),
-        (lambda: plot_z_norm_band(report, output_dir=output_dir), "latent norm band"),
+        (lambda: plot_z_norm_band(report, output_dir=output_dir), "latent norm band (combined)"),
+        (lambda: plot_z_norm_band_per_method(report, output_dir=output_dir), "latent norm band (per method)"),
         (lambda: plot_pwin_gain_violin(report, output_dir=output_dir), "P(win) gain"),
         (
             lambda: plot_nearest_win_distance(report, output_dir=output_dir),

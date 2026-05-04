@@ -21,6 +21,7 @@ from latent_trainer.paths.data import (
     compute_loss_latents,
     compute_win_latents,
     encode_player,
+    get_supervised_dim,
     load_model_and_data,
 )
 
@@ -71,9 +72,12 @@ def run_comparison(
     )
     all_latents = torch.cat([latents_p0, latents_p1], dim=0)
 
-    # Fit KDE on winning latents once (used for geometry metrics in all runs)
+    # Fit KDE on winning latents (supervised dims only) once — used for geometry metrics.
+    # Using supervised dims ensures the density metric reflects proximity to the winning
+    # cluster in the outcome-relevant subspace, not the class-agnostic free dims.
+    sup_dim = get_supervised_dim(guided_vae)
     win_np = win_latents.detach().cpu().numpy()
-    win_kde = KernelDensity(kernel="gaussian", bandwidth=0.5).fit(win_np)
+    win_kde = KernelDensity(kernel="gaussian", bandwidth=0.5).fit(win_np[:, :sup_dim])
     print(f"  Winning latents: {len(win_np)}")
 
     # Filter / sample indices:
