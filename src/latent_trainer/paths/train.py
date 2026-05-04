@@ -32,6 +32,7 @@ from latent_trainer.paths.data import (
     compute_loss_latents,
     compute_win_latents,
     encode_player,
+    get_supervised_dim,
 )
 from latent_trainer.paths.flow import LitOTFlowMatching
 from latent_trainer.settings import (
@@ -54,7 +55,7 @@ logger = logging.getLogger(__name__)
 @click.command()
 @click.option(
     "--dataset_filename",
-    default="cached_dataset_rich.pt",
+    default="cached_dataset_rich_sc2egset.pt",
     show_default=True,
     help="Filename of the cached dataset placed in DATA_DIR.",
 )
@@ -156,9 +157,15 @@ def main(
     logger.info("Encoding validation split...")
     z_loss_val, z_win_val = _make_pairs(data.val_X, data.val_y)
 
-    latent_dim = z_loss_train.shape[1]
+    sup_dim = get_supervised_dim(guided_vae)
+    z_loss_train = z_loss_train[:, :sup_dim]
+    z_win_train = z_win_train[:, :sup_dim]
+    z_loss_val = z_loss_val[:, :sup_dim]
+    z_win_val = z_win_val[:, :sup_dim]
+    latent_dim = sup_dim
     logger.info(
-        f"latent_dim={latent_dim}  train_pairs={len(z_loss_train)}  val_pairs={len(z_loss_val)}"
+        f"supervised_dim={sup_dim}  full_latent_dim={guided_vae.model.n_vae_dis}  "
+        f"train_pairs={len(z_loss_train)}  val_pairs={len(z_loss_val)}"
     )
 
     train_loader = DataLoader(
