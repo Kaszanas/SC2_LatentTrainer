@@ -489,15 +489,17 @@ def plot_pwin_start_end(report: ComparisonReport, *, output_dir: Path) -> Path:
 
 
 def plot_pwin_distribution(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Per-method KDE density plots of P(win) at path start and path end.
+    """Per-method KDE density plots of P(win) at path start and path end, plus a
+    combined Start reference panel.
 
-    Interpretation: the Start density should be concentrated below 0.5 for all
-    methods (confirming the inputs are genuinely losing players).  A good method
-    shifts the End density rightward so that most of its mass lies above the dashed
-    0.5 line.  Bimodal End distributions suggest the method works well for some
-    samples and fails for others.  Comparing the shape and overlap of the two
-    densities reveals whether improvement is consistent or driven by a minority of
-    easy cases.
+    Interpretation: the first panel (Start reference) overlays all methods' starting
+    P(win) distributions; they should be nearly identical and concentrated below 0.5,
+    confirming that all methods begin from the same population of losing players.
+    Each subsequent panel shows one method's Start and End densities overlaid — a good
+    method shifts the End density rightward so that most of its mass lies above the
+    dashed 0.5 line.  Bimodal End distributions suggest the method works well for some
+    samples and fails for others.  Comparing the End panels across methods is valid
+    only when their Start panels look similar (verified by the reference panel).
     """
     names = _name_map(report)
 
@@ -513,32 +515,48 @@ def plot_pwin_distribution(report: ComparisonReport, *, output_dir: Path) -> Pat
 
     df = pd.DataFrame(rows)
     method_order = [m for m in _ordered_methods(report) if m in df["Method"].values]
-    n_methods = len(method_order)
-    ncols = min(3, n_methods)
-    nrows = math.ceil(n_methods / ncols) if n_methods else 1
+    start_df = df[df["Phase"] == "Start"]
 
+    nrows, ncols = 2, 3
     fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 5.5, nrows * 4.0), squeeze=False)
     for ax in axes.flat:
         ax.set_visible(False)
 
+    # Panel 0: Start reference — single pooled KDE across all methods.
+    ref_ax = axes[0][0]
+    ref_ax.set_visible(True)
+    sns.kdeplot(
+        data=start_df, x="P(win)",
+        fill=True, alpha=0.4, common_norm=False,
+        clip=(0, 1),
+        color="#90CAF9", linewidth=1.5, ax=ref_ax,
+    )
+    ref_ax.axvline(0.5, color="k", linestyle="--", linewidth=0.8, alpha=0.6)
+    ref_ax.set_xlim(0, 1)
+    ref_ax.set_title("Start (reference — all methods pooled)", fontsize=11)
+    ref_ax.set_xlabel("")
+    ref_ax.set_ylabel("Density")
+
+    # Panels 1..n_methods: per-method Start + End.
     for mi, method_name in enumerate(method_order):
-        ax = axes[mi // ncols][mi % ncols]
+        panel_idx = mi + 1
+        ax = axes[panel_idx // ncols][panel_idx % ncols]
         ax.set_visible(True)
         method_df = df[df["Method"] == method_name]
         sns.kdeplot(
             data=method_df, x="P(win)", hue="Phase",
             fill=True, alpha=0.4, common_norm=False,
-            clip=(0, 1),  # prevent kernel from spilling past valid probability range
+            clip=(0, 1),
             palette={"Start": "#90CAF9", "End": "#1565C0"},
             hue_order=["Start", "End"], linewidth=1.5, ax=ax,
         )
         ax.axvline(0.5, color="k", linestyle="--", linewidth=0.8, alpha=0.6)
         ax.set_xlim(0, 1)
         ax.set_title(method_name, fontsize=11)
-        ax.set_xlabel("P(win)" if mi // ncols == nrows - 1 else "")
-        ax.set_ylabel("Density" if mi % ncols == 0 else "")
-        if mi != 0:
-            ax.get_legend().remove() if ax.get_legend() else None
+        ax.set_xlabel("P(win)" if panel_idx // ncols == nrows - 1 else "")
+        ax.set_ylabel("Density" if panel_idx % ncols == 0 else "")
+        if ax.get_legend():
+            ax.get_legend().remove()
 
     fig.suptitle("P(win) distribution: start vs. end of path", y=1.01, fontsize=13)
     fig.tight_layout()
