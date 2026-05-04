@@ -75,6 +75,14 @@ def _name_map(report: ComparisonReport) -> dict[str, str]:
 
 
 def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path:
+    """Plot mean P(win) trajectory along the path, with ±1 SD band, for each method.
+
+    Interpretation: a method is effective if its curve rises steeply and crosses
+    the 0.5 threshold (dashed line) early in the path (low α).  Wide bands indicate
+    high variance across samples — the method may be unstable or sensitive to the
+    starting latent.  Methods whose curves never reach 0.5 fail to produce winning
+    paths on average.
+    """
     names = _name_map(report)
     palette = _build_palette(report)
     grid = np.linspace(0.0, 1.0, _GRID_POINTS)
@@ -120,6 +128,15 @@ def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path
 
 
 def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
+    """Violin plot of the crossover α — the path step where P(win) first reaches 0.5.
+
+    Interpretation: a lower crossover α means the method reaches a winning state
+    earlier in the path, requiring less movement in latent space.  A narrow violin
+    concentrated near 0 is ideal; a wide or high violin indicates that success, when
+    it occurs, requires most or all of the path.  The fraction below each method name
+    shows how many runs succeeded out of all attempted (failed runs are excluded from
+    the violin but count against the success rate).
+    """
     names = _name_map(report)
     palette = _build_palette(report)
 
@@ -182,6 +199,14 @@ def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path
 
 
 def plot_success_rate_bar(stats: Sequence[MethodStats], *, output_dir: Path) -> Path:
+    """Bar chart of the fraction of runs where P(win) ≥ 0.5 was reached at any point.
+
+    Interpretation: this is the headline reliability metric — the percentage of losing
+    players for whom the method found at least one waypoint with a majority win
+    probability.  Higher is better.  The count above each bar (n_success/n_runs) shows
+    the raw numbers.  The dashed line at 50 % provides a reference; methods below it
+    fail more often than they succeed.
+    """
     if not stats:
         return output_dir / "compare_success_rate.png"
 
@@ -232,6 +257,15 @@ def plot_success_rate_bar(stats: Sequence[MethodStats], *, output_dir: Path) -> 
 
 
 def plot_pwin_gain_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
+    """Violin plot of ΔP(win) = P(win) at path end minus P(win) at path start.
+
+    Interpretation: positive gain means the method moved the player toward a winning
+    state; negative gain means it moved them away.  All runs (including those that
+    never crossed 0.5) are included, so this captures the full distribution of
+    improvement.  A violin centred well above zero with a small spread indicates a
+    consistent, reliable improvement; one straddling zero suggests the method is no
+    better than chance for many samples.
+    """
     names = _name_map(report)
     palette = _build_palette(report)
 
@@ -272,6 +306,16 @@ def plot_pwin_gain_violin(report: ComparisonReport, *, output_dir: Path) -> Path
 
 
 def plot_nearest_win_distance(report: ComparisonReport, *, output_dir: Path) -> Path:
+    """Grouped bar chart of the Euclidean distance to the nearest winning latent at
+    path start and path end, averaged across samples (±1 SD error bars).
+
+    Interpretation: a method that genuinely moves the player closer to real winning
+    behaviour should show a lower End bar than Start bar.  This metric is
+    topology-agnostic — it does not depend on the classifier — so it provides an
+    independent check that the path ends in a region actually occupied by winning
+    players in the training data, not just a region the classifier happens to score
+    highly.
+    """
     names = _name_map(report)
 
     rows = []
@@ -326,6 +370,14 @@ def plot_nearest_win_distance(report: ComparisonReport, *, output_dir: Path) -> 
 
 
 def plot_pwin_start_end(report: ComparisonReport, *, output_dir: Path) -> Path:
+    """Grouped bar chart of mean P(win) at the start and end of each method's path.
+
+    Interpretation: the Start bars should be similar across methods (they all begin
+    from the same losing player latent) and should sit well below 0.5.  A large End
+    bar — ideally above the dashed 0.5 line — indicates the method reliably guides
+    the path into winning territory on average.  A small gap between Start and End
+    means the method barely moves the win probability despite traversing latent space.
+    """
     names = _name_map(report)
 
     rows = []
@@ -369,6 +421,16 @@ def plot_pwin_start_end(report: ComparisonReport, *, output_dir: Path) -> Path:
 
 
 def plot_pwin_distribution(report: ComparisonReport, *, output_dir: Path) -> Path:
+    """Per-method KDE density plots of P(win) at path start and path end.
+
+    Interpretation: the Start density should be concentrated below 0.5 for all
+    methods (confirming the inputs are genuinely losing players).  A good method
+    shifts the End density rightward so that most of its mass lies above the dashed
+    0.5 line.  Bimodal End distributions suggest the method works well for some
+    samples and fails for others.  Comparing the shape and overlap of the two
+    densities reveals whether improvement is consistent or driven by a minority of
+    easy cases.
+    """
     names = _name_map(report)
 
     rows = []
@@ -420,6 +482,16 @@ def plot_pwin_distribution(report: ComparisonReport, *, output_dir: Path) -> Pat
 
 
 def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Path:
+    """Violin plot of the log-density shift: log p(z_end) minus log p(z_start),
+    where p is a KDE fitted to winning player latents.
+
+    Interpretation: a positive shift means the path endpoint sits in a denser region
+    of the winning distribution than the start — i.e., the method moves the player
+    toward a more typical winning behavioural profile.  A violin firmly above zero
+    indicates the method consistently finds plausible winning regions, not just
+    classifier-high-but-sparse corners of latent space.  Values near or below zero
+    suggest the path wanders off the winning manifold even if P(win) increases.
+    """
     names = _name_map(report)
     palette = _build_palette(report)
 
@@ -466,6 +538,16 @@ def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Pat
 def plot_feature_jaccard_heatmap(
     report: ComparisonReport, *, signal: str = "raw", output_dir: Path
 ) -> Path:
+    """Heatmap of pairwise Jaccard similarity between the top-k feedback features
+    recommended by each method pair, for a given feedback signal (e.g. raw, mvd).
+
+    Interpretation: a cell value of 1.0 means two methods highlight identical
+    features; 0.0 means completely disjoint recommendations.  High similarity between
+    methods implies the feature-level advice is robust and consistent regardless of
+    the path algorithm.  Low similarity reveals that different methods prioritise
+    fundamentally different aspects of play, suggesting the choice of method matters
+    for the advice given to a player, not just for the win-probability trajectory.
+    """
     df = jaccard_between_methods(report, signal=signal)  # type: ignore[arg-type]
     if df.empty:
         return output_dir / f"compare_jaccard_{signal}.png"
@@ -498,6 +580,19 @@ def plot_feature_jaccard_heatmap(
 def plot_cond_success_rate_bar(
     stats: Sequence[MethodStats], *, output_dir: Path
 ) -> Path:
+    """Grouped bar chart comparing two success-rate tiers per method.
+
+    Tiers:
+      - "Any waypoint ≥ 0.50": fraction of runs that crossed the basic win threshold.
+      - "Any waypoint ≥ threshold (+1σ)": stricter threshold (mean + 1 SD of winning
+        P(win)), applied only to samples that already cleared 0.50 (eligible runs).
+
+    Interpretation: the first tier is the headline success rate; the second tier
+    reveals how many successful runs achieved a convincingly high P(win) rather than
+    merely grazing 0.50.  A large gap between the two bars suggests the method often
+    reaches marginal wins only.  A method with both bars high produces robust,
+    high-confidence improvement paths.
+    """
     if not stats:
         return output_dir / "compare_cond_success_rate.png"
 
@@ -547,6 +642,16 @@ def plot_cond_success_rate_bar(
 
 
 def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
+    """Line plot of the mean latent-vector norm ‖z(α)‖ along the path, with ±1 SD.
+
+    Interpretation: the dashed reference line marks the mean norm of the starting
+    latents (real data).  A method that keeps its curve near the reference line stays
+    on the data manifold throughout the path.  A curve that rises well above the
+    reference produces latents with unusually large magnitudes — likely off-manifold
+    points that the decoder or classifier has not been trained on, making the
+    resulting feedback unreliable.  Methods that stay flat or slowly drift are
+    preferred over those that diverge steeply.
+    """
     names = _name_map(report)
     palette = _build_palette(report)
     grid = np.linspace(0.0, 1.0, _GRID_POINTS)
