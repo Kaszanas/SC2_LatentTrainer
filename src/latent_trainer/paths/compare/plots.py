@@ -75,13 +75,15 @@ def _name_map(report: ComparisonReport) -> dict[str, str]:
 
 
 def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Plot mean P(win) trajectory along the path, with ±1 SD band, for each method.
+    """Plot mean P(win) trajectory along the path for all methods on one axis.
+
+    SD bands are omitted here to keep the combined view readable — see
+    plot_pwin_curves_band_per_method for per-method ±1 SD detail.
 
     Interpretation: a method is effective if its curve rises steeply and crosses
-    the 0.5 threshold (dashed line) early in the path (low α).  Wide bands indicate
-    high variance across samples — the method may be unstable or sensitive to the
-    starting latent.  Methods whose curves never reach 0.5 fail to produce winning
-    paths on average.
+    the 0.5 threshold (dashed line) early in the path (low α).  Showing means
+    only keeps the combined view readable when several methods are compared.
+    Methods whose mean never reaches 0.5 fail to produce winning paths on average.
     """
     names = _name_map(report)
     palette = _build_palette(report)
@@ -110,7 +112,7 @@ def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path
         y="P(win)",
         hue="Method",
         hue_order=[m for m in _ordered_methods(report) if m in df["Method"].values],
-        errorbar="sd",
+        errorbar=None,
         palette=palette,
         linewidth=1.8,
         ax=ax,
@@ -118,13 +120,79 @@ def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path
     ax.set_xlim(0, 1)
     ax.set_ylim(-0.05, 1.05)
     ax.legend(fontsize=8, loc="upper left")
-    ax.set_title("P(win) along path — mean ± 1 SD across samples")
+    ax.set_title("P(win) along path — mean across samples")
     fig.tight_layout()
 
     out = output_dir / "compare_pwin_curves.png"
     fig.savefig(out, dpi=_DPI)
     plt.close(fig)
     return out
+
+
+def plot_pwin_curves_band_per_method(
+    report: ComparisonReport, *, output_dir: Path
+) -> list[Path]:
+    """Per-method plots of mean P(win) with ±1 SD band along the path.
+
+    Interpretation: the shaded band shows run-to-run variability for this method
+    in isolation.  A narrow band indicates the method behaves consistently
+    regardless of the starting player.  A wide band — especially one that spans
+    both sides of 0.5 — signals that performance is highly sample-dependent.
+    Compare the crossover point (where the mean first exceeds 0.5) with the band
+    width: if the lower edge of the band dips below 0.5 at the crossover, many
+    individual runs may still fail even though the mean succeeds.
+    """
+    names = _name_map(report)
+    palette = _build_palette(report)
+    grid = np.linspace(0.0, 1.0, _GRID_POINTS)
+    name_to_internal = {v: k for k, v in names.items()}
+
+    rows = []
+    for r in report.results:
+        if r.error is not None or len(r.p_win_curve) < 2:
+            continue
+        interp = np.interp(grid, r.alphas, r.p_win_curve)
+        display = names.get(r.method_name, r.method_name)
+        for alpha_val, p_val in zip(grid, interp):
+            rows.append({"α": alpha_val, "P(win)": p_val, "Method": display})
+
+    if not rows:
+        return []
+
+    df = pd.DataFrame(rows)
+    method_order = [m for m in _ordered_methods(report) if m in df["Method"].values]
+
+    saved: list[Path] = []
+    for display_name in method_order:
+        method_df = df[df["Method"] == display_name]
+        colour = palette.get(display_name, _PALETTE_FALLBACK[0])
+        internal = name_to_internal.get(display_name, display_name)
+
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.axhline(
+            0.5, color="k", linestyle="--", linewidth=0.8, alpha=0.5, label="P(win)=0.5"
+        )
+        sns.lineplot(
+            data=method_df,
+            x="α",
+            y="P(win)",
+            errorbar="sd",
+            color=colour,
+            linewidth=1.8,
+            ax=ax,
+        )
+        ax.set_xlim(0, 1)
+        ax.set_ylim(-0.05, 1.05)
+        ax.legend(fontsize=8, loc="upper left")
+        ax.set_title(f"P(win) along path — {display_name} (mean ± 1 SD)")
+        fig.tight_layout()
+
+        out = output_dir / f"compare_pwin_curves_{internal}.png"
+        fig.savefig(out, dpi=_DPI)
+        plt.close(fig)
+        saved.append(out)
+
+    return saved
 
 
 def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
@@ -716,7 +784,8 @@ def render_all(
     paths = []
     print("  Saving comparison plots...")
     for fn, label in [
-        (lambda: plot_pwin_curves_band(report, output_dir=output_dir), "P(win) curves"),
+        (lambda: plot_pwin_curves_band(report, output_dir=output_dir), "P(win) curves (combined)"),
+        (lambda: plot_pwin_curves_band_per_method(report, output_dir=output_dir), "P(win) curves (per method)"),
         (
             lambda: plot_crossover_violin(report, output_dir=output_dir),
             "crossover violin",
@@ -749,9 +818,14 @@ def render_all(
         ),
     ]:
         try:
-            p = fn()
-            paths.append(p)
-            print(f"    {label}: {p.name}")
+            result = fn()
+            if isinstance(result, list):
+                paths.extend(result)
+                for p in result:
+                    print(f"    {label}: {p.name}")
+            else:
+                paths.append(result)
+                print(f"    {label}: {result.name}")
         except Exception as exc:
             print(f"    WARNING: {label} failed — {exc}")
     return paths
