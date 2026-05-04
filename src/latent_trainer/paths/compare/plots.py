@@ -158,25 +158,21 @@ def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path
         ax=ax,
     )
 
-    for i, s in enumerate(report.methods):
-        n_ok = success_counts[s.name]
-        n_tot = total_counts[s.name]
-        ax.text(
-            i,
-            1.03,
-            f"{n_ok}/{n_tot}\n({100 * n_ok / max(n_tot, 1):.0f}%)",
-            ha="center",
-            va="bottom",
-            fontsize=7,
-            transform=ax.get_xaxis_transform(),
+    tick_labels = []
+    for display_name in method_order:
+        internal = next(
+            (s.name for s in report.methods if names.get(s.name, s.name) == display_name),
+            display_name,
         )
+        n_ok = success_counts.get(internal, 0)
+        n_tot = total_counts.get(internal, 0)
+        pct = 100 * n_ok // max(n_tot, 1)
+        tick_labels.append(f"{display_name}\n{n_ok}/{n_tot} ({pct}%)")
 
+    ax.set_xticklabels(tick_labels, rotation=0, ha="center")
     ax.set_ylim(-0.02, 1.05)
     ax.set_xlabel("")
-    ax.tick_params(axis="x", rotation=45)
-    ax.set_title(
-        "Crossover position distribution — successful runs only\n(n/total and success rate shown above)"
-    )
+    ax.set_title("Crossover position distribution — successful runs only")
     fig.tight_layout()
 
     out = output_dir / "compare_crossover_violin.png"
