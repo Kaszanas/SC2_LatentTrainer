@@ -17,7 +17,6 @@ from latent_trainer.paths.options import (
 )
 from latent_trainer.paths.pipeline import run_path_charting_pipeline
 from latent_trainer.paths.strategies import path_linear
-from latent_trainer.paths.strategies.geodesic import path_geodesic
 from latent_trainer.paths.strategies.gradient_ascent import path_gradient_ascent
 from latent_trainer.paths.strategies.neural_flow import path_neural_flow
 from latent_trainer.paths.strategies.optimal_transport import path_optimal_transport
@@ -261,52 +260,6 @@ def cmd_optimal_transport(
         path_z_np=path_z_np,
     )
 
-
-@cli.command("geodesic")
-@global_options
-@click.option(
-    "--geodesic_k",
-    type=int,
-    default=12,
-    show_default=True,
-    help="Number of neighbours for the kNN graph.",
-)
-def cmd_geodesic(
-    model_path: Path,
-    dataset_filename: str,
-    sample_idx: int | None,
-    n_steps: int,
-    top_k: int,
-    geodesic_k: int,
-):
-    """Shortest path on a kNN latent-space graph."""
-    path_context = prepare_path_context(
-        model_path=model_path,
-        dataset_path=DATA_DIR / dataset_filename,
-        sample_idx=sample_idx,
-    )
-    win_latents = compute_win_latents(
-        labels_tensor=path_context.labels_tensor,
-        latents_p0=path_context.latents_p0,
-        latents_p1=path_context.latents_p1,
-    )
-    all_latents = torch.cat([path_context.latents_p0, path_context.latents_p1], dim=0)
-
-    print("Computing geodesic path on kNN graph...")
-    path_z_np = path_geodesic(
-        z_start=path_context.sample_z.detach().cpu().numpy(),
-        Z_win=win_latents.detach().cpu().numpy(),
-        Z_all=all_latents.detach().cpu().numpy(),
-        k=geodesic_k,
-        n_waypoints=n_steps,
-    )
-    run_path_charting_pipeline(
-        path_context=path_context,
-        n_steps=n_steps,
-        top_k=top_k,
-        strategy="geodesic",
-        path_z_np=path_z_np,
-    )
 
 
 @cli.command("neural_flow")

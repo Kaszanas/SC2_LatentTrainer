@@ -45,10 +45,6 @@ def _suggest_params(trial: optuna.Trial, strategy: str) -> dict:
                 "step_size": trial.suggest_float("step_size", 0.05, 0.5),
                 "k_opponents": trial.suggest_int("k_opponents", 10, 200),
             }
-        case "geodesic":
-            return {
-                "k": trial.suggest_int("k", 5, 5),
-            }
         case "neural_flow":
             return {
                 "guidance_scale": trial.suggest_float("guidance_scale", 1.0, 1.0),

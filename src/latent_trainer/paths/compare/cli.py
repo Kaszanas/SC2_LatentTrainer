@@ -63,7 +63,7 @@ def _parse_methods(methods_str: str) -> list[MethodSpec]:
     show_default=True,
     help="Comma-separated method names, or 'all'. "
     "Valid: linear_centroid, linear_nearest, gradient_ascent, "
-    "optimal_transport, geodesic, neural_flow.",
+    "optimal_transport, neural_flow.",
 )
 @click.option(
     "--flow_checkpoint",

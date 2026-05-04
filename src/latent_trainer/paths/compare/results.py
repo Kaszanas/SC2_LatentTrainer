@@ -40,12 +40,6 @@ DEFAULT_METHOD_SPECS: tuple[MethodSpec, ...] = (
         params={"reg": 0.01, "step_size": 0.1, "k_opponents": 50},
     ),
     MethodSpec(
-        name="geodesic",
-        display_name="Geodesic (k-NN graph)",
-        strategy="geodesic",
-        params={"k": 12},
-    ),
-    MethodSpec(
         name="neural_flow",
         display_name="Neural Flow",
         strategy="neural_flow",

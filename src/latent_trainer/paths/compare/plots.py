@@ -42,7 +42,6 @@ _METHOD_COLOURS: dict[str, str] = {
     "linear_centroid":   "#2196F3",  # blue
     "linear_nearest":    "#03A9F4",  # light-blue
     "optimal_transport": "#FF9800",  # orange
-    "geodesic":          "#4CAF50",  # green
     "neural_flow":       "#9C27B0",  # purple
     "gradient_ascent":   "#F44336",  # red
 }

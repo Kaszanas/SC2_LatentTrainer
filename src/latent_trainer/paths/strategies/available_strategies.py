@@ -1,6 +1,6 @@
 """Latent-space path generation strategies.
 
-Four strategies for finding counterfactual improvement paths through a
+Path-generation strategies for counterfactual improvement paths through a
 model's latent space.  All strategies return numpy arrays of shape
 ``(n_waypoints, latent_dim)``.
 
@@ -46,5 +46,4 @@ class PathStrategy(enum.Enum):
     LINEAR = "linear"
     OPTIMAL_TRANSPORT = "optimal_transport"
     GRADIENT_ASCENT = "gradient_ascent"
-    GEODESIC = "geodesic"
     NEURAL_FLOW = "neural_flow"

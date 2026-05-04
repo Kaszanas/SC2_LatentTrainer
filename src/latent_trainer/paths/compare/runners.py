@@ -29,7 +29,6 @@ from latent_trainer.paths.data import (
     opponent_aware_score,
 )
 from latent_trainer.paths.feedback import compute_feedback
-from latent_trainer.paths.strategies.geodesic import path_geodesic
 from latent_trainer.paths.strategies.gradient_ascent import path_gradient_ascent
 from latent_trainer.paths.strategies.linear import path_linear
 from latent_trainer.paths.strategies.neural_flow import path_neural_flow
@@ -196,16 +195,6 @@ def _run_method_inner(
                 opponent_z=opponent_z.detach().cpu().numpy()[:sup_dim],
                 Z_loss=loss_latents.detach().cpu().numpy()[:, :sup_dim],
                 k_opponents=int(p.get("k_opponents", 50)),
-            )
-
-        case "geodesic":
-            p = spec.params
-            path_z_np = path_geodesic(
-                z_start=z_start_np[:sup_dim],
-                Z_win=win_np[:, :sup_dim],
-                Z_all=all_np[:, :sup_dim],
-                k=int(p.get("k", 12)),
-                n_waypoints=n_steps,
             )
 
         case "neural_flow":

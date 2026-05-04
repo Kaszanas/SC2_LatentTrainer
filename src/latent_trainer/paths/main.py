@@ -21,11 +21,6 @@ Four strategies are available:
     and interpolates toward it.  Considers the full shape of the
     winning distribution instead of a single centroid.
 
-``geodesic``
-    Builds a k-nearest-neighbours graph on the training latent
-    codes and computes the shortest path to the densest winning
-    point.  Follows the data manifold by construction.
-
 All strategies are **opponent-aware** — P(win) is computed using the
 full ``(player_z, opponent_z)`` input to the classifier (for the
 two-stage model).
@@ -40,9 +35,6 @@ Usage::
 
     # Optimal transport:
     uv run python feedback_path.py optimal-transport
-
-    # Geodesic:
-    uv run python feedback_path.py geodesic --geodesic-k 15
 
     # Custom GA hyperparameters:
     uv run python feedback_path.py gradient-ascent \\
