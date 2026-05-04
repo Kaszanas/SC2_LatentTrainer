@@ -18,9 +18,9 @@ Install:
                 scikit-learn POT matplotlib numpy scipy umap-learn
 """
 
-import os
-import json
 import argparse
+import json
+import os
 import re
 import sys
 import warnings
@@ -77,7 +77,7 @@ if str(SRC_ROOT) not in sys.path and SRC_ROOT.exists():
     sys.path.insert(0, str(SRC_ROOT))
 
 # Real dataset settings
-DATA_CACHE_PATH = PROJECT_ROOT / "data" / "cached_dataset_rich.pt"
+DATA_CACHE_PATH = PROJECT_ROOT / "data" / "cached_dataset_rich_sc2egset.pt"
 # "diff"   -> player0 - player1  (203 dims for rich transform)
 # "concat" -> [player0, player1]  (406 dims for rich transform)
 PLAYER_REPRESENTATION = "diff"

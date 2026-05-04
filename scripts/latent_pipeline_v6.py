@@ -62,7 +62,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Real dataset settings
-DATA_CACHE_PATH = PROJECT_ROOT / "data" / "cached_dataset_rich.pt"
+DATA_CACHE_PATH = PROJECT_ROOT / "data" / "cached_dataset_rich_sc2egset.pt"
 # "diff"   -> player0 - player1  (203 dims for rich transform)
 # "concat" -> [player0, player1]  (406 dims for rich transform)
 PLAYER_REPRESENTATION = "diff"
@@ -1150,8 +1150,9 @@ def visualise_feedback(all_feedback: dict, out_prefix="latent_paths"):
 
 
 def fit_projections(Z_train):
-    from scipy.spatial.distance import cdist
     import traceback
+
+    from scipy.spatial.distance import cdist
 
     projections = {}
     pca = PCA(n_components=2, random_state=SEED)
@@ -1202,7 +1203,7 @@ def fit_projections(Z_train):
                 return umap_train[nearest_idx[:, 0]]
 
             projections["UMAP"] = umap_project
-        except Exception as e:
+        except Exception:
             print("UMAP failed! Printing full traceback to diagnose:")
             traceback.print_exc()
             projections["UMAP"] = None
