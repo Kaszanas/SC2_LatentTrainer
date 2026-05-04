@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 )
 @click.option(
     "--dataset_filename",
-    default="cached_dataset_rich.pt",
+    default="cached_dataset_rich_sc2egset.pt",
     show_default=True,
     help="Filename of the cached dataset.  See 'features/main.py' to generate it.",
 )

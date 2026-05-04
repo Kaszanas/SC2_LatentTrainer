@@ -63,7 +63,7 @@ class ExperimentConfig:
     # Pipeline selection
     sweep: bool
     pipeline: str = "guided_vae"
-    dataset_filename: str = "cached_dataset_rich.pt"
+    dataset_filename: str = "cached_dataset_rich_sc2egset.pt"
 
     # MLFlow tracking
     mlflow_tracking_uri: str = DEFAULT_MLFLOW_URI

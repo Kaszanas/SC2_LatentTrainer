@@ -303,7 +303,7 @@ def train_guided_pipeline(
 @click.command(help="Retrain the Guided VAE with fixed best-known hyperparameters.")
 @click.option(
     "--dataset_filename",
-    default="cached_dataset_rich.pt",
+    default="cached_dataset_rich_sc2egset.pt",
     show_default=True,
     help="Cached dataset filename inside DATA_DIR.",
 )

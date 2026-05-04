@@ -335,7 +335,7 @@ def analyze_pwin(
 )
 @click.option(
     "--dataset_filename",
-    default="cached_dataset_rich.pt",
+    default="cached_dataset_rich_sc2egset.pt",
     show_default=True,
     help="Filename of the cached dataset placed in DATA_DIR.",
 )
