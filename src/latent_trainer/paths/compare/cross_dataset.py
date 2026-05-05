@@ -182,6 +182,61 @@ def plot_cross_pwin_curves(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
     return out
 
 
+def plot_cross_pwin_curves_per_method(
+    cdc: CrossDatasetComparison, *, output_dir: Path
+) -> list[Path]:
+    """Per-method P(win) curves with ±1 SD band, one PDF per method, hued by dataset."""
+    display = _method_display(cdc)
+    method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
+    palette = _ds_palette(cdc)
+    grid = np.linspace(0.0, 1.0, _GRID_POINTS)
+
+    saved: list[Path] = []
+    for method_name in method_names_list:
+        rows = []
+        for report, label in zip(cdc.reports, cdc.labels):
+            for r in report.results:
+                if (
+                    r.method_name == method_name
+                    and r.error is None
+                    and len(r.p_win_curve) >= 2
+                ):
+                    interp = np.interp(grid, r.alphas, r.p_win_curve)
+                    for alpha_val, p_val in zip(grid, interp):
+                        rows.append({"α": alpha_val, "P(win)": p_val, "Dataset": label})
+
+        if not rows:
+            continue
+
+        df = pd.DataFrame(rows)
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.axhline(0.5, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
+        sns.lineplot(
+            data=df,
+            x="α",
+            y="P(win)",
+            hue="Dataset",
+            errorbar="sd",
+            palette=palette,
+            linewidth=1.8,
+            ax=ax,
+        )
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.legend(fontsize=8)
+        ax.set_title(
+            f"P(win) along path — {display.get(method_name, method_name)} (mean ± 1 SD per dataset)"
+        )
+        fig.tight_layout()
+
+        out = output_dir / f"cross_pwin_curves_{method_name}.pdf"
+        fig.savefig(out, dpi=_DPI)
+        plt.close(fig)
+        saved.append(out)
+
+    return saved
+
+
 def plot_cross_gain_violin(cdc: CrossDatasetComparison, *, output_dir: Path) -> Path:
     display = _method_display(cdc)
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
@@ -387,6 +442,10 @@ def render_all_cross(cdc: CrossDatasetComparison, *, output_dir: Path) -> list[P
     for fn, label in [
         (lambda: plot_cross_success_rate(cdc, output_dir=output_dir), "success rate"),
         (lambda: plot_cross_pwin_curves(cdc, output_dir=output_dir), "P(win) curves"),
+        (
+            lambda: plot_cross_pwin_curves_per_method(cdc, output_dir=output_dir),
+            "P(win) curves (per method)",
+        ),
         (lambda: plot_cross_gain_violin(cdc, output_dir=output_dir), "gain violin"),
         (
             lambda: plot_cross_crossover_violin(cdc, output_dir=output_dir),
