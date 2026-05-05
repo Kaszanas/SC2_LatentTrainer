@@ -21,7 +21,8 @@ sns.set_theme(style="whitegrid", context="paper")
 _DPI = 300
 _GRID_POINTS = 100
 
-_DS_PALETTE = ["#2196F3", "#F44336", "#4CAF50", "#FF9800", "#9C27B0", "#00BCD4"]
+# Okabe-Ito colorblind-safe palette for dataset labels
+_DS_PALETTE = ["#0072B2", "#D55E00", "#009E73", "#E69F00", "#CC79A7", "#56B4E9"]
 
 
 @dataclass
@@ -107,7 +108,7 @@ def plot_cross_success_rate(cdc: CrossDatasetComparison, *, output_dir: Path) ->
     ax.axhline(50, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
     ax.set_ylim(0, 115)
     ax.set_xlabel("")
-    ax.tick_params(axis="x", rotation=15)
+    ax.tick_params(axis="x", rotation=0)
     ax.set_title("Success rate by method and dataset")
     fig.tight_layout()
 
@@ -219,7 +220,7 @@ def plot_cross_gain_violin(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
     )
     ax.axhline(0, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
     ax.set_xlabel("")
-    ax.tick_params(axis="x", rotation=15)
+    ax.tick_params(axis="x", rotation=0)
     ax.set_title("P(win) gain distribution by method and dataset")
     fig.tight_layout()
 
@@ -265,11 +266,12 @@ def plot_cross_crossover_violin(
         order=method_order,
         palette=palette,
         inner="quart",
+        cut=0,
         ax=ax,
     )
-    ax.set_ylim(-0.02, 1.05)
+    ax.set_ylim(0, 1)
     ax.set_xlabel("")
-    ax.tick_params(axis="x", rotation=15)
+    ax.tick_params(axis="x", rotation=0)
     ax.set_title("Crossover position by method and dataset — successful runs only")
     fig.tight_layout()
 

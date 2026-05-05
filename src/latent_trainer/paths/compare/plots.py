@@ -39,25 +39,31 @@ def _sort_stats(stats: Sequence[MethodStats]) -> list[MethodStats]:
 
 sns.set_theme(style="whitegrid", context="paper")
 
+# Okabe-Ito colorblind-safe palette (https://jfly.uni-koeln.de/color/)
 _METHOD_COLOURS: dict[str, str] = {
-    "linear_centroid": "#2196F3",  # blue
-    "linear_nearest": "#03A9F4",  # light-blue
-    "optimal_transport": "#FF9800",  # orange
-    "neural_flow": "#9C27B0",  # purple
-    "gradient_ascent": "#F44336",  # red
+    "linear_centroid":   "#0072B2",  # blue
+    "linear_nearest":    "#56B4E9",  # sky blue
+    "optimal_transport": "#E69F00",  # orange
+    "neural_flow":       "#009E73",  # bluish green
+    "gradient_ascent":   "#D55E00",  # vermillion
 }
 
 _PALETTE_FALLBACK = [
-    "#2196F3",
-    "#03A9F4",
-    "#F44336",
-    "#FF9800",
-    "#4CAF50",
-    "#9C27B0",
-    "#0D47A1",
-    "#006064",
-    "#E65100",
+    "#0072B2",  # blue
+    "#56B4E9",  # sky blue
+    "#E69F00",  # orange
+    "#009E73",  # bluish green
+    "#D55E00",  # vermillion
+    "#CC79A7",  # reddish purple
+    "#F0E442",  # yellow
+    "#000000",  # black
 ]
+
+# Two-color palettes reused across all Start/End and tier comparisons
+_PHASE_PALETTE: dict[str, str] = {
+    "Start": "#56B4E9",  # sky blue (lighter)
+    "End":   "#0072B2",  # blue (darker)
+}
 
 _DPI = 300
 _GRID_POINTS = 100
@@ -436,7 +442,7 @@ def plot_nearest_win_distance(report: ComparisonReport, *, output_dir: Path) -> 
         y="Distance",
         hue="Phase",
         order=method_order,
-        palette=["#90CAF9", "#1565C0"],
+        palette=[_PHASE_PALETTE["Start"], _PHASE_PALETTE["End"]],
         errorbar="sd",
         capsize=0.1,
         ax=ax,
@@ -486,7 +492,7 @@ def plot_pwin_start_end(report: ComparisonReport, *, output_dir: Path) -> Path:
         y="P(win)",
         hue="Phase",
         order=method_order,
-        palette=["#90CAF9", "#1565C0"],
+        palette=[_PHASE_PALETTE["Start"], _PHASE_PALETTE["End"]],
         errorbar="sd",
         capsize=0.1,
         ax=ax,
@@ -552,7 +558,7 @@ def plot_pwin_distribution(report: ComparisonReport, *, output_dir: Path) -> Pat
         alpha=0.4,
         common_norm=False,
         clip=(0, 1),
-        color="#90CAF9",
+        color=_PHASE_PALETTE["Start"],
         linewidth=1.5,
         ax=ref_ax,
     )
@@ -576,7 +582,7 @@ def plot_pwin_distribution(report: ComparisonReport, *, output_dir: Path) -> Pat
             alpha=0.4,
             common_norm=False,
             clip=(0, 1),
-            palette={"Start": "#90CAF9", "End": "#1565C0"},
+            palette=_PHASE_PALETTE,
             hue_order=["Start", "End"],
             linewidth=1.5,
             ax=ax,
@@ -748,6 +754,7 @@ def plot_cond_success_rate_bar(
     tier_order = ["Any waypoint ≥ 0.50", f"Any waypoint ≥ {threshold:.2f} (+1σ)"]
     method_order = [s.display_name for s in stats]
 
+    tier_colors = [_PHASE_PALETTE["Start"], _PHASE_PALETTE["End"]]
     fig, ax = plt.subplots(figsize=(max(6, len(stats) * 1.8), 5))
     sns.barplot(
         data=df,
@@ -756,6 +763,7 @@ def plot_cond_success_rate_bar(
         hue="Tier",
         order=method_order,
         hue_order=tier_order,
+        palette=tier_colors,
         errorbar=None,
         ax=ax,
     )
