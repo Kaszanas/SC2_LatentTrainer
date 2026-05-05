@@ -18,7 +18,7 @@ from latent_trainer.paths.compare.results import ComparisonReport
 
 sns.set_theme(style="whitegrid", context="paper")
 
-_DPI = 150
+_DPI = 300
 _GRID_POINTS = 100
 
 _DS_PALETTE = ["#2196F3", "#F44336", "#4CAF50", "#FF9800", "#9C27B0", "#00BCD4"]
@@ -87,7 +87,7 @@ def plot_cross_success_rate(cdc: CrossDatasetComparison, *, output_dir: Path) ->
             )
 
     if not rows:
-        return output_dir / "cross_success_rate.png"
+        return output_dir / "cross_success_rate.pdf"
 
     df = pd.DataFrame(rows)
     palette = _ds_palette(cdc)
@@ -111,7 +111,7 @@ def plot_cross_success_rate(cdc: CrossDatasetComparison, *, output_dir: Path) ->
     ax.set_title("Success rate by method and dataset")
     fig.tight_layout()
 
-    out = output_dir / "cross_success_rate.png"
+    out = output_dir / "cross_success_rate.pdf"
     fig.savefig(out, dpi=_DPI)
     plt.close(fig)
     return out
@@ -175,7 +175,7 @@ def plot_cross_pwin_curves(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
     fig.suptitle("P(win) along path — mean ± 1 SD per dataset", y=1.01)
     fig.tight_layout()
 
-    out = output_dir / "cross_pwin_curves.png"
+    out = output_dir / "cross_pwin_curves.pdf"
     fig.savefig(out, dpi=_DPI, bbox_inches="tight")
     plt.close(fig)
     return out
@@ -199,7 +199,7 @@ def plot_cross_gain_violin(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
                 )
 
     if not rows:
-        return output_dir / "cross_pwin_gain.png"
+        return output_dir / "cross_pwin_gain.pdf"
 
     df = pd.DataFrame(rows)
     method_order = [display.get(m, m) for m in method_names_list]
@@ -223,7 +223,7 @@ def plot_cross_gain_violin(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
     ax.set_title("P(win) gain distribution by method and dataset")
     fig.tight_layout()
 
-    out = output_dir / "cross_pwin_gain.png"
+    out = output_dir / "cross_pwin_gain.pdf"
     fig.savefig(out, dpi=_DPI)
     plt.close(fig)
     return out
@@ -249,7 +249,7 @@ def plot_cross_crossover_violin(
                 )
 
     if not rows:
-        return output_dir / "cross_crossover.png"
+        return output_dir / "cross_crossover.pdf"
 
     df = pd.DataFrame(rows)
     method_order = [display.get(m, m) for m in method_names_list]
@@ -273,7 +273,7 @@ def plot_cross_crossover_violin(
     ax.set_title("Crossover position by method and dataset — successful runs only")
     fig.tight_layout()
 
-    out = output_dir / "cross_crossover.png"
+    out = output_dir / "cross_crossover.pdf"
     fig.savefig(out, dpi=_DPI)
     plt.close(fig)
     return out

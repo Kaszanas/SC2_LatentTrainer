@@ -22,11 +22,11 @@ _METRIC_ATTR: dict[str, str] = {
 }
 
 
-def _suggest_params(trial: optuna.Trial, strategy: str) -> dict:
-    match strategy:
+def _suggest_params(trial: optuna.Trial, spec: MethodSpec) -> dict:
+    match spec.strategy:
         case "linear":
             return {
-                "method": trial.suggest_categorical("method", ["centroid", "nearest"]),
+                "method": spec.params["method"],  # fixed per spec, not tuned
                 "k_neighbours": trial.suggest_int("k_neighbours", 3, 15),
                 "k_opponents": trial.suggest_int("k_opponents", 10, 200),
             }
@@ -51,6 +51,9 @@ def _suggest_params(trial: optuna.Trial, strategy: str) -> dict:
             }
         case _:
             return {}
+
+
+
 
 
 def tune_method(
@@ -78,7 +81,7 @@ def tune_method(
     metric_attr = _METRIC_ATTR.get(metric, "auc_mean")
 
     def objective(trial: optuna.Trial) -> float:
-        params = _suggest_params(trial, spec.strategy)
+        params = _suggest_params(trial, spec)
         trial_spec = MethodSpec(
             name=spec.name,
             display_name=spec.display_name,

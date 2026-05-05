@@ -216,7 +216,7 @@ def _bar_chart(
         )
 
     plt.tight_layout()
-    fig.savefig(save_path, dpi=150)
+    fig.savefig(save_path, dpi=300)
     plt.close(fig)
     print(f"  Saved -> {save_path}")
 
@@ -255,9 +255,9 @@ def _beeswarm(
     for i in range(len(order), len(axes)):
         axes[i].set_visible(False)
 
-    fig.suptitle("SHAP vs. Feature Value  —  P(win), player 0", fontweight="bold")
+    fig.suptitle("SHAP vs. Feature Value  —  P(win)", fontweight="bold")
     plt.tight_layout()
-    fig.savefig(save_path, dpi=150)
+    fig.savefig(save_path, dpi=300)
     plt.close(fig)
     print(f"  Saved -> {save_path}")
 
@@ -311,7 +311,7 @@ def analyze_pwin(
         top_k=top_k,
         title=f"P(win) SHAP — Top-{top_k} Features (both players)",
         xlabel="Mean |SHAP value|",
-        save_path=output_dir / "shap_pwin_bar.png",
+        save_path=output_dir / "shap_pwin_bar.pdf",
         second_importances=imp_p1,
         first_label="Player 0 (subject)",
         second_label="Player 1 (opponent)",
@@ -322,7 +322,7 @@ def analyze_pwin(
         feature_names=feature_names,
         input_dim=min(input_dim, shap_vals.shape[1]),
         top_k=min(top_k, 16),
-        save_path=output_dir / "shap_pwin_beeswarm.png",
+        save_path=output_dir / "shap_pwin_beeswarm.pdf",
     )
 
 
@@ -342,14 +342,14 @@ def analyze_pwin(
 @click.option(
     "--n_background",
     type=int,
-    default=200,
+    default=500,
     show_default=True,
     help="Background samples for DeepExplainer (more = more accurate, slower).",
 )
 @click.option(
     "--n_explain",
     type=int,
-    default=500,
+    default=1600,
     show_default=True,
     help="Number of test samples to explain.",
 )

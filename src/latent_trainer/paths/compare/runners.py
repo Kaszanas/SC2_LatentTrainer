@@ -239,13 +239,15 @@ def _run_method_inner(
     crossover_wp = first_crossover(p_win_curve)
     crossover_alpha = normalised_crossover_alpha(crossover_wp, len(p_win_curve))
 
-    # Geometry: nearest-win and k-NN distances
-    z_start_t = torch.tensor(z_start_np, dtype=torch.float32, device=device).unsqueeze(
-        0
-    )
-    z_end_t = path_tensor[-1].unsqueeze(0)
-    dists_start = torch.cdist(z_start_t, win_latents).squeeze(0).cpu().numpy()
-    dists_end = torch.cdist(z_end_t, win_latents).squeeze(0).cpu().numpy()
+    # Geometry: nearest-win and k-NN distances — supervised subspace only,
+    # consistent with KDE metric and path generation.
+    win_sup = win_latents[:, :sup_dim]
+    z_start_sup = torch.tensor(
+        z_start_np[:sup_dim], dtype=torch.float32, device=device
+    ).unsqueeze(0)
+    z_end_sup = path_tensor[-1, :sup_dim].unsqueeze(0)
+    dists_start = torch.cdist(z_start_sup, win_sup).squeeze(0).cpu().numpy()
+    dists_end = torch.cdist(z_end_sup, win_sup).squeeze(0).cpu().numpy()
 
     nearest_start = float(dists_start.min())
     nearest_end = float(dists_end.min())

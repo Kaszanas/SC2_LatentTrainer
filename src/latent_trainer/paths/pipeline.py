@@ -96,7 +96,7 @@ def run_path_charting_pipeline(
     plot_three_signal_feedback(
         feedback=feedback,
         feature_names=FEATURE_NAMES,
-        save_path=OUTPUT_DIR / f"feedback_{strategy}_three_signal.png",
+        save_path=OUTPUT_DIR / f"feedback_{strategy}_three_signal.pdf",
         top_k=top_k,
     )
     path_features = decode_features(
@@ -111,13 +111,13 @@ def run_path_charting_pipeline(
         feature_names=FEATURE_NAMES,
         n_top=min(5, top_k),
         alphas=alphas,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_feature_evolution.png",
+        save_path=PLOTS_DIR / f"feedback_{strategy}_feature_evolution.pdf",
     )
     plot_feature_delta(
         delta=feedback["_raw_delta"],
         feature_names=FEATURE_NAMES,
         top_k=top_k,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_feature_delta.png",
+        save_path=PLOTS_DIR / f"feedback_{strategy}_feature_delta.pdf",
     )
 
     Z_win_np = win_latents.detach().cpu().numpy()
@@ -136,7 +136,7 @@ def run_path_charting_pipeline(
         path_c=path_c,
         alphas=alphas,
         win_probs=win_probs,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_pca.png",
+        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_pca.pdf",
         proj_label="PC",
         subtitle=f" ({pca.explained_variance_ratio_[0]:.1%})",
     )
@@ -152,7 +152,7 @@ def run_path_charting_pipeline(
         path_c=path_c,
         alphas=alphas,
         win_probs=win_probs,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_umap.png",
+        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_umap.pdf",
         proj_label="UMAP",
     )
 
@@ -183,7 +183,7 @@ def run_path_charting_pipeline(
         path_c=sub_path_c,
         alphas=alphas,
         win_probs=win_probs,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_tsne.png",
+        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_tsne.pdf",
         proj_label="t-SNE",
         subtitle=f" (perp={perplexity})",
     )
@@ -192,6 +192,6 @@ def run_path_charting_pipeline(
         path_z=path_z_tensor,
         win_centroid=win_centroid,
         alphas=alphas,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_distance_curve.png",
+        save_path=PLOTS_DIR / f"feedback_{strategy}_distance_curve.pdf",
     )
     print(f"\nDone! All plots saved to {PLOTS_DIR}/ (strategy={strategy})")
