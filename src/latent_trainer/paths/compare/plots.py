@@ -248,6 +248,7 @@ def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path
         order=method_order,
         palette=palette,
         inner="quart",
+        cut=0,
         legend=False,
         ax=ax,
     )
@@ -268,7 +269,7 @@ def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path
         tick_labels.append(f"{display_name}\n{n_ok}/{n_tot} ({pct}%)")
 
     ax.set_xticklabels(tick_labels, rotation=0, ha="center")
-    ax.set_ylim(-0.02, 1.05)
+    ax.set_ylim(0, 1)
     ax.set_xlabel("")
     ax.set_title("Crossover position distribution — successful runs only")
     fig.tight_layout()
@@ -372,10 +373,12 @@ def plot_pwin_gain_violin(report: ComparisonReport, *, output_dir: Path) -> Path
         order=method_order,
         palette=palette,
         inner="quart",
+        cut=0,
         legend=False,
         ax=ax,
     )
     ax.axhline(0, color="k", linestyle="--", linewidth=0.8, alpha=0.5)
+    ax.set_ylim(top=1.0)
     ax.set_xlabel("")
     ax.tick_params(axis="x", rotation=15)
     ax.set_ylabel("ΔP(win) = P(win) at end − P(win) at start")
@@ -632,6 +635,7 @@ def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Pat
         order=method_order,
         palette=palette,
         inner="quart",
+        cut=0,
         legend=False,
         ax=ax,
     )
@@ -936,6 +940,115 @@ def plot_z_norm_band_per_method(
     return saved
 
 
+def plot_feature_path_length(report: ComparisonReport, *, output_dir: Path) -> Path:
+    """Violin plot of path length measured in decoded (original-scale) feature space.
+
+    Interpretation: unlike the latent L2 path length, this metric is measured in
+    the same space as the player feedback and is therefore directly interpretable.
+    A shorter feature-space path means the method recommends more targeted, smaller
+    changes to reach a winning profile.  A method with a short feature-space path
+    but a long latent path is exploiting the non-linearity of the decoder; compare
+    with the latent norm plots to detect such cases.
+    """
+    names = _name_map(report)
+    palette = _build_palette(report)
+
+    rows = [
+        {
+            "Feature-space path length": r.path_length_feature,
+            "Method": names.get(r.method_name, r.method_name),
+        }
+        for r in report.results
+        if r.error is None and not math.isnan(r.path_length_feature)
+    ]
+    if not rows:
+        return output_dir / "compare_feature_path_length.pdf"
+
+    df = pd.DataFrame(rows)
+    method_order = [m for m in _ordered_methods(report) if m in df["Method"].values]
+
+    fig, ax = plt.subplots(figsize=(max(6, df["Method"].nunique() * 1.4), 5))
+    sns.violinplot(
+        data=df,
+        x="Method",
+        y="Feature-space path length",
+        hue="Method",
+        order=method_order,
+        palette=palette,
+        inner="quart",
+        cut=0,
+        legend=False,
+        ax=ax,
+    )
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=15)
+    ax.set_ylabel("Feature-space path length (sum of L2 steps)")
+    ax.set_title(
+        "Path length in decoded feature space\n(lower = more direct route to winning region)"
+    )
+    fig.tight_layout()
+
+    out = output_dir / "compare_feature_path_length.pdf"
+    fig.savefig(out, dpi=_DPI)
+    plt.close(fig)
+    return out
+
+
+def plot_sparsity_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
+    """Violin plot of the number of features changed by more than 1σ (sparsity).
+
+    Interpretation: a lower count means the method produces sparser, more focused
+    recommendations — the player is told to change fewer aspects of their play to
+    reach a winning profile.  Methods that change nearly all 196 features provide
+    diffuse feedback that is hard to act on.  Compare across methods to see which
+    produces the most targeted counterfactuals.
+    """
+    names = _name_map(report)
+    palette = _build_palette(report)
+
+    rows = [
+        {
+            "Features changed (> 1σ)": float(r.n_features_changed),
+            "Method": names.get(r.method_name, r.method_name),
+        }
+        for r in report.results
+        if r.error is None
+    ]
+    if not rows:
+        return output_dir / "compare_sparsity.pdf"
+
+    df = pd.DataFrame(rows)
+    method_order = [m for m in _ordered_methods(report) if m in df["Method"].values]
+
+    fig, ax = plt.subplots(figsize=(max(6, df["Method"].nunique() * 1.4), 5))
+    sns.violinplot(
+        data=df,
+        x="Method",
+        y="Features changed (> 1σ)",
+        hue="Method",
+        order=method_order,
+        palette=palette,
+        inner="quart",
+        cut=0,
+        legend=False,
+        ax=ax,
+    )
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=15)
+    ax.set_ylabel("Number of features with |Δ| > 1σ")
+    ax.set_title(
+        "Feedback sparsity — features changed by > 1 SD\n(lower = more targeted, more actionable feedback)"
+    )
+    fig.tight_layout()
+
+    out = output_dir / "compare_sparsity.pdf"
+    fig.savefig(out, dpi=_DPI)
+    plt.close(fig)
+    return out
+
+
 def render_all(
     report: ComparisonReport, stats: Sequence[MethodStats], *, output_dir: Path
 ) -> list[Path]:
@@ -987,6 +1100,14 @@ def render_all(
                 report, signal="raw", output_dir=output_dir
             ),
             "Jaccard heatmap",
+        ),
+        (
+            lambda: plot_feature_path_length(report, output_dir=output_dir),
+            "feature-space path length",
+        ),
+        (
+            lambda: plot_sparsity_violin(report, output_dir=output_dir),
+            "feedback sparsity",
         ),
     ]:
         try:

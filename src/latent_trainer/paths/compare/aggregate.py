@@ -73,6 +73,23 @@ class MethodStats:
     wall_time_mean_s: float
     wall_time_sd_s: float
 
+    # ── New metrics ────────────────────────────────────────────────────────────
+    # Feature-space path length (decoded to original scale)
+    path_length_feature_mean: float
+    path_length_feature_sd: float
+
+    # Sparsity: mean number of features changed by > 1σ
+    n_features_changed_mean: float
+    n_features_changed_sd: float
+
+    # On-manifold: path-averaged KDE log-density on winning distribution
+    kde_density_path_mean_mean: float
+    kde_density_path_mean_sd: float
+
+    # Reconstruction cycle consistency
+    recon_cycle_error_mean_mean: float
+    recon_cycle_error_mean_sd: float
+
 
 def _mean_sd(values: list[float]) -> tuple[float, float]:
     if not values:
@@ -171,6 +188,19 @@ def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
         times = [r.wall_time_s for r in good if not math.isnan(r.wall_time_s)]
         time_mean, time_sd = _mean_sd(times)
 
+        # ── New metrics
+        feat_lengths = [r.path_length_feature for r in good if not math.isnan(r.path_length_feature)]
+        feat_len_mean, feat_len_sd = _mean_sd(feat_lengths)
+
+        n_changed = [float(r.n_features_changed) for r in good]
+        n_changed_mean, n_changed_sd = _mean_sd(n_changed)
+
+        kde_path_vals = [r.kde_density_path_mean for r in good if not math.isnan(r.kde_density_path_mean)]
+        kde_path_mean, kde_path_sd = _mean_sd(kde_path_vals)
+
+        cycle_means = [r.recon_cycle_error_mean for r in good if not math.isnan(r.recon_cycle_error_mean)]
+        cycle_mean, cycle_sd = _mean_sd(cycle_means)
+
         stats_list.append(
             MethodStats(
                 method_name=method_name,
@@ -211,6 +241,14 @@ def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
                 max_z_norm_sd=max_z_sd,
                 wall_time_mean_s=time_mean,
                 wall_time_sd_s=time_sd,
+                path_length_feature_mean=feat_len_mean,
+                path_length_feature_sd=feat_len_sd,
+                n_features_changed_mean=n_changed_mean,
+                n_features_changed_sd=n_changed_sd,
+                kde_density_path_mean_mean=kde_path_mean,
+                kde_density_path_mean_sd=kde_path_sd,
+                recon_cycle_error_mean_mean=cycle_mean,
+                recon_cycle_error_mean_sd=cycle_sd,
             )
         )
 

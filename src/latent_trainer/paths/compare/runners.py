@@ -18,6 +18,7 @@ from latent_trainer.paths.compare.metrics import (
     monotonicity_fraction,
     normalised_crossover_alpha,
     path_length,
+    sparsity_n_changed,
 )
 from latent_trainer.paths.compare.results import MethodSpec, PathRunResult
 from latent_trainer.paths.data import (
@@ -159,8 +160,12 @@ def _run_method_inner(
             if spec.params.get("method") == "nearest":
                 k_nn = int(spec.params.get("k_neighbours", 5))
                 target_z = (
-                    nearest_winning_target(ctx.sample_z[:sup_dim], filtered_wins_sup, k=k_nn)
-                    .detach().cpu().numpy()
+                    nearest_winning_target(
+                        ctx.sample_z[:sup_dim], filtered_wins_sup, k=k_nn
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
                 )
             else:
                 target_z = filtered_wins_sup.mean(dim=0).detach().cpu().numpy()
@@ -212,7 +217,9 @@ def _run_method_inner(
                 )
             else:
                 path_z_np = path_neural_flow(
-                    z_start=z_start_np[:sup_dim], flow_model=flow_model, n_waypoints=n_steps
+                    z_start=z_start_np[:sup_dim],
+                    flow_model=flow_model,
+                    n_waypoints=n_steps,
                 )
 
         case _:
@@ -275,6 +282,43 @@ def _run_method_inner(
     top_k_mv = tuple(r["feature"] for r in feedback["minimum_viable"])
     top_k_wgt = tuple(r["feature"] for r in feedback["gain_weighted"])
 
+    # Feature-space path length — reuse path_length() on decoded original-scale features.
+    x_orig = feedback["_x_orig"]  # (n_waypoints, n_features) original scale
+    raw_delta = feedback["_raw_delta"]  # (n_features,) original scale
+    feat_path_len = path_length(x_orig)
+
+    # Sparsity: count features where |Δ| > 1σ of training data.
+    norm_std_np = ctx.guided_vae.std
+    if isinstance(norm_std_np, torch.Tensor):
+        norm_std_np = norm_std_np.cpu().numpy()
+    else:
+        norm_std_np = np.asarray(norm_std_np)
+    n_changed = sparsity_n_changed(raw_delta, norm_std_np)
+
+    # Path-averaged KDE log-density — all waypoints, not just the endpoint.
+    kde_path_scores = win_kde.score_samples(path_z_np[:, :sup_dim])
+    kde_path_mean_val = float(kde_path_scores.mean())
+
+    # Reconstruction cycle consistency: decode(z) → encode → compare with z.
+    try:
+        with torch.no_grad():
+            x_hat_norm = ctx.guided_vae.model.decode(
+                path_tensor
+            )  # (n_steps, F) normalized
+            z_reenc, _ = ctx.guided_vae.model.encode(
+                x_hat_norm
+            )  # (n_steps, latent_dim)
+            cycle_errs = (
+                torch.norm(path_tensor[:, :sup_dim] - z_reenc[:, :sup_dim], dim=1)
+                .cpu()
+                .numpy()
+            )
+        recon_cycle_mean_val = float(cycle_errs.mean())
+        recon_cycle_max_val = float(cycle_errs.max())
+    except Exception:
+        recon_cycle_mean_val = math.nan
+        recon_cycle_max_val = math.nan
+
     return PathRunResult(
         sample_idx=ctx.chosen,
         method_name=spec.name,
@@ -303,6 +347,11 @@ def _run_method_inner(
         top_k_features_weighted=top_k_wgt,
         wall_time_s=wall_time_s,
         error=None,
+        path_length_feature=feat_path_len,
+        n_features_changed=n_changed,
+        kde_density_path_mean=kde_path_mean_val,
+        recon_cycle_error_mean=recon_cycle_mean_val,
+        recon_cycle_error_max=recon_cycle_max_val,
     )
 
 

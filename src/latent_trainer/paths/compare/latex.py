@@ -40,7 +40,7 @@ def write_summary_table(
 ) -> Path:
     """Write an APA 7 summary table to a .tex file.
 
-    Columns: Method | Success rate | Crossover α | ΔP(win) | AUC | Monotonicity | Nearest-win dist. (end) | Time (s)
+    Columns: Method | Success rate | Crossover α | ΔP(win) | AUC | Monotonicity | Nearest-win dist. (end) | Feature path len. | Features changed | Path KDE | Time (s)
     """
     n_note = f"$N = {n_samples}$ samples." if n_samples is not None else ""
     default_note = (
@@ -49,6 +49,9 @@ def write_summary_table(
         "Crossover $\\alpha$ is reported for successful runs only. "
         "Nearest-win distance is the Euclidean distance to the closest winning latent at path end; "
         "centroid distance is omitted as it is unreliable for non-convex winning distributions. "
+        "Feature path length is the sum of L2 steps in decoded (original-scale) feature space. "
+        "Features changed counts features with $|\\Delta| > 1\\sigma$ of training data (sparsity). "
+        "Path KDE is the mean log-density of the winning-latent KDE averaged over all waypoints. "
         + n_note
     )
     note_text = note if note is not None else default_note
@@ -56,7 +59,8 @@ def write_summary_table(
     header = (
         r"\textbf{Method} & \textbf{Success rate} & \textbf{Crossover $\alpha$} & "
         r"$\bm{\Delta}$\textbf{P(win)} & \textbf{AUC} & \textbf{Monotonicity} & "
-        r"\textbf{Nearest-win dist.} & \textbf{Time (s)} \\"
+        r"\textbf{Nearest-win dist.} & \textbf{Feat.\ path len.} & "
+        r"\textbf{Feat.\ changed} & \textbf{Path KDE} & \textbf{Time (s)} \\"
     )
 
     rows = []
@@ -69,6 +73,9 @@ def write_summary_table(
             format_mean_sd(s.auc_mean, s.auc_sd),
             format_mean_sd(s.monotonicity_mean, s.monotonicity_sd),
             format_mean_sd(s.dist_nearest_win_end_mean, s.dist_nearest_win_end_sd, decimals=2),
+            format_mean_sd(s.path_length_feature_mean, s.path_length_feature_sd, decimals=1),
+            format_mean_sd(s.n_features_changed_mean, s.n_features_changed_sd, decimals=1),
+            format_mean_sd(s.kde_density_path_mean_mean, s.kde_density_path_mean_sd, decimals=2),
             format_mean_sd(s.wall_time_mean_s, s.wall_time_sd_s, decimals=1),
         ]) + r" \\"
         rows.append(row)
@@ -81,7 +88,7 @@ def write_summary_table(
 \\centering
 \\caption{{\\textit{{{caption}}}}}
 \\label{{{label}}}
-\\begin{{tabular}}{{lccccccr}}
+\\begin{{tabular}}{{lccccccrrrr}}
 \\toprule
 {header}
 \\midrule
