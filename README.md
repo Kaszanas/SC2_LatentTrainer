@@ -45,7 +45,7 @@ python src/latent_trainer/features/main.py \
     --seed 42
 ```
 
-Output: `data/cached_dataset_rich.pt` (or `data/cached_dataset_rich_2000.pt` when `--n_samples` is set).
+Output: `data/cached_dataset_rich_sc2egset.pt` (or `data/cached_dataset_rich_sc2egset_2000.pt` when `--n_samples` is set).
 
 ---
 
@@ -62,7 +62,7 @@ python src/latent_trainer/train.py --help
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--pipeline` | `guided_vae` | `guided_vae` |
-| `--dataset_filename` | `cached_dataset_rich.pt` | Cached dataset file in `data/` |
+| `--dataset_filename` | `cached_dataset_rich_sc2egset.pt` | Cached dataset file in `data/` |
 | `--sweep` | off | Enable Ray+Optuna hyperparameter search |
 | `--n_trials` | `20` | Number of Optuna trials (sweep mode) |
 | `--experiment_name` | — | MLFlow experiment name (**required**) |
@@ -105,7 +105,7 @@ python src/latent_trainer/retrain_guided.py --help
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--dataset_filename` | `cached_dataset_rich.pt` | Cached dataset file in `data/` |
+| `--dataset_filename` | `cached_dataset_rich_sc2egset.pt` | Cached dataset file in `data/` |
 | `--experiment_name` | — | MLFlow experiment name (**required**) |
 | `--run_name` | `guided_vae_best` | MLFlow run name |
 | `--latent_dim` | `32` | VAE latent dimensionality |
@@ -156,7 +156,7 @@ All subcommands share these global options:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--model_path` | — | Path to trained model checkpoint (`.ckpt`) |
-| `--dataset_filename` | `cached_dataset_rich.pt` | Cached dataset in `data/` |
+| `--dataset_filename` | `cached_dataset_rich_sc2egset.pt` | Cached dataset in `data/` |
 | `--sample_idx` | random | Index of the game to analyse |
 | `--n_steps` | `20` | Number of waypoints along the path |
 | `--top_k` | `10` | Top-K features to display in feedback |

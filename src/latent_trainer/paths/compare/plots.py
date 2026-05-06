@@ -119,7 +119,7 @@ def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path
     df = pd.DataFrame(rows)
     fig, ax = plt.subplots(figsize=(9, 5))
     ax.axhline(
-        0.5, color="k", linestyle="--", linewidth=0.8, alpha=0.5, label="P(win)=0.5"
+        0.5, color="k", linestyle="--", linewidth=1.2, alpha=0.5, label="P(win)=0.5"
     )
     sns.lineplot(
         data=df,
@@ -129,11 +129,14 @@ def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path
         hue_order=[m for m in _ordered_methods(report) if m in df["Method"].values],
         errorbar=None,
         palette=palette,
-        linewidth=1.8,
+        linewidth=2.5,
         ax=ax,
     )
     ax.set_xlim(0, 1)
     ax.set_ylim(-0.05, 1.05)
+    ax.set_xlabel(r"$\alpha$", fontsize=13)
+    ax.set_ylabel("P(win)", fontsize=13)
+    ax.tick_params(axis="both", labelsize=11, length=5, width=1.2)
     ax.legend(fontsize=8, loc="upper left")
     ax.set_title("P(win) along path — mean across samples")
     fig.tight_layout()

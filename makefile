@@ -6,7 +6,7 @@ DOCKERFILE = $(DOCKER_DIRECTORY)/Dockerfile
 DOCKER_COMPOSE_FILE = $(DOCKER_DIRECTORY)/docker-compose.yml
 
 # Training configuration (override on the CLI):
-DATASET       ?= cached_dataset_rich.pt
+DATASET       ?= cached_dataset_rich_sc2egset.pt
 N_TRIALS      ?= 100
 
 TS_STUDY      ?= SC2_TwoStage
