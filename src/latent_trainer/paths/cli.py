@@ -2,10 +2,12 @@ from functools import partial
 from pathlib import Path
 
 import click
+import numpy as np
 import torch
 
 from latent_trainer.paths.data import (
     compute_win_latents,
+    get_supervised_dim,
     nearest_winning_target,
     opponent_aware_logit,
     opponent_aware_score,
@@ -65,18 +67,23 @@ def cmd_linear(
         latents_p1=path_context.latents_p1,
     )
 
-    win_centroid = win_latents.mean(dim=0)
+    sup_dim = get_supervised_dim(path_context.guided_vae)
+    z_start_full = path_context.sample_z.detach().cpu().numpy()
+    z_free = z_start_full[sup_dim:]
+
+    win_latents_sup = win_latents[:, :sup_dim]
+    win_centroid_sup = win_latents_sup.mean(dim=0)
 
     match method:
         case "centroid":
             print("Target: centroid")
-            target_z = win_centroid.cpu().numpy()
+            target_z = win_centroid_sup.cpu().numpy()
         case "nearest":
             print(f"Target: nearest (k={k_neighbours})")
             target_z = (
                 nearest_winning_target(
-                    sample_z=path_context.sample_z,
-                    win_latents=win_latents,
+                    sample_z=path_context.sample_z[:sup_dim],
+                    win_latents=win_latents_sup,
                     k=k_neighbours,
                 )
                 .cpu()
@@ -85,10 +92,13 @@ def cmd_linear(
         case _:
             raise click.ClickException(f"Invalid method: {method}")
 
-    path_z_np = path_linear(
-        z_start=path_context.sample_z.detach().cpu().numpy(),
+    path_z_sup = path_linear(
+        z_start=z_start_full[:sup_dim],
         z_target=target_z,
         n_waypoints=n_steps,
+    )
+    path_z_np = np.concatenate(
+        [path_z_sup, np.tile(z_free, (len(path_z_sup), 1))], axis=1
     )
     run_path_charting_pipeline(
         path_context=path_context,
@@ -187,12 +197,16 @@ def cmd_gradient_ascent(
         player_idx=path_context.player_idx,
     )
 
+    sup_dim = get_supervised_dim(path_context.guided_vae)
+    z_start_full = path_context.sample_z.detach().cpu().numpy()
+    z_free = z_start_full[sup_dim:]
+
     print("Running gradient ascent with KDE density regularisation...")
-    path_z_np = path_gradient_ascent(
-        z_start=path_context.sample_z.detach().cpu().numpy(),
+    path_z_sup = path_gradient_ascent(
+        z_start=z_start_full[:sup_dim],
         score_fn=score_fn,
         logit_fn=logit_fn,
-        Z_all=win_latents.detach().cpu().numpy(),
+        Z_all=win_latents.detach().cpu().numpy()[:, :sup_dim],
         steps=ga_steps,
         lr=ga_lr,
         momentum=ga_momentum,
@@ -200,6 +214,9 @@ def cmd_gradient_ascent(
         kde_bandwidth=kde_bandwidth,
         n_waypoints=n_steps,
         convergence_threshold=convergence_threshold,
+    )
+    path_z_np = np.concatenate(
+        [path_z_sup, np.tile(z_free, (len(path_z_sup), 1))], axis=1
     )
     run_path_charting_pipeline(
         path_context=path_context,
@@ -239,19 +256,26 @@ def cmd_optimal_transport(
         latents_p1=path_context.latents_p1,
     )
 
+    sup_dim = get_supervised_dim(path_context.guided_vae)
+    z_start_full = path_context.sample_z.detach().cpu().numpy()
+    z_free = z_start_full[sup_dim:]
+
     print("Computing optimal transport path...")
-    path_z_np = path_optimal_transport(
-        z_start=path_context.sample_z.detach().cpu().numpy(),
-        Z_win=win_latents.detach().cpu().numpy(),
+    path_z_sup = path_optimal_transport(
+        z_start=z_start_full[:sup_dim],
+        Z_win=win_latents.detach().cpu().numpy()[:, :sup_dim],
         reg=ot_reg,
         n_waypoints=n_steps,
     )
-    if not torch.isfinite(torch.as_tensor(path_z_np)).all():
+    if not torch.isfinite(torch.as_tensor(path_z_sup)).all():
         raise click.ClickException(
             "Optimal transport produced non-finite values (NaN/Inf). "
             "Try '--ot-reg 0.0' for exact EMD or a larger regularization "
             "such as '--ot-reg 0.05' or '--ot-reg 0.1'."
         )
+    path_z_np = np.concatenate(
+        [path_z_sup, np.tile(z_free, (len(path_z_sup), 1))], axis=1
+    )
     run_path_charting_pipeline(
         path_context=path_context,
         n_steps=n_steps,
@@ -325,22 +349,30 @@ def cmd_neural_flow(
         torch.device("cuda" if torch.cuda.is_available() else "cpu")
     )
 
+    sup_dim = get_supervised_dim(path_context.guided_vae)
+    z_start_full = path_context.sample_z.detach().cpu().numpy()
+    z_free = z_start_full[sup_dim:]
+
     print("Integrating velocity field...")
-    z_start_np = path_context.sample_z.detach().cpu().numpy()
+    z_start_sup = z_start_full[:sup_dim]
     if guidance_scale > 0.0:
         print(f"  Using classifier guidance (scale={guidance_scale})")
-        path_z_np = flow_model.predict_path_guided(
-            z_start=z_start_np,
+        path_z_sup = flow_model.predict_path_guided(
+            z_start=z_start_sup,
             score_fn=score_fn,
             guidance_scale=guidance_scale,
             steps=n_steps - 1,
         )
     else:
-        path_z_np = path_neural_flow(
-            z_start=z_start_np,
+        path_z_sup = path_neural_flow(
+            z_start=z_start_sup,
             flow_model=flow_model,
             n_waypoints=n_steps,
         )
+
+    path_z_np = np.concatenate(
+        [path_z_sup, np.tile(z_free, (len(path_z_sup), 1))], axis=1
+    )
 
     if diagnose:
         _print_path_trace(
