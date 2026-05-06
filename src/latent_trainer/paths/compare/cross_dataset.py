@@ -355,7 +355,7 @@ def write_cross_dataset_table(
     header = (
         r"\textbf{Method} & \textbf{Metric} & "
         + ds_cols
-        + (r" & $\bm{\Delta}$" if n_ds == 2 else "")
+        + (r" & $\bm{\Delta}$ Dataset" if n_ds == 2 else "")
         + r" \\"
     )
 
@@ -373,6 +373,16 @@ def write_cross_dataset_table(
             "p_win_gain_mean",
         ),
         ("AUC", lambda s: format_mean_sd(s.auc_mean, s.auc_sd), "auc_mean"),
+        (
+            "Monotonicity",
+            lambda s: format_mean_sd(s.monotonicity_mean, s.monotonicity_sd),
+            "monotonicity_mean",
+        ),
+        (
+            "Nearest-win dist.",
+            lambda s: format_mean_sd(s.dist_nearest_win_end_mean, s.dist_nearest_win_end_sd, decimals=2),
+            "dist_nearest_win_end_mean",
+        ),
     ]
 
     for method_name in method_names_list:
@@ -403,10 +413,10 @@ def write_cross_dataset_table(
         rows.append(r"\addlinespace")
 
     rows_tex = "\n".join(rows)
-    model_note = f"Model: \\texttt{{{str(cdc.model_path.name)}}}."
-    note_text = f"Values are \\textit{{M}} (\\textit{{SD}}). {model_note}"
-    if n_ds == 2:
-        note_text += f" $\\Delta$ = {ds_labels[1]} $-$ {ds_labels[0]}."
+    # model_note = f"Model: \\texttt{{{str(cdc.model_path.name)}}}."
+    # note_text = f"Values are \\textit{{M}} (\\textit{{SD}}). {model_note}"
+    # if n_ds == 2:
+    #     note_text += f" $\\Delta$ = {ds_labels[1]} $-$ {ds_labels[0]}."
 
     n_cols = 2 + n_ds + (1 if n_ds == 2 else 0)
     col_spec = "ll" + "c" * (n_cols - 2)
@@ -415,7 +425,7 @@ def write_cross_dataset_table(
 %% Requires: \\usepackage{{booktabs, bm}}
 \\begin{{table}}[htbp]
 \\centering
-\\caption{{\\textit{{{caption}}}}}
+\\caption{{{caption}}}
 \\label{{{label}}}
 \\begin{{tabular}}{{{col_spec}}}
 \\toprule
@@ -426,9 +436,10 @@ def write_cross_dataset_table(
 \\end{{tabular}}
 \\\\[0.5em]
 \\raggedright
-\\small \\textit{{Note.}} {note_text}
+
 \\end{{table}}
 """
+    # \\small \\textit{{Note.}} {note_text}
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(tex, encoding="utf-8")
