@@ -173,9 +173,16 @@ def _bar_chart(
 ) -> None:
     imp1d = np.asarray(importances).ravel()
     order = np.argsort(imp1d)[::-1][:top_k][::-1]
-    names = [str(feature_names[int(i)]) for i in order]
+    def _strip_group(name: str) -> str:
+        for g in _GROUPS:
+            if name.startswith(g + "_"):
+                return name[len(g) + 1:]
+        return name
+
+    raw_names = [str(feature_names[int(i)]) for i in order]
+    names = [_strip_group(n) for n in raw_names]
     vals = imp1d[order]
-    colors = [_GROUP_COLORS[_feature_group(n)] for n in names]
+    colors = [_GROUP_COLORS[_feature_group(n)] for n in raw_names]
     y = np.arange(len(order))
 
     fig, ax = plt.subplots(figsize=(10, max(4, top_k * 0.38)))

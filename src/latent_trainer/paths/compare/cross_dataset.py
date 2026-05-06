@@ -363,12 +363,12 @@ def write_cross_dataset_table(
     metrics = [
         ("Success rate", lambda s: f"{s.success_rate:.3f}", None),
         (
-            "Crossover α",
+            "Crossover $\\alpha$",
             lambda s: format_mean_sd(s.crossover_alpha_mean, s.crossover_alpha_sd),
             "crossover_alpha_mean",
         ),
         (
-            "ΔP(win)",
+            "$\\bm{\Delta}$P(win)",
             lambda s: format_mean_sd(s.p_win_gain_mean, s.p_win_gain_sd),
             "p_win_gain_mean",
         ),
