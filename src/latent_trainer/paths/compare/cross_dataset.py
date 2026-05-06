@@ -383,6 +383,26 @@ def write_cross_dataset_table(
             lambda s: format_mean_sd(s.dist_nearest_win_end_mean, s.dist_nearest_win_end_sd, decimals=2),
             "dist_nearest_win_end_mean",
         ),
+        (
+            "KDE density shift",
+            lambda s: format_mean_sd(s.kde_density_shift_mean, s.kde_density_shift_sd, decimals=2),
+            "kde_density_shift_mean",
+        ),
+        (
+            "Path KDE density",
+            lambda s: format_mean_sd(s.kde_density_path_mean_mean, s.kde_density_path_mean_sd, decimals=2),
+            "kde_density_path_mean_mean",
+        ),
+        (
+            "Cycle error",
+            lambda s: format_mean_sd(s.recon_cycle_error_mean_mean, s.recon_cycle_error_mean_sd, decimals=3),
+            "recon_cycle_error_mean_mean",
+        ),
+        (
+            r"Max $\|\mathbf{z}\|$",
+            lambda s: format_mean_sd(s.max_z_norm_mean, s.max_z_norm_sd, decimals=2),
+            "max_z_norm_mean",
+        ),
     ]
 
     for method_name in method_names_list:
