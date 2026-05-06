@@ -2,7 +2,19 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
+
+
+@dataclass
+class NormalizedDataloaders:
+    train_loader: DataLoader
+    val_loader: DataLoader
+
+    input_dim: int
+    mean: torch.Tensor
+    std: torch.Tensor
+
+    test_loader: DataLoader | None = None
 
 
 @dataclass
@@ -13,7 +25,7 @@ class NormalizedData:
     val_X: torch.Tensor
     test_X: torch.Tensor
 
-    # Normalisation parameters (for test-time normalisation)
+    # Normalisation parameters (for test-time normalization)
     mean: torch.Tensor
     std: torch.Tensor
 
@@ -27,7 +39,7 @@ class NormalizedDataWithLabels:
     test_X: torch.Tensor
     test_y: torch.Tensor
 
-    # Normalisation parameters (for test-time normalisation)
+    # Normalisation parameters (for test-time normalization)
     mean: torch.Tensor
     std: torch.Tensor
 

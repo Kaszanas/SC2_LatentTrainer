@@ -6,13 +6,12 @@ DOCKERFILE = $(DOCKER_DIRECTORY)/Dockerfile
 DOCKER_COMPOSE_FILE = $(DOCKER_DIRECTORY)/docker-compose.yml
 
 # Training configuration (override on the CLI):
-DATASET       ?= cached_dataset_rich.pt
+DATASET       ?= cached_dataset_rich_sc2egset.pt
 N_TRIALS      ?= 100
 
 TS_STUDY      ?= SC2_TwoStage
 TS_EXPERIMENT ?= SC2_TwoStage_ArchSearch
 
-GV_STUDY      ?= SC2_GuidedVAE
 GV_EXPERIMENT ?= SC2_GuidedVAE_ArchSearch
 
 .PHONY: test
@@ -70,54 +69,32 @@ process_features_rich:
 process_features_averaged:
 	uv run python src/latent_trainer/features/main.py --transform averaged_economy
 
-# Two-stage pipeline 
-.PHONY: two_stage_sweep
-two_stage_sweep:
-	python src/latent_trainer/train.py \
-		--pipeline two_stage \
-		--dataset-filename $(DATASET) \
-		--mode sweep \
-		--n-trials $(N_TRIALS) \
-		--study-name $(TS_STUDY) \
-		--experiment-name $(TS_EXPERIMENT)
-
-.PHONY: two_stage_train
-two_stage_train:
-	python src/latent_trainer/train.py \
-		--pipeline two_stage \
-		--dataset-filename $(DATASET) \
-		--mode best \
-		--study-name $(TS_STUDY) \
-		--experiment-name $(TS_EXPERIMENT)
-
 # Guided-VAE pipeline
 .PHONY: guided_vae_sweep
 guided_vae_sweep:
 	python src/latent_trainer/train.py \
 		--pipeline guided_vae \
-		--dataset-filename $(DATASET) \
+		--dataset_filename $(DATASET) \
 		--mode sweep \
-		--n-trials $(N_TRIALS) \
-		--study-name $(GV_STUDY) \
-		--experiment-name $(GV_EXPERIMENT)
+		--n_trials $(N_TRIALS) \
+		--experiment_name $(GV_EXPERIMENT)
 
 .PHONY: guided_vae_train
 guided_vae_train:
 	python src/latent_trainer/train.py \
 		--pipeline guided_vae \
-		--dataset-filename $(DATASET) \
+		--dataset_filename $(DATASET) \
 		--mode best \
-		--study-name $(GV_STUDY) \
-		--experiment-name $(GV_EXPERIMENT)
+		--experiment_name $(GV_EXPERIMENT)
 
 # Dashboards
 .PHONY: mlflow
 mlflow:
-	uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
+	mlflow ui --backend-store-uri sqlite:///mlflow.db
 
 .PHONY: optuna
 optuna:
-	uv run optuna-dashboard sqlite:///optuna_study.db
+	optuna-dashboard sqlite:///optuna_study.db
 
 # Docker commands
 .PHONY: docker-build

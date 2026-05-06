@@ -30,6 +30,7 @@ def compute_feedback(
     feature_names: list[str],
     top_k: int = 10,
     method_name: str = "",
+    device: torch.device | None = None,
 ) -> dict:
     """Compute three-signal feedback along a latent-space path.
 
@@ -70,6 +71,8 @@ def compute_feedback(
     norm_std = np.asarray(norm_std).reshape(1, -1)
 
     path_tensor = torch.tensor(path_z, dtype=torch.float32)
+    if device is not None:
+        path_tensor = path_tensor.to(device)
 
     with torch.no_grad():
         x_decoded = decode_fn(path_tensor).cpu().numpy()

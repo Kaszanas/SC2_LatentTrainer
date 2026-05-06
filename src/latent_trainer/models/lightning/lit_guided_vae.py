@@ -1,16 +1,3 @@
-"""Lightning module for supervised Guided VAE with adversarial classifier.
-
-Wraps :class:`latent_trainer.models.guided_vae.suGuidedVAE` and
-:class:`latent_trainer.models.guided_vae.Classifier` into a single
-Lightning module with three-optimizer manual optimization:
-
-1. **VAE optimizer** — reconstructs inputs and produces classification logits.
-2. **Classifier optimizer** — trains a dedicated classifier on the latent
-   space (excluding the first latent dimension used for classification).
-3. **Adversarial optimizer** — (currently disabled) pushes the classifier
-   toward chance level so the VAE doesn't leak class info into non-class dims.
-"""
-
 from __future__ import annotations
 
 import lightning as pl
@@ -23,217 +10,278 @@ from latent_trainer.models.losses import loss_supervised
 
 
 class LitGuidedVAE(pl.LightningModule):
-    """Lightning module for supervised Guided VAE training with adversarial classifier."""
+    """Lightning module for supervised Guided VAE training with adversarial disentanglement."""
 
     def __init__(
         self,
-        n_vae_dis: int = 16,
-        lr: float = 1e-4,
+        input_dim: int,
+        encoder_hidden_dims: list[int],
+        supervised_dim: int,
+        latent_dim: int,
+        learning_rate: float = 1e-4,
         weight_decay: float = 1e-5,
-        lr_c: float = 1e-4,
-        weight_decay_c: float = 1e-4,
-        w_cls: float = 50_000.0,
-        input_dim: int = 2,
-        encoder_hidden_dims: list[int] | None = None,
+        learning_rate_cls: float = 1e-4,
+        weight_decay_cls: float = 1e-4,
+        classification_weight: float = 50.0,
+        mean: torch.Tensor | None = None,
+        std: torch.Tensor | None = None,
     ) -> None:
         """Initialise the LitGuidedVAE module.
 
         Parameters
         ----------
-        n_vae_dis:
-            Size of the VAE latent distribution.
-        lr:
-            Learning rate for the VAE optimizer.
-        weight_decay:
-            Weight decay for the VAE optimizer.
-        lr_c:
-            Learning rate for the classifier optimizer.
-        weight_decay_c:
-            Weight decay for the classifier optimizer.
-        w_cls:
-            Weight for the classification loss.
         input_dim:
             Input feature dimension (depends on the transform used).
         encoder_hidden_dims:
             Hidden layer widths for the encoder.  The decoder mirrors these in
-            reverse order.  Defaults to ``[64, 128, 256]``.
+            reverse order.  Defaults to ``[64, 128, 256, 512]``.
+        supervised_dim:
+            Number of latent dims (per player) reserved for supervised
+            classification.  The remaining ``latent_dim - supervised_dim`` dims are
+            adversarially disentangled.
+        latent_dim:
+            Size of the VAE latent distribution.
+        learning_rate:
+            Learning rate for the VAE and adversarial optimizers.
+        weight_decay:
+            Weight decay for the VAE optimizer.
+        learning_rate_cls:
+            Learning rate for the classifier optimizer.
+        weight_decay_cls:
+            Weight decay for the classifier optimizer.
+        classification_weight:
+            Weight for the classification loss.
+        mean:
+            Optional pre-computed training data mean for input normalisation.
+        std:
+            Optional pre-computed training data std for input normalisation.
         """
         super().__init__()
         self.save_hyperparameters()
 
-        # Manual optimisation (3 optimizers)
+        # Dimensions:
+        self.input_dim = input_dim
+        self.encoder_hidden_dims = encoder_hidden_dims
+        self.supervised_dim = supervised_dim
+        self.latent_dim = latent_dim
+
+        # Normalization stats, needed for working with unnormalized data
+        # after training (e.g. when encoding new samples with the trained model):
+        self.register_buffer("mean", mean)
+        self.register_buffer("std", std)
+
+        # Hyperparameters:
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.learning_rate_cls = learning_rate_cls
+        self.weight_decay_cls = weight_decay_cls
+        self.classification_weight = classification_weight
+
+        # Manual optimisation (3 optimizers), required for the
+        # alternating adversarial training steps:
         self.automatic_optimization = False
 
         self.model = suGuidedVAE(
-            n_vae_dis=n_vae_dis,
+            latent_dim=latent_dim,
             input_dim=input_dim,
             encoder_hidden_dims=encoder_hidden_dims,
+            supervised_dim=supervised_dim,
         )
-        self.classifier = Classifier(n_vae_dis=n_vae_dis)
 
-        self.lr = lr
-        self.weight_decay = weight_decay
-        self.lr_c = lr_c
-        self.weight_decay_c = weight_decay_c
-        self.w_cls = w_cls
+        # Adversarial classifier operating on the non-supervised latent dims for adversarial disentanglement.
+        # Pushes the VAE to learn class-discriminative information in the supervised dims, leaving the rest
+        # free of class information and hopefully more disentangled:
+        self.adversarial_classifier = Classifier(
+            latent_dim=latent_dim,
+            supervised_dim=supervised_dim,
+        )
 
-        self.total_valid_samples = 0
-
-    # ------------------------------------------------------------------
     # Helpers
-    # ------------------------------------------------------------------
     @staticmethod
-    def _prepare_labels(
-        data: torch.Tensor,
-        label: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor] | None:
-        """Normalise labels and filter out invalid (-1) entries.
+    def _prepare_label(label: torch.Tensor) -> torch.Tensor:
+        """Coerce label dtype/shape and assert all values are valid (0 or 1).
 
-        Returns ``(valid_data, valid_label)`` or ``None`` if the entire
-        batch is invalid.
+        Returns ``[batch, 1]`` float32 tensor.  Raises ``ValueError`` if any
+        label is outside {0, 1} — invalid samples must be filtered upstream.
         """
-        if label.dtype == torch.int8:
+        if label.dtype != torch.float32:
             label = label.float()
         if label.dim() == 1:
             label = label.unsqueeze(1)
-        if data.dim() == 3 and label.dim() == 2:
-            label = label.unsqueeze(1).expand(-1, data.shape[1], -1)
-        if label.dtype != torch.float32:
-            label = label.float()
 
-        # Filter invalid labels
-        if data.dim() == 3 and label.dim() == 3:
-            valid = (label != -1).all(dim=1).all(dim=1)
-        else:
-            valid = (label != -1).squeeze()
+        if (label < 0).any() or (label > 1).any():
+            raise ValueError(
+                "Batch contains labels outside [0, 1]. "
+                "Filter invalid samples in the dataset/dataloader, not here."
+            )
+        return label
 
-        if valid.sum() == 0:
-            return None
+    def _slice_free_dims(self, z: torch.Tensor) -> torch.Tensor:
+        """Slice the free (non-supervised) latent dimensions from ``z``.
 
-        return data[valid], torch.clamp(label[valid], 0, 1)
+        The latent space is partitioned as:
+          ``z[:supervised_dim]``  — supervised dims, used by the internal VAE classifier
+          ``z[supervised_dim:]``  — free dims, passed to the adversarial classifier
 
-    @staticmethod
-    def _slice_latent(z: torch.Tensor) -> torch.Tensor:
-        """Exclude first latent dim (used for classification)."""
-        return z[:, :, 1:] if z.dim() == 3 else z[:, 1:]
+        Handles both 2-D ``[batch, latent]`` and 3-D ``[batch, players, latent]`` inputs.
+        """
+        # 3-D: per-player latents [batch, players, latent] → slice last dim
+        # 2-D: flat latents [batch, latent] → slice last dim
+        return (
+            z[:, :, self.supervised_dim :]
+            if z.dim() == 3
+            else z[:, self.supervised_dim :]
+        )
 
-    # ------------------------------------------------------------------
     # Forward / training / validation
-    # ------------------------------------------------------------------
     def forward(self, x: torch.Tensor):  # noqa: D401
         return self.model(x)
 
-    def training_step(self, batch, batch_idx):
-        if batch is None:
-            return None
+    def training_step(self, batch, batch_idx: int):
+        data, label = batch[0], batch[1]
+        valid_data = data
+        valid_label = self._prepare_label(label=label)
 
-        result = self._prepare_labels(batch[0], batch[1])
-        if result is None:
-            self.log("train_skip_batch", 1)
-            return None
-        valid_data, valid_label = result
-
-        opt_vae, opt_cls, opt_adv = self.optimizers()
-        batch_valid = valid_data.shape[0]
-        self.total_valid_samples += batch_valid
-
-        # ---- Step 1: VAE ------------------------------------------------
-        opt_vae.zero_grad()
+        optimizer_vae, optimizer_classification, optimizer_adversarial = (
+            self.optimizers()
+        )
+        # Step 1: VAE
+        optimizer_vae.zero_grad()
         recon_batch, mu, logvar, re = self.model(valid_data)
         vae_loss = loss_supervised(recon_batch, valid_data, mu, logvar)[0]
-        cls_loss = F.binary_cross_entropy(re, valid_label, reduction="sum")
-        vae_total = vae_loss + cls_loss * self.w_cls
+        cls_loss = F.binary_cross_entropy(re, valid_label, reduction="mean")
+        vae_total = vae_loss + cls_loss * self.classification_weight
 
-        pred = (re > 0.5).float()
-        acc = pred.eq(valid_label).sum().item() / valid_label.numel() * 100
+        acc = (
+            (re > 0.5).float().eq(valid_label).sum().item() / valid_label.numel() * 100
+        )
 
         self.log("train_vae_loss", vae_loss, prog_bar=True, on_step=True, on_epoch=True)
         self.log("train_cls_loss", cls_loss, prog_bar=True, on_step=True, on_epoch=True)
         self.log("train_vae_acc", acc, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train_valid_samples", batch_valid, on_epoch=True)
 
         self.manual_backward(vae_total)
-        opt_vae.step()
+        optimizer_vae.step()
 
-        # ---- Step 2: Classifier ------------------------------------------
-        opt_cls.zero_grad()
+        # Step 2: Adversarial classifier
+        optimizer_classification.zero_grad()
         mu, logvar = self.model.encode(valid_data)
         z = self.model.reparameterize(mu, logvar).detach()
-        cls1 = self.classifier(self._slice_latent(z))
-        c_loss = F.binary_cross_entropy(cls1, valid_label, reduction="sum") * self.w_cls
+        cls1 = self.adversarial_classifier(self._slice_free_dims(z))
+        adversarial_classification_loss = (
+            F.binary_cross_entropy(cls1, valid_label, reduction="mean")
+            * self.classification_weight
+        )
 
-        c_acc = (
+        adversarial_classification_accuracy = (
             (cls1 > 0.5).float().eq(valid_label).sum().item()
             / valid_label.numel()
             * 100
         )
 
-        self.log("train_c_loss", c_loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train_c_acc", c_acc, prog_bar=True, on_step=True, on_epoch=True)
+        self.log(
+            "train_adv_cls_loss",
+            adversarial_classification_loss,
+            prog_bar=True,
+            on_step=True,
+            on_epoch=True,
+        )
+        self.log(
+            "train_adv_cls_acc",
+            adversarial_classification_accuracy,
+            prog_bar=True,
+            on_step=True,
+            on_epoch=True,
+        )
 
-        self.manual_backward(c_loss)
-        opt_cls.step()
+        self.manual_backward(adversarial_classification_loss)
+        optimizer_classification.step()
 
-        # ---- Step 3: Adversarial (currently disabled) --------------------
-        opt_adv.zero_grad()
+        # Step 3: Adversarial (VAE fools the classifier)
+        optimizer_adversarial.zero_grad()
         mu, logvar = self.model.encode(valid_data)
         z = self.model.reparameterize(mu, logvar)
-        cls2 = self.classifier(self._slice_latent(z))
+        cls2 = self.adversarial_classifier(self._slice_free_dims(z))
         label_half = torch.empty_like(valid_label).fill_(0.5)
-        adv_loss = F.binary_cross_entropy(cls2, label_half, reduction="sum")
-        adv_loss *= 0.0  # Disabled: adversarial step cancels classifier learning
+        adv_loss = (
+            F.binary_cross_entropy(cls2, label_half, reduction="mean")
+            * self.classification_weight
+        )
 
-        self.log("train_adv_loss", adv_loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log(
+            "train_adv_loss",
+            adv_loss,
+            prog_bar=True,
+            on_step=True,
+            on_epoch=True,
+        )
         self.manual_backward(adv_loss)
-        opt_adv.step()
+        optimizer_adversarial.step()
 
-        return vae_total + c_loss + adv_loss
+        return vae_total + adversarial_classification_loss + adv_loss
 
     def on_train_epoch_end(self) -> None:
-        self.log("epoch_valid_samples", self.total_valid_samples)
-        self.total_valid_samples = 0
+        sch1, sch2, sch3 = self.lr_schedulers()
+        sch1.step()
+        sch2.step()
+        sch3.step()
 
     def validation_step(self, batch, batch_idx):
-        if batch is None:
-            return None
-
-        result = self._prepare_labels(batch[0], batch[1])
-        if result is None:
-            return None
-        valid_data, valid_label = result
+        data, label = batch[0], batch[1]
+        valid_data = data
+        valid_label = self._prepare_label(label)
 
         recon_batch, mu, logvar, re = self.model(valid_data)
         vae_loss = loss_supervised(recon_batch, valid_data, mu, logvar)[0]
-        cls_loss = F.binary_cross_entropy(re, valid_label, reduction="sum")
+        cls_loss = F.binary_cross_entropy(re, valid_label, reduction="mean")
+        total_loss = vae_loss + cls_loss * self.classification_weight
 
-        pred = (re > 0.5).float()
-        acc = pred.eq(valid_label).sum().item() / valid_label.numel() * 100
+        acc = (
+            (re > 0.5).float().eq(valid_label).sum().item() / valid_label.numel() * 100
+        )
 
+        self.log("val_loss", total_loss, prog_bar=True, sync_dist=True)
         self.log("val_vae_loss", vae_loss, prog_bar=True, sync_dist=True)
         self.log("val_cls_loss", cls_loss, prog_bar=True, sync_dist=True)
         self.log("val_acc", acc, prog_bar=True, sync_dist=True)
 
-        return vae_loss
+        return total_loss
 
     def test_step(self, batch, batch_idx):
-        # Re-use validation logic for test evaluation
         return self.validation_step(batch, batch_idx)
 
     def configure_optimizers(self):
-        opt_vae = optim.Adam(
+        if not self.trainer.max_epochs:
+            raise ValueError(
+                "Trainer max_epochs must be set for LR scheduler configuration."
+            )
+
+        opt_vae = optim.AdamW(
             self.model.parameters(),
-            lr=self.lr,
+            lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
-        opt_cls = optim.Adam(
-            self.classifier.parameters(),
-            lr=self.lr_c,
-            weight_decay=self.weight_decay_c,
+        opt_cls = optim.AdamW(
+            self.adversarial_classifier.parameters(),
+            lr=self.learning_rate_cls,
+            weight_decay=self.weight_decay_cls,
         )
-        # Adversarial optimizer (VAE params, trained adversarially)
-        opt_adv = optim.Adam(
+        # Adversarial optimizer updates VAE params to fool the classifier
+        opt_adv = optim.AdamW(
             self.model.parameters(),
-            lr=self.lr,
+            lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
-        return [opt_vae, opt_cls, opt_adv], []
+
+        epochs = self.trainer.max_epochs
+        sched_vae = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer=opt_vae, T_max=epochs
+        )
+        sched_cls = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer=opt_cls, T_max=epochs
+        )
+        sched_adv = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer=opt_adv, T_max=epochs
+        )
+
+        return [opt_vae, opt_cls, opt_adv], [sched_vae, sched_cls, sched_adv]

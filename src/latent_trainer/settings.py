@@ -22,10 +22,13 @@ DEFAULT_MLFLOW_URI : str
 
 from pathlib import Path
 
-LOGGING_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+LOGGING_FORMAT = "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d: %(message)s"
 
 OUTPUT_DIR = Path("./output").resolve()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+CHECKPOINTS_DIR = OUTPUT_DIR / "checkpoints"
+CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 
 DATA_DIR = Path("./data").resolve()
 

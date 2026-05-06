@@ -28,13 +28,16 @@ import click
 import pytorch_lightning as pl
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
+from latent_trainer.configs.hyperparam_settings import (
+    VAE_HIDDEN_DIM_CHOICES,
+)
+from latent_trainer.configs.search_space import (
+    reconstruct_guided_vae_nz,
+    reconstruct_hidden_dims,
+)
 from latent_trainer.hyperparameter_search.guided_vae import (
     run_guided_vae_best,
     run_guided_vae_hyperparameter_search,
-)
-from latent_trainer.hyperparameter_search.two_stage import (
-    run_two_stage_best,
-    run_two_stage_hyperparameter_search,
 )
 from latent_trainer.settings import DEFAULT_MLFLOW_URI, LOGGING_FORMAT, SEED
 from latent_trainer.tracking.mlflow_utils import log_best_trial, setup_mlflow
@@ -45,76 +48,99 @@ logger = logging.getLogger(__name__)
 @click.command()
 @click.option(
     "--pipeline",
-    type=click.Choice(["two_stage", "guided_vae"]),
-    default="two_stage",
+    type=click.Choice(["guided_vae"]),
+    default="guided_vae",
     show_default=True,
     help="Training pipeline to use.",
 )
 @click.option(
-    "--dataset-filename",
-    default="cached_dataset_rich.pt",
+    "--dataset_filename",
+    default="cached_dataset_rich_sc2egset.pt",
     show_default=True,
     help="Filename of the cached dataset.  See 'features/main.py' to generate it.",
 )
 @click.option(
-    "--mode",
-    type=click.Choice(["sweep", "best"]),
-    default="sweep",
+    "--sweep",
+    is_flag=True,
+    default=False,
     show_default=True,
-    help="'sweep' runs Ray+Optuna HPO; 'best' retrains using the best Optuna trial.",
+    help="--sweep runs Ray+Optuna hyperparameter search; Otherwise trains using the best Optuna trial.",
 )
 @click.option(
-    "--n-trials",
+    "--n_trials",
     type=int,
-    default=100,
+    default=20,
     show_default=True,
     help="Optuna trials for sweep mode.",
 )
 @click.option(
-    "--experiment-name",
+    "--experiment_name",
     help="MLFlow experiment name.",
+    required=True,
 )
 @click.option(
-    "--mlflow-uri",
+    "--mlflow_uri",
     default=DEFAULT_MLFLOW_URI,
     show_default=True,
-    help="MLFlow tracking URI.  Defaults to sqlite:///mlflow.db.",
+    help="MLFlow tracking URI. Defaults to sqlite:///mlflow.db.",
 )
 @click.option(
-    "--gpus-per-trial",
+    "--gpus_per_trial",
     type=float,
     default=0.1,
     show_default=True,
     help="Fractional GPU per Ray trial.",
 )
 @click.option(
-    "--cpus-per-trial",
+    "--cpus_per_trial",
     type=int,
     default=2,
     show_default=True,
     help="CPUs per Ray trial.",
 )
 @click.option(
-    "--optuna-db",
+    "--optuna_db",
     default="sqlite:///optuna_study.db",
     show_default=True,
     help="Optuna storage URL.",
 )
 @click.option(
-    "--study-name",
-    help="Optuna study name.",
+    "--source_experiment",
+    default=None,
+    help=(
+        "MLflow experiment to load params from in 'best' mode. "
+        "Defaults to --experiment_name."
+    ),
+)
+@click.option(
+    "--source_run",
+    default=None,
+    help=(
+        "MLflow run name to load params from in 'best' mode. "
+        "If omitted, uses the most recent run tagged source=optuna_best_trial."
+    ),
+)
+@click.option(
+    "--run_name",
+    default=None,
+    help=(
+        "Explicit MLflow run name for non-sweep retraining. "
+        "If omitted, auto-generated as '<source>_<timestamp>'."
+    ),
 )
 def main(
     pipeline: str,
     dataset_filename: str,
-    mode: str,
+    sweep: bool,
     n_trials: int,
     experiment_name: str,
     mlflow_uri: str,
     gpus_per_trial: float,
     cpus_per_trial: int,
     optuna_db: str,
-    study_name: str,
+    source_experiment: str | None,
+    source_run: str | None,
+    run_name: str | None,
 ) -> None:
     """SC2 Latent Trainer — unified training & HPO entrypoint."""
     logging.basicConfig(
@@ -130,14 +156,16 @@ def main(
     config = ExperimentConfig(
         pipeline=pipeline,
         dataset_filename=dataset_filename,
-        mode=mode,
+        sweep=sweep,
         experiment_name=experiment_name,
         mlflow_tracking_uri=mlflow_uri,
         n_trials=n_trials,
         gpus_per_trial=gpus_per_trial,
         cpus_per_trial=cpus_per_trial,
         optuna_db=optuna_db,
-        study_name=study_name,
+        mlflow_source_experiment=source_experiment,
+        mlflow_source_run=source_run,
+        run_name=run_name,
     )
 
     setup_mlflow(
@@ -145,34 +173,35 @@ def main(
         experiment_name=config.experiment_name,
     )
 
-    if pipeline == "two_stage":
-        _train_two_stage(config=config)
-    elif pipeline == "guided_vae":
-        _train_guided_vae(config=config)
-    else:
-        raise click.BadParameter(f"Unknown pipeline: {pipeline}")
-
-
-def _train_two_stage(config: ExperimentConfig) -> None:
-    """Dispatch between sweep and best for the two-stage pipeline."""
-    if config.mode == "sweep":
-        logger.info(f"Starting Ray Tune + Optuna sweep ({config.n_trials} trials)...")
-        study = run_two_stage_hyperparameter_search(config=config)
-        log_best_trial(study=study, config=config)
-        logger.info(f"Sweep complete. Best trial: {study.best_trial.params}")
-        return
-
-    logger.info("Retraining two-stage pipeline with best Optuna params...")
-    acc = run_two_stage_best(config=config)
-    logger.info(f"Best-params run complete. val_acc={acc:.4f}")
+    match pipeline:
+        case "guided_vae":
+            _train_guided_vae(config=config)
+        case _:
+            raise click.BadParameter(f"Unknown pipeline: {pipeline}")
 
 
 def _train_guided_vae(config: ExperimentConfig) -> None:
     """Dispatch between sweep and best for the Guided-VAE pipeline."""
-    if config.mode == "sweep":
+    if config.sweep:
         logger.info(f"Starting Guided-VAE Optuna sweep ({config.n_trials} trials)...")
         study = run_guided_vae_hyperparameter_search(config=config)
-        log_best_trial(study=study, config=config)
+        flat_params = study.best_trial.params
+        encoder_hidden_dims = reconstruct_hidden_dims(
+            flat_params,
+            prefix="enc",
+            width_choices=VAE_HIDDEN_DIM_CHOICES,
+        )
+        nz = reconstruct_guided_vae_nz(flat_params, encoder_hidden_dims)
+        supervised_dim = flat_params["supervised_dim"]
+        log_best_trial(
+            study=study,
+            config=config,
+            additional_params={
+                "encoder_hidden_dims": str(encoder_hidden_dims),
+                "latent_dim": nz,
+                "supervised_dim": supervised_dim,
+            },
+        )
         logger.info(f"Guided-VAE sweep complete. Best trial: {study.best_trial.params}")
         return
 

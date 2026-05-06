@@ -18,9 +18,14 @@ Install:
                 scikit-learn POT matplotlib numpy scipy umap-learn
 """
 
+import argparse
+import json
 import os
+import re
+import sys
 import warnings
 from functools import partial
+from pathlib import Path
 
 import matplotlib.gridspec as gridspec
 import matplotlib.patheffects as pe
@@ -44,9 +49,17 @@ from ray.tune.schedulers import ASHAScheduler
 from ray.tune.search.optuna import OptunaSearch
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from sklearn.neighbors import KernelDensity, kneighbors_graph
+from sklearn.neighbors import KernelDensity, NearestNeighbors, kneighbors_graph
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
+
+try:
+    from openTSNE import TSNE as OpenTSNE
+
+    HAS_OPENTSNE = True
+except Exception:
+    OpenTSNE = None
+    HAS_OPENTSNE = False
 
 warnings.filterwarnings("ignore")
 HAS_UMAP = True
@@ -55,34 +68,45 @@ HAS_UMAP = True
 # CONFIGURATION
 # ══════════════════════════════════════════════════════════════
 
-INPUT_DIM = 80
-N_SAMPLES = 10000
+INPUT_DIM = 203
 SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path and SRC_ROOT.exists():
+    sys.path.insert(0, str(SRC_ROOT))
+
+# Real dataset settings
+DATA_CACHE_PATH = PROJECT_ROOT / "data" / "cached_dataset_rich_sc2egset.pt"
+# "diff"   -> player0 - player1  (203 dims for rich transform)
+# "concat" -> [player0, player1]  (406 dims for rich transform)
+PLAYER_REPRESENTATION = "diff"
 
 # Provide real names here — must be length INPUT_DIM
 FEATURE_NAMES = [f"feature_{i:02d}" for i in range(INPUT_DIM)]
 
-FINAL_EPOCHS = 500
+FINAL_EPOCHS = 5
 
-TUNE_NUM_SAMPLES = 30
-TUNE_MAX_EPOCHS = 80
-TUNE_GRACE_PERIOD = 10
+TUNE_NUM_SAMPLES = 2
+TUNE_MAX_EPOCHS = 5
+TUNE_GRACE_PERIOD = 2
 
 OT_REG = 0.0
-GRAD_STEPS = 500
+GRAD_STEPS = 1000
 GRAD_LR = 0.02
-GRAD_MOMENTUM = 0.9
+GRAD_MOMENTUM = 1.0
 GRAD_DENSITY_WEIGHT = 0.3
 GRAD_KDE_BW = 0.5
 GEODESIC_K = 12
 N_WAYPOINTS = 10
+TSNE_MAX_SAMPLES = 5000
 
-MLFLOW_EXPERIMENT = "latent_vae_search"
-TUNE_LOG_DIR = os.path.join(os.getcwd(), "ray_results")  # trial logs
-RAY_TEMP_DIR = os.path.join(os.getcwd(), "ray_tmp")  # session/actor temp files
-os.makedirs("plots", exist_ok=True)
-os.makedirs("mlruns", exist_ok=True)
+MLFLOW_EXPERIMENT = "1latent_vae_search"
+TUNE_LOG_DIR = str(PROJECT_ROOT / "ray_results")  # trial logs
+RAY_TEMP_DIR = str(PROJECT_ROOT / "ray_tmp")  # session/actor temp files
+DEFAULT_MODEL_PATH = PROJECT_ROOT / "output" / "final_model.pth"
+os.makedirs(PROJECT_ROOT / "plots", exist_ok=True)
+os.makedirs(PROJECT_ROOT / "mlruns", exist_ok=True)
 os.makedirs(TUNE_LOG_DIR, exist_ok=True)
 os.makedirs(RAY_TEMP_DIR, exist_ok=True)
 
@@ -98,26 +122,74 @@ def set_seed(seed=SEED):
     pl.seed_everything(seed, workers=True)
 
 
-def make_data(n=N_SAMPLES, input_dim=INPUT_DIM):
-    offset = np.random.choice([-1, 1], size=input_dim) * np.linspace(
-        1.5, 2.5, input_dim
+def _build_feature_names(input_dim: int, mode: str) -> list[str]:
+    if mode == "diff":
+        prefix = "p0_minus_p1"
+    elif mode == "concat":
+        prefix = "p0_p1_concat"
+    else:
+        prefix = "feature"
+    return [f"{prefix}_{i:03d}" for i in range(input_dim)]
+
+
+def _project_player_features(X: np.ndarray, mode: str) -> np.ndarray:
+    """
+    Convert [N, 2, F] player features into [N, D] model inputs.
+    """
+    if X.ndim != 3 or X.shape[1] != 2:
+        raise ValueError(
+            f"Expected cached features with shape [N, 2, F], got {tuple(X.shape)}"
+        )
+
+    if mode == "diff":
+        return (X[:, 0, :] - X[:, 1, :]).astype(np.float32)
+    if mode == "concat":
+        return X.reshape(X.shape[0], -1).astype(np.float32)
+
+    raise ValueError(
+        f"Unsupported PLAYER_REPRESENTATION='{mode}'. Use 'diff' or 'concat'."
     )
-    X_loss = np.random.randn(n // 2, input_dim) + (-offset)
-    X_win = np.random.randn(n // 2, input_dim) + (offset)
-    X = np.vstack([X_loss, X_win]).astype(np.float32)
-    y = np.array([0] * (n // 2) + [1] * (n // 2), dtype=np.float32)
-    idx = np.random.permutation(len(X))
-    return X[idx], y[idx]
 
 
-def prepare_data(input_dim=INPUT_DIM):
+def prepare_data(cache_path=DATA_CACHE_PATH, representation=PLAYER_REPRESENTATION):
     set_seed()
-    X_all, y_all = make_data(input_dim=input_dim)
-    scaler = StandardScaler().fit(X_all)
-    X_scaled = scaler.transform(X_all).astype(np.float32)
-    X_train, y_train = X_scaled[:-150], y_all[:-150]
-    X_val, y_val = X_scaled[-300:-150], y_all[-300:-150]
-    X_test, y_test = X_scaled[-150:], y_all[-150:]
+
+    if not cache_path.exists():
+        raise FileNotFoundError(
+            f"Cached dataset not found at '{cache_path}'. "
+            "Generate it first (src/latent_trainer/features/main.py)."
+        )
+
+    cached = torch.load(cache_path, weights_only=True)
+    X_train_raw = cached["train_features"].float().cpu().numpy()
+    y_train = cached["train_labels"].float().cpu().numpy()
+    X_val_raw = cached["val_features"].float().cpu().numpy()
+    y_val = cached["val_labels"].float().cpu().numpy()
+    X_test_raw = cached["test_features"].float().cpu().numpy()
+    y_test = cached["test_labels"].float().cpu().numpy()
+
+    X_train_flat = _project_player_features(X_train_raw, representation)
+    X_val_flat = _project_player_features(X_val_raw, representation)
+    X_test_flat = _project_player_features(X_test_raw, representation)
+
+    scaler = StandardScaler().fit(X_train_flat)
+    X_train = scaler.transform(X_train_flat).astype(np.float32)
+    X_val = scaler.transform(X_val_flat).astype(np.float32)
+    X_test = scaler.transform(X_test_flat).astype(np.float32)
+
+    # Keep labels in float32 for BCE loss.
+    y_train = y_train.astype(np.float32)
+    y_val = y_val.astype(np.float32)
+    y_test = y_test.astype(np.float32)
+
+    global FEATURE_NAMES
+    FEATURE_NAMES = _build_feature_names(X_train.shape[1], representation)
+
+    print(
+        f"Loaded cached dataset from '{cache_path}' | rep='{representation}' | "
+        f"train={X_train.shape}, val={X_val.shape}, test={X_test.shape}"
+    )
+
     return X_train, y_train, X_val, y_val, X_test, y_test, scaler
 
 
@@ -441,11 +513,22 @@ SEARCH_SPACE = {
 }
 
 
-def _train_tune(config, X_train, y_train, X_val, y_val):
+def _train_tune(
+    config,
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    parent_run_id=None,
+    tracking_uri=None,
+):
     """
-    Single Ray Tune trial.  Every trial is logged to MLflow as a nested
-    child run under the parent "hparam_search" run, so all 30 trials are
-    visible in the MLflow UI grouped under one parent.
+    Single Ray Tune trial, runs in a separate Ray worker process.
+
+    parent_run_id is passed explicitly from the main process because
+    Ray workers have their own MLflow context — they cannot see any
+    run that was started in the driver process.  We re-open the parent
+    run here (nested=True) so the trial appears as a child in the UI.
     """
     dm = LatentDataModule(
         X_train, y_train, X_val, y_val, batch_size=config["batch_size"], num_workers=0
@@ -455,19 +538,29 @@ def _train_tune(config, X_train, y_train, X_val, y_val):
         {"val_loss": "val_loss", "val_acc": "val_acc"}, on="validation_end"
     )
 
-    # Each trial gets its own nested MLflow run so every config + metric
-    # is queryable from the UI without leaving Ray's log directory
+    # Re-establish MLflow context in this worker process
+    # We must set the URI explicitly because Ray changes the working directory
+    if tracking_uri is not None:
+        mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
-    with mlflow.start_run(run_name="tune_trial", nested=True):
-        # Log the architecture + training hyperparams for this trial
+
+    # Open a child run.  If we have the parent id we attach to it so the
+    # trial shows as nested; otherwise fall back to a flat top-level run.
+    run_kwargs = dict(run_name="tune_trial")
+
+    with mlflow.start_run(**run_kwargs) as trial_run:
         mlflow.log_params(
             {k: v for k, v in config.items() if k not in ("input_dim", "epochs")}
         )
+        # Tag the run so we know it belongs to the sweep, even without nesting
+        if parent_run_id:
+            mlflow.set_tag("parent_run_id", parent_run_id)
 
-        # Wrap the Lightning logger so per-epoch metrics stream to MLflow
+        # PASS tracking_uri EXPLICITLY to the logger
         mlf_logger = MLFlowLogger(
             experiment_name=MLFLOW_EXPERIMENT,
-            run_id=mlflow.active_run().info.run_id,
+            run_id=trial_run.info.run_id,
+            tracking_uri=tracking_uri,
         )
 
         trainer = pl.Trainer(
@@ -476,21 +569,17 @@ def _train_tune(config, X_train, y_train, X_val, y_val):
             devices=1,
             enable_progress_bar=False,
             enable_model_summary=False,
-            logger=mlf_logger,  # ← streams val_loss/val_acc per epoch
+            enable_checkpointing=False,
+            logger=mlf_logger,
             callbacks=[tune_cb],
         )
         trainer.fit(model, dm)
 
-        # Log the final val metrics explicitly so they show in the run list
-        last = tune_cb._metrics if hasattr(tune_cb, "_metrics") else {}
-        for k, v in last.items():
-            try:
-                mlflow.log_metric(f"final_{k}", float(v))
-            except Exception:
-                pass
 
+def run_hyperparameter_search(X_train, y_train, X_val, y_val, tracking_uri=None):
+    if tracking_uri is not None:
+        mlflow.set_tracking_uri(tracking_uri)
 
-def run_hyperparameter_search(X_train, y_train, X_val, y_val):
     print("=" * 60)
     print("HPARAM SEARCH  —  Ray Tune + Optuna")
     print(f"  Trials : {TUNE_NUM_SAMPLES}   Max epochs/trial : {TUNE_MAX_EPOCHS}")
@@ -511,14 +600,23 @@ def run_hyperparameter_search(X_train, y_train, X_val, y_val):
         grace_period=TUNE_GRACE_PERIOD,
         reduction_factor=2,
     )
-    train_fn = partial(
-        _train_tune, X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val
-    )
-
     # All 30 trials are nested under this parent run in the MLflow UI —
     # expand it to compare every trial side by side
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
     with mlflow.start_run(run_name="hparam_search") as search_run:
+        # Capture the run_id NOW, before spawning any Ray workers.
+        # Workers run in separate processes and cannot see this run
+        # unless we pass the id to them explicitly via partial().
+        parent_run_id = search_run.info.run_id
+        train_fn = partial(
+            _train_tune,
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            parent_run_id=parent_run_id,
+            tracking_uri=tracking_uri,
+        )
         mlflow.log_params(
             {
                 "tune_num_samples": TUNE_NUM_SAMPLES,
@@ -583,7 +681,10 @@ def run_hyperparameter_search(X_train, y_train, X_val, y_val):
 # ══════════════════════════════════════════════════════════════
 
 
-def train_final_model(config, X_train, y_train, X_val, y_val):
+def train_final_model(config, X_train, y_train, X_val, y_val, tracking_uri=None):
+    if tracking_uri is not None:
+        mlflow.set_tracking_uri(tracking_uri)
+
     config = {**config, "epochs": FINAL_EPOCHS}
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
 
@@ -592,7 +693,9 @@ def train_final_model(config, X_train, y_train, X_val, y_val):
             {k: v for k, v in config.items() if k not in ("input_dim", "epochs")}
         )
         mlf_logger = MLFlowLogger(
-            experiment_name=MLFLOW_EXPERIMENT, run_id=run.info.run_id
+            experiment_name=MLFLOW_EXPERIMENT,
+            run_id=run.info.run_id,
+            tracking_uri=tracking_uri,
         )
         dm = LatentDataModule(
             X_train,
@@ -652,6 +755,32 @@ def embed_training_data(model, X_train, y_train):
     with torch.no_grad():
         Z_train = model.embed(torch.tensor(X_train).to(DEVICE)).cpu().numpy()
     return Z_train, Z_train[y_train == 1], Z_train[y_train == 0]
+
+
+def report_latent_health(Z_train: np.ndarray, label: str = "train") -> None:
+    """Print compact latent-space diagnostics and warn on collapse."""
+    if Z_train.size == 0:
+        warnings.warn("Latent health check skipped: empty latent array.")
+        return
+
+    dim_std = np.std(Z_train, axis=0)
+    overall_std = float(np.std(Z_train))
+    active_dims = int((dim_std > 1e-8).sum())
+    total_dims = int(dim_std.shape[0])
+
+    print("=" * 60)
+    print(f"Latent health check ({label})")
+    print("=" * 60)
+    print(
+        f"  overall std : {overall_std:.6e} | active dims : {active_dims}/{total_dims} "
+        f"| dim-std min/med/max : {dim_std.min():.3e}/{np.median(dim_std):.3e}/{dim_std.max():.3e}"
+    )
+
+    if overall_std < 1e-3 or active_dims < max(2, int(0.05 * total_dims)):
+        warnings.warn(
+            "Latent space appears collapsed (very low variance). "
+            "Counterfactual paths and feature deltas may be near-constant."
+        )
 
 
 def pick_subject(model, X_test, y_test):
@@ -797,6 +926,191 @@ def decode_path(model, path_z):
         x_hat = model.decode(zt).cpu().numpy()
         p_vals = model.p_win(zt).cpu().numpy().squeeze()
     return x_hat, p_vals
+
+
+def _maybe_log_artifact(path: str) -> None:
+    """Log artifact only when an MLflow run is active."""
+    if mlflow.active_run() is not None:
+        mlflow.log_artifact(path)
+
+
+def _load_model_config(config_path, checkpoint_obj, input_dim: int) -> dict:
+    if config_path is not None:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["input_dim"] = int(input_dim)
+        return cfg
+
+    if isinstance(checkpoint_obj, dict):
+        hp = checkpoint_obj.get("hyper_parameters", None)
+        if isinstance(hp, dict):
+            cfg = hp.get("config", hp)
+            if isinstance(cfg, dict) and "latent_dim" in cfg:
+                cfg = dict(cfg)
+                cfg["input_dim"] = int(input_dim)
+                return cfg
+
+    raise ValueError(
+        "Could not infer model config. Provide --config-path to a JSON config used for training."
+    )
+
+
+class LegacyGuidedModelAdapter(nn.Module):
+    """Adapter exposing embed/decode/p_win/logit_win for legacy guided-VAE weights."""
+
+    def __init__(self, vae_model: nn.Module, classifier: nn.Module, latent_dim: int):
+        super().__init__()
+        self.vae_model = vae_model
+        self.classifier = classifier
+        self.config = {"latent_dim": int(latent_dim)}
+
+    @torch.no_grad()
+    def embed(self, x):
+        mu, _ = self.vae_model.encode(x)
+        return mu
+
+    @torch.no_grad()
+    def decode(self, z):
+        return self.vae_model.decode(z)
+
+    def p_win(self, z):
+        z_slice = z[:, 1:] if z.dim() == 2 else z[:, :, 1:]
+        return self.classifier(z_slice)
+
+    def logit_win(self, z):
+        # Classifier outputs probabilities; convert to logits for gradient ascent.
+        p = self.p_win(z)
+        p = torch.clamp(p, 1e-6, 1.0 - 1e-6)
+        return torch.log(p / (1.0 - p))
+
+
+def _extract_legacy_bundle_from_lit_guided_checkpoint(ckpt: dict) -> dict | None:
+    """
+    Convert LitGuidedVAE Lightning checkpoint payload into legacy bundle keys.
+    """
+    if not isinstance(ckpt, dict) or "state_dict" not in ckpt:
+        return None
+
+    hp = ckpt.get("hyper_parameters", None)
+    if not isinstance(hp, dict) or "n_vae_dis" not in hp:
+        return None
+
+    state_dict = ckpt.get("state_dict", None)
+    if not isinstance(state_dict, dict):
+        return None
+
+    model_sd = {}
+    cls_sd = {}
+    for k, v in state_dict.items():
+        if k.startswith("model."):
+            model_sd[k[len("model.") :]] = v
+        elif k.startswith("classifier."):
+            cls_sd[k[len("classifier.") :]] = v
+
+    if not model_sd or not cls_sd:
+        return None
+
+    return {
+        "model_state_dict": model_sd,
+        "classifier_state_dict": cls_sd,
+    }
+
+
+def _build_legacy_adapter_from_bundle(
+    bundle: dict, input_dim: int
+) -> LegacyGuidedModelAdapter:
+    from latent_trainer.models.guided_vae import Classifier, suGuidedVAE
+
+    model_sd = bundle["model_state_dict"]
+    cls_sd = bundle["classifier_state_dict"]
+
+    encoder_weight_items = []
+    for k, v in model_sd.items():
+        m = re.match(r"encoder\.(\d+)\.weight$", k)
+        if m is not None and getattr(v, "ndim", 0) == 2:
+            encoder_weight_items.append((int(m.group(1)), v))
+    encoder_weight_items.sort(key=lambda x: x[0])
+
+    if len(encoder_weight_items) < 2:
+        raise ValueError(
+            "Legacy model_state_dict does not contain expected encoder layers."
+        )
+
+    out_dims = [int(w.shape[0]) for _, w in encoder_weight_items]
+    inferred_input_dim = int(encoder_weight_items[0][1].shape[1])
+    if inferred_input_dim != int(input_dim):
+        raise ValueError(
+            f"Input dim mismatch: data has {input_dim}, legacy model expects {inferred_input_dim}."
+        )
+
+    latent_dim_times_2 = out_dims[-1]
+    if latent_dim_times_2 % 2 != 0:
+        raise ValueError(
+            "Legacy encoder output is not divisible by 2 (mu/logvar split failed)."
+        )
+    latent_dim = latent_dim_times_2 // 2
+    hidden_dims = out_dims[:-1]
+
+    vae_model = suGuidedVAE(
+        n_vae_dis=latent_dim,
+        input_dim=inferred_input_dim,
+        encoder_hidden_dims=hidden_dims,
+    )
+    classifier = Classifier(n_vae_dis=latent_dim)
+
+    vae_model.load_state_dict(model_sd, strict=True)
+    classifier.load_state_dict(cls_sd, strict=True)
+
+    adapter = LegacyGuidedModelAdapter(
+        vae_model=vae_model, classifier=classifier, latent_dim=latent_dim
+    )
+    adapter.to(DEVICE)
+    adapter.eval()
+    return adapter
+
+
+def load_saved_model(model_path, input_dim: int, config_path=None):
+    """
+    Load a trained VAE model from checkpoint-like .pth/.ckpt files or raw state_dict files.
+    """
+    model_path = Path(model_path)
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+
+    ckpt = torch.load(model_path, map_location=DEVICE)
+
+    if isinstance(ckpt, VAEClassifierLightning):
+        model = ckpt
+        model.to(DEVICE)
+        model.eval()
+        return model
+
+    if (
+        isinstance(ckpt, dict)
+        and "model_state_dict" in ckpt
+        and "classifier_state_dict" in ckpt
+    ):
+        return _build_legacy_adapter_from_bundle(ckpt, input_dim=input_dim)
+
+    lit_guided_bundle = _extract_legacy_bundle_from_lit_guided_checkpoint(ckpt)
+    if lit_guided_bundle is not None:
+        return _build_legacy_adapter_from_bundle(lit_guided_bundle, input_dim=input_dim)
+
+    config = _load_model_config(config_path, ckpt, input_dim=input_dim)
+    model = VAEClassifierLightning(config)
+
+    if isinstance(ckpt, dict) and "state_dict" in ckpt:
+        model.load_state_dict(ckpt["state_dict"], strict=True)
+    elif isinstance(ckpt, dict):
+        model.load_state_dict(ckpt, strict=True)
+    else:
+        raise ValueError(
+            "Unsupported model format. Expected Lightning checkpoint dict or raw state_dict dict."
+        )
+
+    model.to(DEVICE)
+    model.eval()
+    return model
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1051,11 +1365,11 @@ def visualise_feedback(all_feedback: dict, out_prefix="latent_paths"):
             y=0.97,
         )
 
-        out = f"plots/{out_prefix}_feedback_{method_name}.png"
+        out = str(PROJECT_ROOT / "plots" / f"{out_prefix}_feedback_{method_name}.png")
         fig.savefig(out, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close(fig)
         print(f"  Saved → {out}")
-        mlflow.log_artifact(out)
+        _maybe_log_artifact(out)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1071,34 +1385,67 @@ def fit_projections(Z_train):
     projections["_pca_obj"] = pca
 
     print("  Fitting t-SNE …", flush=True)
-    tsne_full = TSNE(
-        n_components=2,
-        perplexity=min(30, len(Z_train) // 4),
-        random_state=SEED,
-        max_iter=600,
-        init="pca",
-        learning_rate="auto",
-    ).fit_transform(Z_train)
-    projections["_tsne_train"] = tsne_full
+    if len(Z_train) > TSNE_MAX_SAMPLES:
+        rng = np.random.default_rng(SEED)
+        tsne_ref_idx = np.sort(
+            rng.choice(len(Z_train), size=TSNE_MAX_SAMPLES, replace=False)
+        )
+    else:
+        tsne_ref_idx = np.arange(len(Z_train))
+
+    Z_tsne_ref = np.asarray(Z_train[tsne_ref_idx], dtype=np.float64)
+    perplexity = max(5, min(30, len(Z_tsne_ref) // 4))
+
+    if HAS_OPENTSNE:
+        tsne_ref = np.asarray(
+            OpenTSNE(
+                n_components=2,
+                perplexity=perplexity,
+                initialization="pca",
+                random_state=SEED,
+                n_jobs=1,
+                verbose=False,
+            ).fit(Z_tsne_ref)
+        )
+    else:
+        tsne_ref = TSNE(
+            n_components=2,
+            perplexity=perplexity,
+            random_state=SEED,
+            max_iter=600,
+            init="pca",
+            learning_rate="auto",
+        ).fit_transform(Z_tsne_ref)
+    projections["_tsne_train"] = tsne_ref
+    tsne_nn = NearestNeighbors(n_neighbors=1)
+    tsne_nn.fit(Z_tsne_ref)
 
     def tsne_project(Z_query):
-        dists = np.linalg.norm(Z_train[:, None] - Z_query[None], axis=2)
-        return tsne_full[dists.argmin(axis=0)]
+        Z_query = np.asarray(Z_query, dtype=np.float64)
+        idx = tsne_nn.kneighbors(Z_query, return_distance=False).squeeze(axis=1)
+        return tsne_ref[idx]
 
     projections["tSNE"] = tsne_project
 
     if HAS_UMAP:
         print("  Fitting UMAP …", flush=True)
-        reducer = umap.UMAP(
-            n_components=2,
-            n_neighbors=15,
-            min_dist=0.1,
-            random_state=SEED,
-            verbose=False,
-        )
-        reducer.fit(Z_train)
-        projections["_umap_train"] = reducer.transform(Z_train)
-        projections["UMAP"] = reducer.transform
+        try:
+            reducer = umap.UMAP(
+                n_components=2,
+                n_neighbors=15,
+                min_dist=0.1,
+                random_state=SEED,
+                verbose=False,
+            )
+            reducer.fit(Z_train)
+            projections["_umap_train"] = reducer.transform(Z_train)
+            projections["UMAP"] = reducer.transform
+        except Exception as e:
+            warnings.warn(
+                "UMAP fit failed; continuing with PCA and t-SNE only. "
+                f"Reason: {type(e).__name__}: {e}"
+            )
+            projections["UMAP"] = None
     else:
         projections["UMAP"] = None
 
@@ -1286,11 +1633,11 @@ def visualise_all(
         y=1.01,
     )
     fig1.tight_layout()
-    out1 = f"plots/{out_prefix}_projections.png"
+    out1 = str(PROJECT_ROOT / "plots" / f"{out_prefix}_projections.png")
     fig1.savefig(out1, dpi=150, bbox_inches="tight", facecolor=fig1.get_facecolor())
     plt.close(fig1)
     print(f"  Saved → {out1}")
-    mlflow.log_artifact(out1)
+    _maybe_log_artifact(out1)
 
     fig2 = plt.figure(figsize=(6 * n_methods, 10))
     fig2.patch.set_facecolor("#0D1117")
@@ -1399,11 +1746,104 @@ def visualise_all(
         fontweight="bold",
         y=0.97,
     )
-    out2 = f"plots/{out_prefix}_analytics.png"
+    out2 = str(PROJECT_ROOT / "plots" / f"{out_prefix}_analytics.png")
     fig2.savefig(out2, dpi=150, bbox_inches="tight", facecolor=fig2.get_facecolor())
     plt.close(fig2)
     print(f"  Saved → {out2}")
-    mlflow.log_artifact(out2)
+    _maybe_log_artifact(out2)
+
+
+def run_charts_only(
+    model_path=DEFAULT_MODEL_PATH, config_path=None, out_prefix="latent_paths"
+):
+    """
+    Generate latent travel charts using an already trained model.
+    This skips hyperparameter search and final training.
+    """
+    X_train, y_train, X_val, y_val, X_test, y_test, scaler = prepare_data()
+    input_dim = X_train.shape[1]
+
+    print(f"\n{'═' * 60}")
+    print(f"  Latent travel charts from saved model  ·  input={input_dim}d")
+    print(f"  Model path : {Path(model_path)}")
+    print(f"{'═' * 60}\n")
+
+    model = load_saved_model(model_path, input_dim=input_dim, config_path=config_path)
+    latent_dim = int(model.config["latent_dim"])
+
+    Z_train, Z_win, Z_loss = embed_training_data(model, X_train, y_train)
+    report_latent_health(Z_train, label="charts_only")
+    z_new, _ = pick_subject(model, X_test, y_test)
+
+    print("=" * 60)
+    print("Fitting 2D projections")
+    print("=" * 60)
+    projections = fit_projections(Z_train)
+    print()
+
+    print("=" * 60)
+    print("Computing paths")
+    print("=" * 60)
+    path_ot = path_optimal_transport(z_new, Z_win)
+    print()
+    path_ga = path_gradient_ascent(model, z_new, Z_train)
+    print()
+    path_geo = path_geodesic(z_new, Z_win, Z_train)
+    print()
+    paths = {"ot": path_ot, "ga": path_ga, "geo": path_geo}
+
+    visualise_all(
+        Z_win,
+        Z_loss,
+        z_new,
+        paths,
+        projections,
+        model,
+        latent_dim=latent_dim,
+        out_prefix=out_prefix,
+    )
+
+    all_feedback = {}
+    for name, path_z in paths.items():
+        all_feedback[name] = generate_feedback(
+            model,
+            scaler,
+            path_z,
+            feature_names=FEATURE_NAMES,
+            top_k=5,
+            method_name=name.upper(),
+        )
+    visualise_feedback(all_feedback, out_prefix=out_prefix)
+
+    print("\nDone. Charts saved in ./plots\n")
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description="Latent travel pipeline")
+    parser.add_argument(
+        "--charts-only",
+        action="store_true",
+        help="Skip training/search and only generate charts from a saved model.",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=str(DEFAULT_MODEL_PATH),
+        help="Path to saved model (.pth/.ckpt).",
+    )
+    parser.add_argument(
+        "--config-path",
+        type=str,
+        default=None,
+        help="Optional JSON config path (required for raw state_dict files without hyperparameters).",
+    )
+    parser.add_argument(
+        "--out-prefix",
+        type=str,
+        default="latent_paths",
+        help="Prefix for generated plot filenames.",
+    )
+    return parser.parse_args()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1412,17 +1852,48 @@ def visualise_all(
 
 
 def run_pipeline():
+    X_train, y_train, X_val, y_val, X_test, y_test, scaler = prepare_data()
+    input_dim = X_train.shape[1]
+
+    # Keep Ray search-space input_dim aligned with the selected dataset representation.
+    SEARCH_SPACE["input_dim"] = input_dim
+
     print(f"\n{'═' * 60}")
-    print(f"  Latent OT Pipeline  ·  input={INPUT_DIM}d  ·  device={DEVICE}")
+    print(f"  Latent OT Pipeline  ·  input={input_dim}d  ·  device={DEVICE}")
     print(f"{'═' * 60}\n")
 
-    X_train, y_train, X_val, y_val, X_test, y_test, scaler = prepare_data()
+    # 1. Define SQLite DB path (for metrics/params)
+    db_path = PROJECT_ROOT / "mlflow.db"
+    tracking_uri = f"sqlite:///{db_path.as_posix()}"
 
-    best_config, analysis = run_hyperparameter_search(X_train, y_train, X_val, y_val)
-    model = train_final_model(best_config, X_train, y_train, X_val, y_val)
+    # Keep fluent MLflow API and Lightning MLFlowLogger on the same backend.
+    mlflow.set_tracking_uri(tracking_uri)
+
+    # Defensive cleanup in case a previous failed run left an active context.
+    if mlflow.active_run() is not None:
+        mlflow.end_run()
+
+    print(f"  Tracking URI : {tracking_uri}")
+
+    best_config, analysis = run_hyperparameter_search(
+        X_train,
+        y_train,
+        X_val,
+        y_val,
+        tracking_uri=tracking_uri,
+    )
+    model = train_final_model(
+        best_config,
+        X_train,
+        y_train,
+        X_val,
+        y_val,
+        tracking_uri=tracking_uri,
+    )
     latent_dim = best_config["latent_dim"]
 
     Z_train, Z_win, Z_loss = embed_training_data(model, X_train, y_train)
+    report_latent_health(Z_train, label="pipeline")
     z_new, x_new_raw = pick_subject(model, X_test, y_test)
 
     print("=" * 60)
@@ -1504,4 +1975,12 @@ def run_pipeline():
 
 
 if __name__ == "__main__":
-    run_pipeline()
+    args = _parse_args()
+    if args.charts_only:
+        run_charts_only(
+            model_path=args.model_path,
+            config_path=args.config_path,
+            out_prefix=args.out_prefix,
+        )
+    else:
+        run_pipeline()

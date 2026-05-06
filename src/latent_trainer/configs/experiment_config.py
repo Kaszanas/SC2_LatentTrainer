@@ -5,20 +5,11 @@ without ad-hoc dictionaries.  The unified ``train.py`` CLI populates
 this dataclass from command-line arguments and passes it to all
 downstream functions.
 
-Usage::
-
-    config = ExperimentConfig(
-        pipeline="two_stage",
-        cache_path="data/cached_dataset_rich.pt",
-        mode="sweep",
-        n_trials=30,
-    )
-    setup_mlflow(config)
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from latent_trainer.settings import DEFAULT_MLFLOW_URI
 
@@ -30,7 +21,7 @@ class ExperimentConfig:
     Parameters
     ----------
     pipeline:
-        Which training pipeline to use (``"two_stage"`` or ``"guided_vae"``).
+        Which training pipeline to use (``"guided_vae"``).
     cache_path:
         Path to the pre-processed ``.pt`` dataset cache.
     mode:
@@ -67,31 +58,58 @@ class ExperimentConfig:
     optuna_db:
         Optuna storage URL.  SQLite by default for persistence across
         restarts and for the Optuna dashboard.
-    study_name:
-        Optuna study name (used for persistence / resumption).
     """
 
-    # ── Pipeline selection ──────────────────────────────────────────
-    pipeline: str = "two_stage"
-    dataset_filename: str = "cached_dataset_rich.pt"
-    mode: str = "sweep"
+    # Pipeline selection
+    sweep: bool
+    pipeline: str = "guided_vae"
+    dataset_filename: str = "cached_dataset_rich_sc2egset.pt"
 
-    # ── MLFlow tracking ─────────────────────────────────────────────
-    experiment_name: str = "SC2_Latent_TwoStage"
+    # MLFlow tracking
     mlflow_tracking_uri: str = DEFAULT_MLFLOW_URI
+    experiment_name: str | None = None
 
-    # ── Sweep configuration ─────────────────────────────────────────
+    # Sweep configuration
     n_trials: int = 20
 
-    # ── Training defaults (overridden per-trial during sweeps) ──────
+    # Training defaults (overridden per-trial during sweeps)
+    # Two Stage:
     vae_epochs: int = 200
     cls_epochs: int = 100
-    guided_vae_epochs: int = 10
 
-    # ── Ray resource allocation ─────────────────────────────────────
-    gpus_per_trial: float = 1.0
+    # Guided VAE Max Epochs (both sweep and final training)
+    guided_vae_epochs: int = 100
+
+    # Ray resource allocation
+    # Runs 10 jobs in parallel:
+    gpus_per_trial: float = 0.1
+    # uses 2 CPUs per trial:
     cpus_per_trial: int = 2
 
-    # ── Optuna persistence ──────────────────────────────────────────
+    # Optuna persistence
     optuna_db: str = "sqlite:///optuna_study.db"
-    study_name: str = "latent_trainer_hpo"
+
+    # Early-stopping patience for HPO screening trials.
+    # Kept separate from the full-training patience (which is hardcoded in train_guided)
+    # because screening trials need more patience to warm up without wasting time.
+    hpo_early_stopping_patience: int = 15
+
+    # MLflow source for "best" mode param loading.
+    # None → uses experiment_name as source.
+    mlflow_source_experiment: str | None = None
+    # None → finds the most recent best_trial_summary run (tag source=optuna_best_trial).
+    # str  → reads params from any named run in the source experiment.
+    mlflow_source_run: str | None = None
+
+    # Explicit MLflow run name for non-sweep retraining.
+    # None → auto-generated as "{source_label}_{timestamp}".
+    run_name: str | None = None
+
+    # HPO objective: weighted sum of validation metrics.
+    # Keys must match metric names logged by LitGuidedVAE:
+    #   val_loss, val_vae_loss, val_cls_loss, val_acc
+    # Use positive weights to minimise, negative to maximise (e.g. val_acc).
+    # Default: minimise val_vae_loss only (backward-compatible).
+    hpo_objective_weights: dict[str, float] = field(
+        default_factory=lambda: {"val_vae_loss": 0.5, "val_cls_loss": 0.5}
+    )

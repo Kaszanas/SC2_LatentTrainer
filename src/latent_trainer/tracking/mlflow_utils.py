@@ -38,19 +38,26 @@ Usage::
 
 from __future__ import annotations
 
+import ast
+import getpass
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
 import mlflow
+import optuna
 from lightning.pytorch.loggers import MLFlowLogger
+from mlflow import MlflowClient
+from mlflow.utils.mlflow_tags import (
+    MLFLOW_PARENT_RUN_ID,
+    MLFLOW_RUN_NAME,
+    MLFLOW_SOURCE_NAME,
+    MLFLOW_SOURCE_TYPE,
+    MLFLOW_USER,
+)
 
-from latent_trainer.settings import DEFAULT_MLFLOW_URI
-
-if TYPE_CHECKING:
-    import optuna
-
-    from latent_trainer.configs.experiment_config import ExperimentConfig
+from latent_trainer.configs.experiment_config import ExperimentConfig
+from latent_trainer.settings import DEFAULT_MLFLOW_URI, OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -69,35 +76,6 @@ def setup_mlflow(mlflow_tracking_uri: str, experiment_name: str) -> str:
         f"MLFlow: tracking_uri={mlflow_tracking_uri}  experiment={experiment_name} (id={experiment.experiment_id})"
     )
     return experiment.experiment_id
-
-
-def create_mlflow_logger(
-    experiment_name: str,
-    run_name: str,
-    tracking_uri: str = DEFAULT_MLFLOW_URI,
-    *,
-    run_id: str | None = None,
-) -> MLFlowLogger:
-    """Create a Lightning ``MLFlowLogger`` instance.
-
-    Parameters
-    ----------
-    experiment_name:
-        MLFlow experiment name.
-    run_name:
-        Human-readable name for this run (e.g. ``"trial_3_stage1_vae"``).
-    tracking_uri:
-        MLFlow tracking URI.  Defaults to the project-wide SQLite URI.
-    run_id:
-        If provided, attach the logger to an *existing* MLFlow run
-        (e.g. a parent run opened with ``mlflow.start_run()``).
-    """
-    return MLFlowLogger(
-        experiment_name=experiment_name,
-        run_name=run_name,
-        tracking_uri=tracking_uri,
-        run_id=run_id,
-    )
 
 
 # ------------------------------------------------------------------
@@ -151,6 +129,36 @@ def start_parent_run(
     return active_run
 
 
+def create_mlflow_logger(
+    experiment_name: str,
+    run_name: str,
+    tracking_uri: str = DEFAULT_MLFLOW_URI,
+    *,
+    run_id: str | None = None,
+) -> MLFlowLogger:
+    """Create a Lightning ``MLFlowLogger`` instance.
+
+    Parameters
+    ----------
+    experiment_name:
+        MLFlow experiment name.
+    run_name:
+        Human-readable name for this run (e.g. ``"trial_3_stage1_vae"``).
+    tracking_uri:
+        MLFlow tracking URI.  Defaults to the project-wide SQLite URI.
+    run_id:
+        If provided, attach the logger to an *existing* MLFlow run
+        (e.g. a parent run opened with ``mlflow.start_run()``).
+    """
+    return MLFlowLogger(
+        experiment_name=experiment_name,
+        run_name=run_name,
+        tracking_uri=tracking_uri,
+        run_id=run_id,
+        artifact_location=str(OUTPUT_DIR / "mlruns"),
+    )
+
+
 def create_child_mlflow_logger(
     experiment_name: str,
     run_name: str,
@@ -176,20 +184,34 @@ def create_child_mlflow_logger(
     params:
         Optional dict of params to log on this child run.
     """
-    mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(experiment_name)
+    client = MlflowClient(tracking_uri=tracking_uri)
+    experiment = client.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        experiment_id = client.create_experiment(experiment_name)
+    else:
+        experiment_id = experiment.experiment_id
 
-    child_run = mlflow.start_run(run_name=run_name, nested=True)
-    child_run_id = child_run.info.run_id
-    mlflow.set_tag("mlflow.parentRunId", parent_run_id)
+    tags = {
+        MLFLOW_PARENT_RUN_ID: parent_run_id,
+        MLFLOW_RUN_NAME: run_name,
+        MLFLOW_USER: getpass.getuser(),
+        MLFLOW_SOURCE_TYPE: "LOCAL",
+        MLFLOW_SOURCE_NAME: "train.py",
+    }
+    run = client.create_run(experiment_id=experiment_id, run_name=run_name, tags=tags)
+    child_run_id = run.info.run_id
+
     if params:
-        mlflow.log_params(params)
-    mlflow.end_run()  # Close the manual run; Lightning logger re-opens via run_id
+        client.log_batch(
+            child_run_id,
+            params=[mlflow.entities.Param(k, str(v)) for k, v in params.items()],
+        )
 
     return MLFlowLogger(
         experiment_name=experiment_name,
         run_id=child_run_id,
         tracking_uri=tracking_uri,
+        artifact_location=str(OUTPUT_DIR / "mlruns"),
     )
 
 
@@ -217,7 +239,7 @@ def log_checkpoint_artifacts(
     """
     mlflow.set_tracking_uri(tracking_uri)
     if checkpoint_dir.exists():
-        mlflow.log_artifacts(str(checkpoint_dir), artifact_path="checkpoints")
+        mlflow.log_artifacts(local_dir=str(checkpoint_dir))
         logger.info(f"MLFlow: logged checkpoints from {checkpoint_dir}")
     else:
         logger.warning(
@@ -225,7 +247,11 @@ def log_checkpoint_artifacts(
         )
 
 
-def log_best_trial(study: optuna.Study, config: ExperimentConfig) -> None:
+def log_best_trial(
+    study: optuna.Study,
+    config: ExperimentConfig,
+    additional_params: dict | None = None,
+) -> None:
     """Log the best Optuna trial as a dedicated MLFlow run.
 
     This creates a summary run containing the best hyperparameters and
@@ -237,6 +263,9 @@ def log_best_trial(study: optuna.Study, config: ExperimentConfig) -> None:
 
     with mlflow.start_run(run_name="best_trial_summary"):
         mlflow.log_params(best.params)
+        if additional_params:
+            mlflow.log_params(additional_params)
+
         mlflow.log_metric("best_val_metric", best.value)
         mlflow.log_metric("best_trial_number", best.number)
         mlflow.set_tag("source", "optuna_best_trial")
@@ -244,3 +273,123 @@ def log_best_trial(study: optuna.Study, config: ExperimentConfig) -> None:
     logger.info(
         f"MLFlow: logged best trial #{best.number} (value={best.value:.4f}) as summary run"
     )
+
+
+def log_artifact(
+    checkpoint_dir: Path,
+    mlflow_logger: MLFlowLogger,
+    model_path: Path,
+):
+
+    if not mlflow_logger.run_id:
+        raise ValueError("MLFlow logger must have an active run_id to log artifacts")
+
+    # Log checkpoints as MLFlow artifacts
+    mlflow.set_tracking_uri(mlflow_logger._tracking_uri)
+    with mlflow.start_run(run_id=mlflow_logger.run_id):
+        log_checkpoint_artifacts(
+            checkpoint_dir=checkpoint_dir,
+            tracking_uri=mlflow_logger._tracking_uri,
+        )
+        mlflow.log_artifact(local_path=model_path)
+
+    logger.info(f"Training complete.  Model saved to {str(model_path)}")
+
+
+# ---------------------------------------------------------------------------
+# MLflow-based param loading for guided-VAE retraining
+# ---------------------------------------------------------------------------
+
+_GUIDED_VAE_PARAM_TYPES: dict[str, type] = {
+    "latent_dim":            int,
+    "supervised_dim":        int,
+    "batch_size":            int,
+    "encoder_hidden_dims":   list,
+    "classification_weight": float,
+    "learning_rate":         float,
+    "learning_rate_cls":     float,
+    "weight_decay":          float,
+    "weight_decay_cls":      float,
+}
+
+
+def _coerce_guided_vae_params(raw: dict[str, str]) -> dict[str, Any]:
+    """Coerce string-valued MLflow params to Python types."""
+    result: dict[str, Any] = {}
+    for key, raw_val in raw.items():
+        t = _GUIDED_VAE_PARAM_TYPES[key]
+        result[key] = ast.literal_eval(raw_val) if t is list else t(raw_val)
+    return result
+
+
+def load_guided_vae_params_from_mlflow(
+    experiment_name: str,
+    run_name: str | None = None,
+    tracking_uri: str = DEFAULT_MLFLOW_URI,
+) -> dict[str, Any]:
+    """Load GuidedVAE training params from MLflow.
+
+    Parameters
+    ----------
+    experiment_name:
+        MLflow experiment to search in.
+    run_name:
+        ``None`` → finds the most recent run tagged
+        ``source=optuna_best_trial`` (created by :func:`log_best_trial`).
+        ``str`` → finds any run with that ``mlflow.runName`` tag.
+    tracking_uri:
+        MLflow tracking URI.
+
+    Returns
+    -------
+    dict[str, Any]
+        Params coerced to Python types, ready to pass to
+        :func:`~latent_trainer.models.train_guided.train_guided_pipeline`.
+
+    Raises
+    ------
+    ValueError
+        If no matching run is found or required param keys are missing.
+    """
+    client = MlflowClient(tracking_uri=tracking_uri)
+    exp = client.get_experiment_by_name(experiment_name)
+    if exp is None:
+        raise ValueError(f"MLflow experiment '{experiment_name}' not found.")
+
+    if run_name is None:
+        # Strategy A: find the best_trial_summary run (log_best_trial tags it)
+        runs = client.search_runs(
+            experiment_ids=[exp.experiment_id],
+            filter_string="tags.source = 'optuna_best_trial'",
+            order_by=["start_time DESC"],
+            max_results=1,
+        )
+        if not runs:
+            raise ValueError(
+                f"No 'optuna_best_trial' run found in experiment '{experiment_name}'. "
+                "Run a sweep first, or supply --source_run."
+            )
+    else:
+        # Strategy B: find any named run
+        runs = client.search_runs(
+            experiment_ids=[exp.experiment_id],
+            filter_string=f"tags.`mlflow.runName` = '{run_name}'",
+            order_by=["start_time DESC"],
+            max_results=1,
+        )
+        if not runs:
+            raise ValueError(
+                f"No run named '{run_name}' found in experiment '{experiment_name}'."
+            )
+
+    raw = runs[0].data.params
+    filtered = {k: v for k, v in raw.items() if k in _GUIDED_VAE_PARAM_TYPES}
+
+    missing = set(_GUIDED_VAE_PARAM_TYPES) - set(filtered)
+    if missing:
+        raise ValueError(
+            f"Run '{runs[0].info.run_name}' is missing required params: {missing}. "
+            "Is this a compatible guided-VAE run?"
+        )
+
+    return _coerce_guided_vae_params(filtered)

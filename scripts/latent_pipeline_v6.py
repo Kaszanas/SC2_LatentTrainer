@@ -45,7 +45,7 @@ from ray.tune.schedulers import ASHAScheduler
 from ray.tune.search.optuna import OptunaSearch
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from sklearn.neighbors import KernelDensity, kneighbors_graph
+from sklearn.neighbors import KernelDensity, NearestNeighbors, kneighbors_graph
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -62,7 +62,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Real dataset settings
-DATA_CACHE_PATH = PROJECT_ROOT / "data" / "cached_dataset_rich.pt"
+DATA_CACHE_PATH = PROJECT_ROOT / "data" / "cached_dataset_rich_sc2egset.pt"
 # "diff"   -> player0 - player1  (203 dims for rich transform)
 # "concat" -> [player0, player1]  (406 dims for rich transform)
 PLAYER_REPRESENTATION = "diff"
@@ -77,7 +77,7 @@ TUNE_MAX_EPOCHS = 5
 TUNE_GRACE_PERIOD = 2
 
 OT_REG = 0.0
-GRAD_STEPS = 500
+GRAD_STEPS = 100
 GRAD_LR = 0.02
 GRAD_MOMENTUM = 0.9
 GRAD_DENSITY_WEIGHT = 0.3
@@ -85,7 +85,7 @@ GRAD_KDE_BW = 0.5
 GEODESIC_K = 12
 N_WAYPOINTS = 10
 
-MLFLOW_EXPERIMENT = "latent_vae_search"
+MLFLOW_EXPERIMENT = "latent_vae_search_v2"
 TUNE_LOG_DIR = str(PROJECT_ROOT / "ray_results")  # trial logs
 RAY_TEMP_DIR = str(PROJECT_ROOT / "ray_tmp")  # session/actor temp files
 os.makedirs(PROJECT_ROOT / "plots", exist_ok=True)
@@ -1150,6 +1150,10 @@ def visualise_feedback(all_feedback: dict, out_prefix="latent_paths"):
 
 
 def fit_projections(Z_train):
+    import traceback
+
+    from scipy.spatial.distance import cdist
+
     projections = {}
     pca = PCA(n_components=2, random_state=SEED)
     pca.fit(Z_train)
@@ -1168,7 +1172,7 @@ def fit_projections(Z_train):
     projections["_tsne_train"] = tsne_full
 
     def tsne_project(Z_query):
-        dists = np.linalg.norm(Z_train[:, None] - Z_query[None], axis=2)
+        dists = cdist(Z_train, Z_query, metric="euclidean")
         return tsne_full[dists.argmin(axis=0)]
 
     projections["tSNE"] = tsne_project
@@ -1176,21 +1180,32 @@ def fit_projections(Z_train):
     if HAS_UMAP:
         print("  Fitting UMAP …", flush=True)
         try:
+            n_neighbors = min(15, max(2, len(Z_train) - 1))
+            nn_index = NearestNeighbors(n_neighbors=n_neighbors, metric="euclidean")
+            nn_index.fit(Z_train)
+            knn_dists, knn_indices = nn_index.kneighbors(Z_train)
+
             reducer = umap.UMAP(
                 n_components=2,
-                n_neighbors=15,
+                n_neighbors=n_neighbors,
                 min_dist=0.1,
                 random_state=SEED,
                 verbose=False,
+                precomputed_knn=(knn_indices, knn_dists, nn_index),
             )
-            reducer.fit(Z_train)
-            projections["_umap_train"] = reducer.transform(Z_train)
-            projections["UMAP"] = reducer.transform
-        except Exception as e:
-            warnings.warn(
-                "UMAP fit failed; continuing with PCA and t-SNE only. "
-                f"Reason: {type(e).__name__}: {e}"
-            )
+            umap_train = reducer.fit_transform(Z_train)
+            projections["_umap_train"] = umap_train
+
+            def umap_project(Z_query):
+                query_nn = NearestNeighbors(n_neighbors=1, metric="euclidean")
+                query_nn.fit(Z_train)
+                nearest_idx = query_nn.kneighbors(Z_query, return_distance=False)
+                return umap_train[nearest_idx[:, 0]]
+
+            projections["UMAP"] = umap_project
+        except Exception:
+            print("UMAP failed! Printing full traceback to diagnose:")
+            traceback.print_exc()
             projections["UMAP"] = None
     else:
         projections["UMAP"] = None

@@ -4,9 +4,10 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
+
 dependencies = [
     "click>=8.3.0",
-    "lightning>=2.5.5",
+    "lightning==2.6.1",
     "matplotlib>=3.10.7",
     "mlflow>=3.9.0",
     "numpy>=2.4.2",
@@ -20,6 +21,7 @@ dependencies = [
     "sc2-datasets",
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",
+    "shap>=0.51.0",
     "tensorboard>=2.20.0",
     "tensorboardx>=2.6.4",
     "umap-learn>=0.5.11",

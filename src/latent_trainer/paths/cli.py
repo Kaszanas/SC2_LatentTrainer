@@ -1,83 +1,33 @@
-# ---------------------------------------------------------------------------
-# CLI group + sub-commands
-# ---------------------------------------------------------------------------
 from functools import partial
+from pathlib import Path
 
 import click
+import numpy as np
 import torch
 
 from latent_trainer.paths.data import (
-    encode_player,
-    load_model_and_data,
+    compute_win_latents,
+    get_supervised_dim,
     nearest_winning_target,
     opponent_aware_logit,
     opponent_aware_score,
+    prepare_path_context,
+)
+from latent_trainer.paths.flow import LitOTFlowMatching
+from latent_trainer.paths.options import (
+    global_options,
 )
 from latent_trainer.paths.pipeline import run_path_charting_pipeline
 from latent_trainer.paths.strategies import path_linear
-from latent_trainer.paths.strategies.geodesic import path_geodesic
 from latent_trainer.paths.strategies.gradient_ascent import path_gradient_ascent
+from latent_trainer.paths.strategies.neural_flow import path_neural_flow
 from latent_trainer.paths.strategies.optimal_transport import path_optimal_transport
-
-_PATH_CHARTING_CLI_COMMON_OPTIONS = [
-    click.option(
-        "--model",
-        default="two_stage_model.pth",
-        show_default=True,
-        help="Filename of the trained model.",
-    ),
-    click.option(
-        "--cache",
-        default="cached_dataset_rich.pt",
-        show_default=True,
-        help="Filename of the cached dataset.",
-    ),
-    click.option(
-        "--sample-idx",
-        type=int,
-        default=None,
-        help="Dataset index of the game to analyse (default: random).",
-    ),
-    click.option(
-        "--n-steps",
-        type=int,
-        default=20,
-        show_default=True,
-        help="Number of waypoints along the path.",
-    ),
-    click.option(
-        "--top-k",
-        type=int,
-        default=10,
-        show_default=True,
-        help="Number of top features to display.",
-    ),
-]
-
-
-def global_options(fn):
-    """Decorator that attaches all global options to a sub-command."""
-    for option in reversed(_PATH_CHARTING_CLI_COMMON_OPTIONS):
-        fn = option(fn)
-    return fn
+from latent_trainer.settings import DATA_DIR
 
 
 @click.group()
 def cli() -> None:
-    """Latent-space improvement path finder for SC2 players.
-
-    Choose a sub-command for the path-finding strategy:
-
-    \b
-      linear            Linear interpolation toward centroid / k-NN target.
-      gradient-ascent   Gradient ascent with KDE density regularisation.
-      optimal-transport Wasserstein-barycentric transport into win cloud.
-      geodesic          Shortest path on a kNN latent-space graph.
-
-    Global options (--model, --cache, --sample-idx, --n-steps, --top-k)
-    must be placed BEFORE the sub-command name.
-    The losing player is detected automatically from the game label.
-    """
+    """Latent-space improvement path finder for SC2 players."""
 
 
 @cli.command("linear")
@@ -90,61 +40,68 @@ def cli() -> None:
     help="Target selection: centroid of wins or nearest k-NN mean.",
 )
 @click.option(
-    "--k-neighbours",
+    "--k_neighbours",
     type=int,
     default=5,
     show_default=True,
     help="k for nearest-neighbour target.",
 )
-def cmd_linear(model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
+def cmd_linear(
+    model_path: Path,
+    dataset_filename: str,
+    sample_idx: int | None,
+    n_steps: int,
+    top_k: int,
+    method: str,
+    k_neighbours: int,
+):
     """Linear interpolation toward a winning target."""
-
-    print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
-        model_path=model,
-        cache_path=cache,
+    path_context = prepare_path_context(
+        model_path=model_path,
+        dataset_path=DATA_DIR / dataset_filename,
+        sample_idx=sample_idx,
     )
-    labels = val_y.numpy()
-    labels_tensor = torch.tensor(labels)
-    print(f"  Validation: {len(val_X)}")
-
-    print("Encoding into latent space...")
-    latents_p0 = encode_player(vae, val_X[:, 0, :])
-    latents_p1 = encode_player(vae, val_X[:, 1, :])
-
-    # Win cloud: label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
-    win_centroid = win_latents.mean(dim=0)
-
-    n = len(labels)
-    chosen = (
-        sample_idx
-        if (sample_idx is not None and sample_idx < n)
-        else torch.randint(n, (1,)).item()
-    )
-    player_idx = int(labels[chosen])  # 0 if p0 lost, 1 if p1 lost
-    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
-    print(
-        f"  Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
+    win_latents = compute_win_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
     )
 
-    if method == "centroid":
-        target_z = win_centroid.numpy()
-        print("  Target: centroid")
-    else:
-        target_z = nearest_winning_target(sample_z, win_latents, k=k_neighbours).numpy()
-        print(f"  Target: nearest (k={k_neighbours})")
+    sup_dim = get_supervised_dim(path_context.guided_vae)
+    z_start_full = path_context.sample_z.detach().cpu().numpy()
+    z_free = z_start_full[sup_dim:]
 
-    path_z_np = path_linear(
-        z_start=sample_z.detach().cpu().numpy(),
-        target_z=target_z,
+    win_latents_sup = win_latents[:, :sup_dim]
+    win_centroid_sup = win_latents_sup.mean(dim=0)
+
+    match method:
+        case "centroid":
+            print("Target: centroid")
+            target_z = win_centroid_sup.cpu().numpy()
+        case "nearest":
+            print(f"Target: nearest (k={k_neighbours})")
+            target_z = (
+                nearest_winning_target(
+                    sample_z=path_context.sample_z[:sup_dim],
+                    win_latents=win_latents_sup,
+                    k=k_neighbours,
+                )
+                .cpu()
+                .numpy()
+            )
+        case _:
+            raise click.ClickException(f"Invalid method: {method}")
+
+    path_z_sup = path_linear(
+        z_start=z_start_full[:sup_dim],
+        z_target=target_z,
         n_waypoints=n_steps,
     )
+    path_z_np = np.concatenate(
+        [path_z_sup, np.tile(z_free, (len(path_z_sup), 1))], axis=1
+    )
     run_path_charting_pipeline(
-        model=model,
-        cache=cache,
-        chosen=int(chosen),
-        player_idx=player_idx,
+        path_context=path_context,
         n_steps=n_steps,
         top_k=top_k,
         strategy="linear",
@@ -152,106 +109,104 @@ def cmd_linear(model, cache, sample_idx, n_steps, top_k, method, k_neighbours):
     )
 
 
-@cli.command("gradient-ascent")
+@cli.command("gradient_ascent")
 @global_options
 @click.option(
-    "--ga-steps",
+    "--ga_steps",
     type=int,
-    default=500,
+    default=1000,
     show_default=True,
     help="Max gradient ascent steps.",
 )
 @click.option(
-    "--ga-lr", type=float, default=0.02, show_default=True, help="Learning rate."
+    "--ga_lr",
+    type=float,
+    default=0.005,
+    show_default=True,
+    help="Learning rate.",
 )
 @click.option(
-    "--ga-momentum", type=float, default=0.9, show_default=True, help="Momentum."
+    "--ga_momentum",
+    type=float,
+    default=0.5,
+    show_default=True,
+    help="Momentum.",
 )
 @click.option(
-    "--density-weight",
+    "--density_weight",
     type=float,
     default=0.3,
     show_default=True,
     help="Weight of the KDE density gradient.",
 )
 @click.option(
-    "--kde-bandwidth",
+    "--kde_bandwidth",
     type=float,
     default=0.5,
     show_default=True,
     help="Gaussian KDE bandwidth.",
 )
 @click.option(
-    "--convergence-threshold",
+    "--convergence_threshold",
     type=float,
     default=0.95,
     show_default=True,
     help="P(win) threshold for early stopping.",
 )
 def cmd_gradient_ascent(
-    model,
-    cache,
-    sample_idx,
-    n_steps,
-    top_k,
-    ga_steps,
-    ga_lr,
-    ga_momentum,
-    density_weight,
-    kde_bandwidth,
-    convergence_threshold,
+    model_path: Path,
+    dataset_filename: str,
+    sample_idx: int | None,
+    n_steps: int,
+    top_k: int,
+    ga_steps: int,
+    ga_lr: float,
+    ga_momentum: float,
+    density_weight: float,
+    kde_bandwidth: float,
+    convergence_threshold: float,
 ):
     """Gradient ascent on P(win) regularised by a KDE density prior."""
-
-    print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
-        model, cache
+    path_context = prepare_path_context(
+        model_path=model_path,
+        dataset_path=DATA_DIR / dataset_filename,
+        sample_idx=sample_idx,
     )
-    labels = val_y.numpy()
-    labels_tensor = torch.tensor(labels)
-    print(f"  Validation: {len(val_X)}")
-
-    print("Encoding into latent space...")
-    latents_p0 = encode_player(vae, val_X[:, 0, :])
-    latents_p1 = encode_player(vae, val_X[:, 1, :])
-
-    n = len(labels)
-    chosen = (
-        sample_idx
-        if (sample_idx is not None and sample_idx < n)
-        else torch.randint(n, (1,)).item()
-    )
-    player_idx = int(labels[chosen])  # 0 if p0 lost, 1 if p1 lost
-    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
-    opponent_z = latents_p1[chosen] if player_idx == 0 else latents_p0[chosen]
-    print(
-        f"  Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
+    opponent_z = (
+        path_context.latents_p1[path_context.chosen]
+        if path_context.player_idx == 0
+        else path_context.latents_p0[path_context.chosen]
     )
 
-    # All loser latents as reference distribution for KDE.
-    all_loss_latents = torch.where(
-        (labels_tensor == 0).unsqueeze(1), latents_p0, latents_p1
+    win_latents = compute_win_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
     )
 
     score_fn = partial(
         opponent_aware_score,
-        classifier=classifier,
+        guided_vae=path_context.guided_vae,
         opponent_z=opponent_z,
-        player_idx=player_idx,
+        player_idx=path_context.player_idx,
     )
     logit_fn = partial(
         opponent_aware_logit,
-        classifier=classifier,
+        guided_vae=path_context.guided_vae,
         opponent_z=opponent_z,
-        player_idx=player_idx,
+        player_idx=path_context.player_idx,
     )
 
+    sup_dim = get_supervised_dim(path_context.guided_vae)
+    z_start_full = path_context.sample_z.detach().cpu().numpy()
+    z_free = z_start_full[sup_dim:]
+
     print("Running gradient ascent with KDE density regularisation...")
-    path_z_np = path_gradient_ascent(
-        sample_z.detach().cpu().numpy(),
+    path_z_sup = path_gradient_ascent(
+        z_start=z_start_full[:sup_dim],
         score_fn=score_fn,
         logit_fn=logit_fn,
-        Z_all=all_loss_latents.detach().cpu().numpy(),
+        Z_all=win_latents.detach().cpu().numpy()[:, :sup_dim],
         steps=ga_steps,
         lr=ga_lr,
         momentum=ga_momentum,
@@ -260,11 +215,11 @@ def cmd_gradient_ascent(
         n_waypoints=n_steps,
         convergence_threshold=convergence_threshold,
     )
+    path_z_np = np.concatenate(
+        [path_z_sup, np.tile(z_free, (len(path_z_sup), 1))], axis=1
+    )
     run_path_charting_pipeline(
-        model=model,
-        cache=cache,
-        chosen=int(chosen),
-        player_idx=player_idx,
+        path_context=path_context,
         n_steps=n_steps,
         top_k=top_k,
         strategy="gradient_ascent",
@@ -272,57 +227,57 @@ def cmd_gradient_ascent(
     )
 
 
-@cli.command("optimal-transport")
+@cli.command("optimal_transport")
 @global_options
 @click.option(
-    "--ot-reg",
+    "--ot_reg",
     type=float,
-    default=0.0,
+    default=0.01,
     show_default=True,
     help="Entropic regularisation (0 = exact EMD).",
 )
-def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
+def cmd_optimal_transport(
+    model_path: Path,
+    dataset_filename: str,
+    sample_idx: int | None,
+    n_steps: int,
+    top_k: int,
+    ot_reg: float,
+):
     """Wasserstein-barycentric path into the winning distribution."""
-
-    print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
-        model, cache
+    path_context = prepare_path_context(
+        model_path=model_path,
+        dataset_path=DATA_DIR / dataset_filename,
+        sample_idx=sample_idx,
     )
-    labels = val_y.numpy()
-    labels_tensor = torch.tensor(labels)
-    print(f"  Validation: {len(val_X)}")
-
-    print("Encoding into latent space...")
-    latents_p0 = encode_player(vae, val_X[:, 0, :])
-    latents_p1 = encode_player(vae, val_X[:, 1, :])
-
-    # Win cloud: label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
-
-    n = len(labels)
-    chosen = (
-        sample_idx
-        if (sample_idx is not None and sample_idx < n)
-        else torch.randint(n, (1,)).item()
+    win_latents = compute_win_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
     )
-    player_idx = int(labels[chosen])  # 0 if p0 lost, 1 if p1 lost
-    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
-    print(
-        f"  Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
-    )
+
+    sup_dim = get_supervised_dim(path_context.guided_vae)
+    z_start_full = path_context.sample_z.detach().cpu().numpy()
+    z_free = z_start_full[sup_dim:]
 
     print("Computing optimal transport path...")
-    path_z_np = path_optimal_transport(
-        sample_z.detach().cpu().numpy(),
-        win_latents.detach().cpu().numpy(),
+    path_z_sup = path_optimal_transport(
+        z_start=z_start_full[:sup_dim],
+        Z_win=win_latents.detach().cpu().numpy()[:, :sup_dim],
         reg=ot_reg,
         n_waypoints=n_steps,
     )
+    if not torch.isfinite(torch.as_tensor(path_z_sup)).all():
+        raise click.ClickException(
+            "Optimal transport produced non-finite values (NaN/Inf). "
+            "Try '--ot-reg 0.0' for exact EMD or a larger regularization "
+            "such as '--ot-reg 0.05' or '--ot-reg 0.1'."
+        )
+    path_z_np = np.concatenate(
+        [path_z_sup, np.tile(z_free, (len(path_z_sup), 1))], axis=1
+    )
     run_path_charting_pipeline(
-        model=model,
-        cache=cache,
-        chosen=int(chosen),
-        player_idx=player_idx,
+        path_context=path_context,
         n_steps=n_steps,
         top_k=top_k,
         strategy="optimal_transport",
@@ -330,62 +285,181 @@ def cmd_optimal_transport(model, cache, sample_idx, n_steps, top_k, ot_reg):
     )
 
 
-@cli.command("geodesic")
+
+@cli.command("neural_flow")
 @global_options
 @click.option(
-    "--geodesic-k",
-    type=int,
-    default=12,
-    show_default=True,
-    help="Number of neighbours for the kNN graph.",
+    "--flow_checkpoint",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path, resolve_path=True),
+    help="Path to the trained OT-Flow Matching checkpoint (.ckpt).",
 )
-def cmd_geodesic(model, cache, sample_idx, n_steps, top_k, geodesic_k):
-    """Shortest path on a kNN latent-space graph."""
-
-    print("Loading model and data...")
-    vae, classifier, val_X, val_y, norm_mean, norm_std, _ = load_model_and_data(
-        model, cache
+@click.option(
+    "--guidance_scale",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help=(
+        "Classifier-guidance strength added to each Euler step. "
+        "0 = pure flow (default). Try 0.05–0.5 to steer toward high-P(win) latents."
+    ),
+)
+@click.option(
+    "--diagnose",
+    is_flag=True,
+    default=False,
+    help="Print diagnostics: reachable P(win) ceiling, path P(win) trace, flow endpoint distance.",
+)
+def cmd_neural_flow(
+    model_path: Path,
+    dataset_filename: str,
+    sample_idx: int | None,
+    n_steps: int,
+    top_k: int,
+    flow_checkpoint: Path,
+    guidance_scale: float,
+    diagnose: bool,
+):
+    """Counterfactual path via OT-Flow Matching (learned velocity field)."""
+    path_context = prepare_path_context(
+        model_path=model_path,
+        dataset_path=DATA_DIR / dataset_filename,
+        sample_idx=sample_idx,
     )
-    labels = val_y.numpy()
-    labels_tensor = torch.tensor(labels)
-    print(f"  Validation: {len(val_X)}")
 
-    print("Encoding into latent space...")
-    latents_p0 = encode_player(vae, val_X[:, 0, :])
-    latents_p1 = encode_player(vae, val_X[:, 1, :])
-
-    # Win cloud: label=1 → p0 won; label=0 → p1 won.
-    win_latents = torch.where((labels_tensor == 1).unsqueeze(1), latents_p0, latents_p1)
-    # All latents for kNN graph.
-    all_latents = torch.cat([latents_p0, latents_p1], dim=0)
-
-    n = len(labels)
-    chosen = (
-        sample_idx
-        if (sample_idx is not None and sample_idx < n)
-        else torch.randint(n, (1,)).item()
+    opponent_z = (
+        path_context.latents_p1[path_context.chosen]
+        if path_context.player_idx == 0
+        else path_context.latents_p0[path_context.chosen]
     )
-    player_idx = int(labels[chosen])  # 0 if p0 lost, 1 if p1 lost
-    sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
-    print(
-        f"  Sample idx: {chosen} (label={int(labels[chosen])}, loser=player {player_idx})"
+    score_fn = partial(
+        opponent_aware_score,
+        guided_vae=path_context.guided_vae,
+        opponent_z=opponent_z,
+        player_idx=path_context.player_idx,
     )
 
-    print("Computing geodesic path on kNN graph...")
-    path_z_np = path_geodesic(
-        sample_z.detach().cpu().numpy(),
-        win_latents.detach().cpu().numpy(),
-        all_latents.detach().cpu().numpy(),
-        k=geodesic_k,
-        n_waypoints=n_steps,
+    if diagnose:
+        _print_diagnostics(path_context=path_context, score_fn=score_fn)
+
+    print(f"Loading flow model from {flow_checkpoint}...")
+    flow_model = LitOTFlowMatching.load_from_checkpoint(flow_checkpoint)
+    flow_model.eval()
+    flow_model = flow_model.to(
+        torch.device("cuda" if torch.cuda.is_available() else "cpu")
     )
+
+    sup_dim = get_supervised_dim(path_context.guided_vae)
+    z_start_full = path_context.sample_z.detach().cpu().numpy()
+    z_free = z_start_full[sup_dim:]
+
+    print("Integrating velocity field...")
+    z_start_sup = z_start_full[:sup_dim]
+    if guidance_scale > 0.0:
+        print(f"  Using classifier guidance (scale={guidance_scale})")
+        path_z_sup = flow_model.predict_path_guided(
+            z_start=z_start_sup,
+            score_fn=score_fn,
+            guidance_scale=guidance_scale,
+            steps=n_steps - 1,
+        )
+    else:
+        path_z_sup = path_neural_flow(
+            z_start=z_start_sup,
+            flow_model=flow_model,
+            n_waypoints=n_steps,
+        )
+
+    path_z_np = np.concatenate(
+        [path_z_sup, np.tile(z_free, (len(path_z_sup), 1))], axis=1
+    )
+
+    if diagnose:
+        _print_path_trace(
+            path_z_np=path_z_np, score_fn=score_fn, path_context=path_context
+        )
+
     run_path_charting_pipeline(
-        model=model,
-        cache=cache,
-        chosen=int(chosen),
-        player_idx=player_idx,
+        path_context=path_context,
         n_steps=n_steps,
         top_k=top_k,
-        strategy="geodesic",
+        strategy="neural_flow",
         path_z_np=path_z_np,
     )
+
+
+def _print_diagnostics(path_context, score_fn) -> None:
+    """Report the P(win) ceiling and opponent context for the chosen sample."""
+    import numpy as np
+
+    win_latents = compute_win_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
+    )
+
+    with torch.no_grad():
+        win_scores = score_fn(win_latents).cpu().numpy()
+
+    pct_above_50 = (win_scores > 0.5).mean() * 100
+    print("\n" + "═" * 60)
+    print("  DIAGNOSTICS")
+    print("═" * 60)
+    print(f"  Winning latents vs. this opponent (N={len(win_scores)}):")
+    print(f"    max  P(win) = {win_scores.max():.3f}")
+    print(f"    mean P(win) = {win_scores.mean():.3f}")
+    print(f"    med  P(win) = {np.median(win_scores):.3f}")
+    print(f"    min  P(win) = {win_scores.min():.3f}")
+    print(f"    % > 0.50   = {pct_above_50:.1f}%")
+    if win_scores.max() < 0.5:
+        print("  ⚠  No winning latent in the dataset scores > 50% against this")
+        print("     opponent — the ceiling is below the decision boundary.")
+        print("     The flow cannot cross 50% regardless of where it goes.")
+    print("═" * 60 + "\n")
+
+
+def _print_path_trace(path_z_np, score_fn, path_context) -> None:
+    """Print P(win) at 10 evenly-spaced waypoints and nearest-win distance at endpoint."""
+    import numpy as np
+
+    path_z = torch.tensor(path_z_np, dtype=torch.float32)
+    with torch.no_grad():
+        win_probs = score_fn(path_z).cpu().numpy()
+
+    n = len(win_probs)
+    indices = np.linspace(0, n - 1, min(10, n), dtype=int)
+    print("  P(win) trace along path:")
+    for i in indices:
+        bar = "█" * int(win_probs[i] * 20)
+        print(f"    step {i:>4d}/{n - 1}  P(win)={win_probs[i]:.3f}  {bar}")
+
+    win_latents = compute_win_latents(
+        labels_tensor=path_context.labels_tensor,
+        latents_p0=path_context.latents_p0,
+        latents_p1=path_context.latents_p1,
+    )
+    endpoint = path_z[-1].unsqueeze(0)
+    dists = torch.cdist(endpoint, win_latents).squeeze(0)
+    start = torch.tensor(path_z_np[0], dtype=torch.float32).unsqueeze(0)
+    start_dists = torch.cdist(start, win_latents).squeeze(0)
+    print("\n  Distance to nearest winning latent:")
+    print(f"    start:    {start_dists.min():.3f}")
+    print(f"    endpoint: {dists.min():.3f}")
+    print(
+        f"    win centroid dist (endpoint): {torch.norm(path_z[-1] - win_latents.mean(0)):.3f}"
+    )
+    print()
+
+
+# Register comparison sub-commands (imported here to avoid circular imports)
+from latent_trainer.paths.compare.cli import (  # noqa: E402
+    cmd_compare,
+    cmd_compare_datasets,
+    cmd_replot,
+    cmd_tune,
+)
+
+cli.add_command(cmd_compare)
+cli.add_command(cmd_tune)
+cli.add_command(cmd_compare_datasets)
+cli.add_command(cmd_replot)
