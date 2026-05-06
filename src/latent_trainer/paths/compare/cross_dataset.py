@@ -361,7 +361,7 @@ def write_cross_dataset_table(
 
     rows = []
     metrics = [
-        ("Success rate", lambda s: f"{s.success_rate:.3f}", None),
+        ("Success rate", lambda s: f"{s.success_rate:.3f}", "success_rate"),
         (
             "Crossover $\\alpha$",
             lambda s: format_mean_sd(s.crossover_alpha_mean, s.crossover_alpha_sd),
