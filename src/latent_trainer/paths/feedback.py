@@ -119,12 +119,12 @@ def compute_feedback(
                     "current": float(x_start[i]),
                     "target": float(x_start[i] + delta[i]),
                     "delta": float(delta[i]),
-                    "direction": "▲" if delta[i] > 0 else "▼",
+                    "direction": "+" if delta[i] > 0 else "-",
                 }
             )
         return rows, label
 
-    raw_rows, raw_lbl = _rank_table(raw_delta, "Full path  (start → end)")
+    raw_rows, raw_lbl = _rank_table(raw_delta, "Full path  (start -> end)")
     mv_rows, mv_lbl = _rank_table(mv_delta, f"Minimum viable  ({mv_label})")
     wgt_rows, wgt_lbl = _rank_table(weighted_delta, "P(win)-gain weighted")
 
@@ -149,19 +149,19 @@ def compute_feedback(
 def print_feedback_report(feedback: dict, *, top_k: int = 10) -> None:
     """Pretty-print the three-signal feedback table to stdout."""
     method = feedback.get("method", "")
-    header = f"  {'Feature':<22}  {'Current':>9}  {'Target':>9}  {'Δ':>9}"
-    sep = "  " + "─" * 54
+    header = f"  {'Feature':<22}  {'Current':>9}  {'Target':>9}  {'Delta':>9}"
+    sep = "  " + "-" * 54
 
-    print(f"\n{'═' * 60}")
-    print(f"  [{method}] FEEDBACK REPORT  —  top {top_k} features")
-    print(f"{'═' * 60}")
+    print(f"\n{'=' * 60}")
+    print(f"  [{method}] FEEDBACK REPORT  --  top {top_k} features")
+    print(f"{'=' * 60}")
 
     for key, lbl_key in [
         ("raw", "raw_label"),
         ("minimum_viable", "mv_label"),
         ("gain_weighted", "wgt_label"),
     ]:
-        print(f"\n  ── {feedback[lbl_key]}")
+        print(f"\n  -- {feedback[lbl_key]}")
         print(header)
         print(sep)
         for r in feedback[key]:

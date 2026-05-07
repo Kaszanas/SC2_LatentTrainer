@@ -187,7 +187,7 @@ def plot_feature_evolution(
 
 
 def plot_distance(path_z, win_centroid, alphas, save_path):
-    dists = torch.norm(path_z - win_centroid.unsqueeze(0), dim=1).numpy()
+    dists = torch.norm(path_z - win_centroid.unsqueeze(0), dim=1).cpu().numpy()
     fig, ax = plt.subplots(figsize=(8, 4.5))
     ax.plot(alphas, dists, color="#8e44ad", linewidth=2.5, marker="o", markersize=5)
     ax.fill_between(alphas, dists, alpha=0.1, color="#8e44ad")
@@ -213,7 +213,7 @@ def plot_three_signal_feedback(
         ("_mv_delta", "mv_label", "Minimum-viable delta"),
         ("_weighted_delta", "wgt_label", "P(win)-gain weighted delta"),
     ]
-    fig, axes = plt.subplots(1, 3, figsize=(18, max(4.5, top_k * 0.4)))
+    fig, axes = plt.subplots(3, 1, figsize=(6.5, top_k * 0.75 + 2))
     fig.suptitle(
         "Three-Signal Feedback Report",
         fontsize=15,
@@ -232,7 +232,7 @@ def plot_three_signal_feedback(
         ax.set_yticks(y_pos)
         ax.set_yticklabels(names, fontsize=8)
         ax.invert_yaxis()
-        ax.set_xlabel("Δ")
+        ax.set_xlabel("Delta")
         ax.set_title(feedback.get(lbl_key, fallback_title), fontsize=10)
         ax.axvline(0, color="grey", linewidth=0.8)
         ax.grid(True, axis="x", alpha=0.2)

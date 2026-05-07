@@ -285,7 +285,6 @@ def cmd_optimal_transport(
     )
 
 
-
 @cli.command("neural_flow")
 @global_options
 @click.option(
@@ -321,6 +320,7 @@ def cmd_neural_flow(
     diagnose: bool,
 ):
     """Counterfactual path via OT-Flow Matching (learned velocity field)."""
+
     path_context = prepare_path_context(
         model_path=model_path,
         dataset_path=DATA_DIR / dataset_filename,
