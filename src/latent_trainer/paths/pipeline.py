@@ -72,7 +72,8 @@ def run_path_charting_pipeline(
         player_idx=path_context.player_idx,
     )
 
-    path_z_tensor = torch.tensor(path_z_np, dtype=torch.float32)
+    device = next(path_context.guided_vae.parameters()).device
+    path_z_tensor = torch.tensor(path_z_np, dtype=torch.float32).to(device)
     alphas = np.linspace(0.0, 1.0, n_steps)
 
     with torch.no_grad():
@@ -89,6 +90,7 @@ def run_path_charting_pipeline(
         feature_names=FEATURE_NAMES,
         top_k=top_k,
         method_name=strategy.upper(),
+        device=device,
     )
     print_feedback_report(feedback=feedback, top_k=top_k)
 
