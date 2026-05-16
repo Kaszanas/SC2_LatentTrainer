@@ -1,18 +1,3 @@
-"""Standalone training script for the OT-Flow Matching model.
-
-Loads a pre-trained GuidedVAE checkpoint, encodes all training and validation
-data into latent space, builds (z_losing, z_winning) pairs per match, and
-trains a :class:`~latent_trainer.paths.flow.LitOTFlowMatching` model with
-Lightning + MLFlow logging.
-
-Usage::
-
-    uv run python -m latent_trainer.paths.train \\
-        --model_path output/checkpoints/my_exp/best.ckpt \\
-        --experiment_name latent_flow \\
-        --epochs 100
-"""
-
 from __future__ import annotations
 
 import logging

@@ -1,16 +1,3 @@
-"""Export training curves and artifacts from an MLflow run as publication PDFs.
-
-For each logged metric a clean line-plot PDF is written to --output_dir.
-Artifact images/PDFs stored in the run can optionally be downloaded too.
-
-Usage::
-
-    uv run python -m latent_trainer.tracking.export_run \\
-        --experiment_name guided_vae_experiment \\
-        --run_name guided_vae_best \\
-        --output_dir output/paper_plots/
-"""
-
 from __future__ import annotations
 
 import logging

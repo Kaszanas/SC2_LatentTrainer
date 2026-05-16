@@ -155,18 +155,23 @@ def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
         shift_mean, shift_sd = _mean_sd(shifts)
 
         cond_eligible = [
-            r for r in good
-            if not math.isnan(r.p_win_start) and r.p_win_start < 0.5
+            r for r in good if not math.isnan(r.p_win_start) and r.p_win_start < 0.5
         ]
         cond_success_lst = [r for r in cond_eligible if r.success]
         cond_n_eligible = len(cond_eligible)
         cond_n_success = len(cond_success_lst)
-        cond_success_rate = cond_n_success / cond_n_eligible if cond_n_eligible > 0 else math.nan
+        cond_success_rate = (
+            cond_n_success / cond_n_eligible if cond_n_eligible > 0 else math.nan
+        )
 
-        sd_adj_success_lst = [r for r in cond_eligible if r.p_win_max >= p_win_threshold]
+        sd_adj_success_lst = [
+            r for r in cond_eligible if r.p_win_max >= p_win_threshold
+        ]
         sd_adj_n_eligible = cond_n_eligible
         sd_adj_n_success = len(sd_adj_success_lst)
-        sd_adj_success_rate = sd_adj_n_success / sd_adj_n_eligible if sd_adj_n_eligible > 0 else math.nan
+        sd_adj_success_rate = (
+            sd_adj_n_success / sd_adj_n_eligible if sd_adj_n_eligible > 0 else math.nan
+        )
 
         norm_gains = [
             r.p_win_gain / (1.0 - r.p_win_start)
@@ -189,16 +194,26 @@ def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
         time_mean, time_sd = _mean_sd(times)
 
         # ── New metrics
-        feat_lengths = [r.path_length_feature for r in good if not math.isnan(r.path_length_feature)]
+        feat_lengths = [
+            r.path_length_feature for r in good if not math.isnan(r.path_length_feature)
+        ]
         feat_len_mean, feat_len_sd = _mean_sd(feat_lengths)
 
         n_changed = [float(r.n_features_changed) for r in good]
         n_changed_mean, n_changed_sd = _mean_sd(n_changed)
 
-        kde_path_vals = [r.kde_density_path_mean for r in good if not math.isnan(r.kde_density_path_mean)]
+        kde_path_vals = [
+            r.kde_density_path_mean
+            for r in good
+            if not math.isnan(r.kde_density_path_mean)
+        ]
         kde_path_mean, kde_path_sd = _mean_sd(kde_path_vals)
 
-        cycle_means = [r.recon_cycle_error_mean for r in good if not math.isnan(r.recon_cycle_error_mean)]
+        cycle_means = [
+            r.recon_cycle_error_mean
+            for r in good
+            if not math.isnan(r.recon_cycle_error_mean)
+        ]
         cycle_mean, cycle_sd = _mean_sd(cycle_means)
 
         stats_list.append(

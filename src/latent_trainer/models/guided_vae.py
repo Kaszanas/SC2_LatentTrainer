@@ -1,10 +1,3 @@
-"""SC2 Guided VAE model definitions.
-
-Active models:
-- ``suGuidedVAE``: Supervised Guided VAE for tabular SC2 features.
-- ``Classifier``: Adversarial classifier used during guided VAE training.
-"""
-
 import torch
 from torch import nn
 

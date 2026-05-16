@@ -1,19 +1,3 @@
-"""Test-set evaluation for a trained GuidedVAE checkpoint.
-
-Runs a full forward pass on the held-out test split and produces:
-  - Console summary of test metrics
-  - confusion_matrix.pdf
-  - roc_curve.pdf
-  - calibration_curve.pdf
-  - recon_error_dist.pdf  (train / val / test overlay)
-
-Optionally logs test metrics back into the originating MLflow run.
-
-Usage::
-
-    uv run python -m latent_trainer.evaluate --model_path output/checkpoints/.../best.ckpt
-"""
-
 from __future__ import annotations
 
 import logging
@@ -108,12 +92,14 @@ def _compute_vae_metrics(
     test_mse = float(recon_mse.mean())
     test_mse_norm = float(recon_mse_norm.mean())
     # KL per sample: -0.5 * sum_j(1 + logvar_j - mu_j^2 - exp(logvar_j))
-    kl_per_sample = -0.5 * (1.0 + logvar - mu ** 2 - np.exp(logvar)).sum(axis=1)
+    kl_per_sample = -0.5 * (1.0 + logvar - mu**2 - np.exp(logvar)).sum(axis=1)
     test_kl = float(kl_per_sample.mean())
     return {"test_mse": test_mse, "test_mse_norm": test_mse_norm, "test_kl": test_kl}
 
 
-def _compute_classifier_metrics(probs: np.ndarray, targets: np.ndarray) -> dict[str, float]:
+def _compute_classifier_metrics(
+    probs: np.ndarray, targets: np.ndarray
+) -> dict[str, float]:
     """Accuracy, ROC-AUC, Brier score, and F1 for the win-probability classifier."""
     from sklearn.metrics import f1_score, roc_auc_score
 
@@ -323,7 +309,7 @@ def _plot_recon_error(
     multiple=True,
     default=(),
     help="Label for each OOD dataset (same order as --ood_dataset). "
-         "Defaults to 'OOD 1', 'OOD 2', ...",
+    "Defaults to 'OOD 1', 'OOD 2', ...",
 )
 def main(
     model_path: Path,
@@ -357,7 +343,9 @@ def main(
         results[split] = _forward_pass(model, X, y, batch_size, device)
 
     # Resolve OOD labels
-    labels = list(ood_label) + [f"OOD {i + 1}" for i in range(len(ood_dataset) - len(ood_label))]
+    labels = list(ood_label) + [
+        f"OOD {i + 1}" for i in range(len(ood_dataset) - len(ood_label))
+    ]
 
     # Load and evaluate each OOD dataset using in-distribution normalisation stats
     ood_results: list[tuple[str, dict[str, float], dict[str, float]]] = []
@@ -369,12 +357,16 @@ def main(
         y_ood = spec.test_labels.float()
         logger.info(f"Running forward pass on OOD '{label}' ({len(X_ood)} samples)...")
         res = _forward_pass(model, X_ood, y_ood, batch_size, device)
-        v = _compute_vae_metrics(res["recon_mse"], res["recon_mse_norm"], res["mu"], res["logvar"])
+        v = _compute_vae_metrics(
+            res["recon_mse"], res["recon_mse_norm"], res["mu"], res["logvar"]
+        )
         c = _compute_classifier_metrics(res["probs"], res["targets"])
         ood_results.append((label, v, c))
 
     test = results["test"]
-    vae_metrics = _compute_vae_metrics(test["recon_mse"], test["recon_mse_norm"], test["mu"], test["logvar"])
+    vae_metrics = _compute_vae_metrics(
+        test["recon_mse"], test["recon_mse_norm"], test["mu"], test["logvar"]
+    )
     cls_metrics = _compute_classifier_metrics(test["probs"], test["targets"])
     all_metrics = {**vae_metrics, **cls_metrics}
 

@@ -41,11 +41,11 @@ sns.set_theme(style="whitegrid", context="paper")
 
 # Okabe-Ito colorblind-safe palette (https://jfly.uni-koeln.de/color/)
 _METHOD_COLOURS: dict[str, str] = {
-    "linear_centroid":   "#0072B2",  # blue
-    "linear_nearest":    "#56B4E9",  # sky blue
+    "linear_centroid": "#0072B2",  # blue
+    "linear_nearest": "#56B4E9",  # sky blue
     "optimal_transport": "#E69F00",  # orange
-    "neural_flow":       "#009E73",  # bluish green
-    "gradient_ascent":   "#D55E00",  # vermillion
+    "neural_flow": "#009E73",  # bluish green
+    "gradient_ascent": "#D55E00",  # vermillion
 }
 
 _PALETTE_FALLBACK = [
@@ -62,7 +62,7 @@ _PALETTE_FALLBACK = [
 # Two-color palettes reused across all Start/End and tier comparisons
 _PHASE_PALETTE: dict[str, str] = {
     "Start": "#56B4E9",  # sky blue (lighter)
-    "End":   "#0072B2",  # blue (darker)
+    "End": "#0072B2",  # blue (darker)
 }
 
 _DPI = 300

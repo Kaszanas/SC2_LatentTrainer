@@ -53,9 +53,6 @@ def _suggest_params(trial: optuna.Trial, spec: MethodSpec) -> dict:
             return {}
 
 
-
-
-
 def tune_method(
     *,
     spec: MethodSpec,

@@ -1,9 +1,3 @@
-"""Loss functions for the guided VAE training loop.
-
-``loss_supervised`` is used by :func:`latent_trainer.models.train_model.train_guided`
-for the ``suGuidedVAE`` (tabular SC2 features).
-"""
-
 import torch
 import torch.nn.functional as F
 

@@ -1,11 +1,3 @@
-"""OT-Flow Matching model for losing→winning latent transport.
-
-Implements Conditional Flow Matching with Optimal Transport mini-batch pairing
-(Lipman et al. 2022 / Tong et al. 2023).  For each mini-batch the EMD transport
-plan is computed to pair losing and winning latents optimally before the
-standard linear-interpolant / constant-velocity training objective is applied.
-"""
-
 from __future__ import annotations
 
 import numpy as np

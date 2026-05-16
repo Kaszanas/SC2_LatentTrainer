@@ -1,17 +1,3 @@
-"""Three-signal feedback analysis for latent-space paths.
-
-Given a path through latent space (from any strategy) and a decoder +
-score function, computes three complementary feedback signals:
-
-1. **Raw delta** (start → end) — overall direction of change.
-2. **Minimum-viable delta** — change only up to the P(win)=0.5 crossover.
-3. **P(win)-gain-weighted delta** — features weighted by how much
-   P(win) improved at each step.
-
-The module is model-agnostic: it accepts callables for decoding and
-scoring so it works with any model architecture.
-"""
-
 from __future__ import annotations
 
 from typing import Callable

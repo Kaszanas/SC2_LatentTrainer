@@ -1,25 +1,3 @@
-"""Unified training entrypoint for the SC2 Latent Trainer.
-
-Supports both sweep (Ray Tune + Optuna HPO) and best (retrain with best
-Optuna trial params) modes for two pipelines, with MLFlow experiment tracking.
-
-Workflow
-~~~~~~~~
-1. Run ``--mode sweep`` to search hyperparameters via Optuna.
-2. Run ``--mode best`` to load ``study.best_trial.params`` and retrain
-   a full model for use by ``paths/main.py``.
-
-All hyperparameters come exclusively from the Optuna study — never from
-CLI flags.
-
-MLFlow tracking
-~~~~~~~~~~~~~~~
-All runs are tracked via MLFlow using a local SQLite database by default
-(``sqlite:///mlflow.db``).  Override with ``--mlflow-uri`` to point at a
-remote tracking server.  HPO trials are nested under a parent run for
-grouped display in the MLFlow UI.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -142,7 +120,7 @@ def main(
     source_run: str | None,
     run_name: str | None,
 ) -> None:
-    """SC2 Latent Trainer — unified training & HPO entrypoint."""
+    """SC2 Latent Trainer - unified training & HPO entrypoint."""
     logging.basicConfig(
         level=logging.INFO,
         format=LOGGING_FORMAT,

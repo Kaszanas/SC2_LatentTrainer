@@ -41,6 +41,7 @@ python src/latent_trainer/features/main.py --help
 | `--n_workers` | `24` | Parallel workers |
 | `--n_samples` | `0` (all) | Randomly sample N games before processing; `0` = use all |
 | `--seed` | `42` | Random seed for sampling |
+| `--test_only` | off | Extract a test-only dataset (all samples go to the test split; no train/val) |
 
 **Examples:**
 
@@ -63,7 +64,7 @@ Create only a test split of 500 samples (for quick iteration):
 python src/latent_trainer/features/main.py \
     --single_json_dataset_path H:/sc2egset_merged/sc2egset_merged.json \
     --n_samples 500 \
-    --test-only
+    --test_only
 ```
 
 Output: `data/cached_dataset_rich_sc2egset.pt` (or `data/cached_dataset_rich_sc2egset_2000.pt` when `--n_samples` is set). You will have to remember the filenames to use them in the training step.
@@ -300,6 +301,7 @@ python src/latent_trainer/paths/main.py replot output/compare/report.pkl \
 python src/latent_trainer/paths/main.py compare-datasets \
     --reports output/compare_ds1/report.pkl \
     --reports output/compare_ds2/report.pkl \
-    --labels "Dataset A" "Dataset B" \
+    --labels "Dataset A" \
+    --labels "Dataset B" \
     --output_dir output/cross_dataset/
 ```

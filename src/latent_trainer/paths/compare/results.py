@@ -112,15 +112,17 @@ class PathRunResult:
 
     # ── New metrics ────────────────────────────────────────────────────────────
     # Feature-space geometry (decoded to original scale before measuring)
-    path_length_feature: float = math.nan   # sum-of-L2-steps in decoded feature space
-    n_features_changed: int = 0             # sparsity: features with |Δ| > 1σ of training data
+    path_length_feature: float = math.nan  # sum-of-L2-steps in decoded feature space
+    n_features_changed: int = 0  # sparsity: features with |Δ| > 1σ of training data
 
     # On-manifold quality (path-averaged, not just endpoint)
-    kde_density_path_mean: float = math.nan  # mean log-density of win_kde along all waypoints
+    kde_density_path_mean: float = (
+        math.nan
+    )  # mean log-density of win_kde along all waypoints
 
     # Reconstruction cycle consistency: decode → encode → compare
     recon_cycle_error_mean: float = math.nan  # mean ‖z_path − encode(decode(z_path))‖
-    recon_cycle_error_max: float = math.nan   # max  ‖z_path − encode(decode(z_path))‖
+    recon_cycle_error_max: float = math.nan  # max  ‖z_path − encode(decode(z_path))‖
 
 
 @dataclass

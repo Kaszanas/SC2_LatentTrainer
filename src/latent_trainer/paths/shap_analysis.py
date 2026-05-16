@@ -1,22 +1,3 @@
-"""SHAP attribution analysis for the GuidedVAE.
-
-Explains two model outputs:
-  - **P(win)**: which player features drive the win-probability prediction.
-  - **Reconstruction**: which input features contribute to reconstruction error,
-    and how each input feature influences each reconstructed output feature.
-
-Usage::
-
-    uv run python -m latent_trainer.paths.shap_analysis \\
-        --model_path output/checkpoints/.../best.ckpt \\
-        --target both \\
-        --n_background 200 \\
-        --n_explain 500
-
-The per-feature reconstruction heatmap is expensive (shap for ~196 outputs).
-Skip it with ``--no_heatmap`` for a faster run.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -173,10 +154,11 @@ def _bar_chart(
 ) -> None:
     imp1d = np.asarray(importances).ravel()
     order = np.argsort(imp1d)[::-1][:top_k][::-1]
+
     def _strip_group(name: str) -> str:
         for g in _GROUPS:
             if name.startswith(g + "_"):
-                return name[len(g) + 1:]
+                return name[len(g) + 1 :]
         return name
 
     raw_names = [str(feature_names[int(i)]) for i in order]

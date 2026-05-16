@@ -1,11 +1,3 @@
-"""Guided-VAE pipeline HPO and best-trial retraining.
-
-Provides two entry-points for the supervised Guided-VAE pipeline:
-
-* :func:`run_guided_vae_hyperparameter_search` — Ray Tune + Optuna parallel sweep.
-* :func:`run_guided_vae_best` — loads the best Optuna trial and retrains.
-"""
-
 from __future__ import annotations
 
 import logging
