@@ -28,6 +28,7 @@ from latent_trainer.settings import DATA_DIR, LOGGING_FORMAT, SEED
     type=click.Path(exists=True, dir_okay=False, path_type=Path, resolve_path=True),
     default=Path("H:/sc2egset_merged/sc2egset_merged.json").resolve(),
     help="Path to the single JSON dataset file.",
+    show_default=True,
 )
 @click.option(
     "--n_workers",
@@ -90,16 +91,16 @@ def main(
                 n_samples=n_samples,
                 seed=seed,
             )
-        else:
-            preprocess_dataset_chunked_profile(
-                output_directory=DATA_DIR,
-                single_json_dataset_path=single_json_dataset_path,
-                transform_fn=transform,
-                transform_name=transform_name,
-                n_workers=n_workers,
-                n_samples=n_samples,
-                seed=seed,
-            )
+            return
+        preprocess_dataset_chunked_profile(
+            output_directory=DATA_DIR,
+            single_json_dataset_path=single_json_dataset_path,
+            transform_fn=transform,
+            transform_name=transform_name,
+            n_workers=n_workers,
+            n_samples=n_samples,
+            seed=seed,
+        )
     except Exception as e:
         logging.error(f"Error during dataset preprocessing: {e}")
 

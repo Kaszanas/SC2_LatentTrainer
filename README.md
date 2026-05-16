@@ -4,6 +4,17 @@ An approach to create a traversal through the latent space of a model optimized 
 
 ## Setup
 
+### 0. Clone the repository and ensure data availability
+
+```bash
+git clone https://github.com/Kaszanas/SC2_LatentTrainer.git
+cd SC2_LatentTrainer
+```
+
+> [!IMPORTANT]
+> We include pre-processed dataset files in the `data/` directory for convenience, so the preprocessing step is not strictly required to run the training and path-charting steps. However, if you want to run the full pipeline, or use a different dataset, you will need to follow the entire setup.
+
+
 ### 1. Install dependencies
 
 ```bash
@@ -17,7 +28,7 @@ Activate the environment before running any command below.
 
 ### 2. Preprocess the dataset
 
-Reads the SC2EGSet single-JSON file, applies a feature transform, and writes a cached `.pt` tensor file used by all downstream steps.
+Reads the SC2EGSet single-JSON dataset file, applies a feature transform, and writes a cached `.pt` tensor file used by all downstream steps.
 
 ```bash
 python src/latent_trainer/features/main.py --help
@@ -33,19 +44,29 @@ python src/latent_trainer/features/main.py --help
 
 **Examples:**
 
+
+Process the full dataset using rich transform:
 ```bash
-# Full dataset, rich transform:
 python src/latent_trainer/features/main.py \
     --single_json_dataset_path H:/sc2egset_merged/sc2egset_merged.json
+```
 
-# Random subset of 2000 games from a large dataset:
+Random subset of 2000 games from a large dataset:
+```bash
 python src/latent_trainer/features/main.py \
     --single_json_dataset_path H:/sc2egset_large/sc2egset_large.json \
     --n_samples 2000 \
-    --seed 42
 ```
 
-Output: `data/cached_dataset_rich_sc2egset.pt` (or `data/cached_dataset_rich_sc2egset_2000.pt` when `--n_samples` is set).
+Create only a test split of 500 samples (for quick iteration):
+```bash
+python src/latent_trainer/features/main.py \
+    --single_json_dataset_path H:/sc2egset_merged/sc2egset_merged.json \
+    --n_samples 500 \
+    --test-only
+```
+
+Output: `data/cached_dataset_rich_sc2egset.pt` (or `data/cached_dataset_rich_sc2egset_2000.pt` when `--n_samples` is set). You will have to remember the filenames to use them in the training step.
 
 ---
 
@@ -53,7 +74,7 @@ Output: `data/cached_dataset_rich_sc2egset.pt` (or `data/cached_dataset_rich_sc2
 
 #### Unified entry point (HPO sweep + best-trial retraining)
 
-Supports both the two-stage pipeline (VAE → classifier) and the guided VAE pipeline. Run a Ray+Optuna sweep to find hyperparameters, then retrain with the best trial.
+Run a Ray+Optuna sweep to find hyperparameters, then retrain with the best trial.
 
 ```bash
 python src/latent_trainer/train.py --help

@@ -54,7 +54,7 @@ cpu = ["torch>=2.7.0", "torchvision>=0.22.0"]
 # Dependencies for the CUDA build (installed with uv sync --extra cuda)
 cuda = ["torch>=2.7.0", "torchvision>=0.22.0"]
 
-# --- uv-specific configuration ---
+# uv-specific configuration:
 [tool.uv]
 # This prevents installing both CPU and CUDA builds simultaneously
 conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]
