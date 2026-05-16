@@ -205,16 +205,6 @@ python src/latent_trainer/paths/main.py optimal_transport \
     --ot_reg 0.05
 ```
 
-#### Geodesic
-
-Shortest path on a kNN graph of training latents — follows the data manifold by construction.
-
-```bash
-python src/latent_trainer/paths/main.py geodesic \
-    --model_path best.ckpt \
-    --geodesic_k 12
-```
-
 #### Neural flow
 
 Counterfactual path via a learned OT-Flow Matching velocity field. Requires a separately trained flow checkpoint.
