@@ -1,15 +1,3 @@
-"""Rich feature transform for SC2 replays.
-
-Extracts a comprehensive feature vector per player including:
-- Temporal economy snapshots (early/mid/late game) — 39 features × 3 time windows
-- Final economy state — 39 features
-- Economy rate-of-change (late minus early) — 39 features
-- Player meta stats: supplyCappedPercent — 1 feature
-
-Total: per player = 39*5 + 1 = 196 features
-Output shape: [2, 196] per replay
-"""
-
 from typing import Optional, Tuple
 
 import numpy as np
@@ -267,14 +255,14 @@ def prepare_player_features(
         end_frac=1.0,
     )
 
-    # --- 2. Final economy state ---
+    # 2. Final economy state:
     final_stats = _get_stats_values(stats_obj=events[-1].stats)
     final_stats = np.array(final_stats, dtype=np.float32)
 
-    # --- 3. Economy rate of change (late - early) ---
+    # 3. Economy rate of change (late - early):
     econ_delta = late_stats - early_stats
 
-    # --- 4. Player meta stats ---
+    # 4. Player meta stats:
     player_info = _get_player_info(sc2_replay=sc2_replay, player_id=player_id)
     if player_info is None:
         return None
@@ -291,7 +279,7 @@ def prepare_player_features(
         dtype=np.float32,
     )
 
-    # --- 5. Unit activity ---
+    # 5. Unit activity:
     # units_born = float(
     #     _count_units_born(
     #         sc2_replay=sc2_replay,
@@ -305,7 +293,7 @@ def prepare_player_features(
     #     )
     # )
 
-    # # --- 6. Upgrades ---
+    # # 6. Upgrades:
     # upgrade_count = float(
     #     _count_upgrades(
     #         sc2_replay=sc2_replay,
@@ -313,7 +301,7 @@ def prepare_player_features(
     #     )
     # )
 
-    # --- 7. Game duration (same for both, but included) ---
+    # 7. Game duration (same for both, but included):
     duration = np.array([game_duration], dtype=np.float32)
 
     # REVIEW: Why do we have duration in here?

@@ -232,7 +232,7 @@ python src/latent_trainer/paths/main.py neural_flow \
 
 ### Bulk comparison
 
-#### `compare` — evaluate all methods across N samples
+#### `compare`: evaluate all methods across N samples
 
 ```bash
 python src/latent_trainer/paths/main.py compare \
@@ -249,7 +249,7 @@ python src/latent_trainer/paths/main.py compare \
     --config output/compare/best_configs.json
 ```
 
-#### `tune` — find best hyperparameters via Optuna
+#### `tune`: find best hyperparameters via Optuna
 
 ```bash
 python src/latent_trainer/paths/main.py tune \
@@ -261,7 +261,7 @@ python src/latent_trainer/paths/main.py tune \
     --output_config output/compare/best_configs.json
 ```
 
-#### `replot` — regenerate plots from a saved report (no recomputation)
+#### `replot`: regenerate plots from a saved report (no recomputation)
 
 Requires a `report.pkl` produced by `compare --save_raw`.
 
@@ -273,7 +273,7 @@ python src/latent_trainer/paths/main.py replot output/compare/report.pkl \
     --output_dir output/compare_replot/
 ```
 
-#### `compare-datasets` — cross-dataset comparison
+#### `compare-datasets`: cross-dataset comparison
 
 ```bash
 python src/latent_trainer/paths/main.py compare-datasets \

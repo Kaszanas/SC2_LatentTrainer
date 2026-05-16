@@ -78,14 +78,12 @@ def setup_mlflow(mlflow_tracking_uri: str, experiment_name: str) -> str:
     return experiment.experiment_id
 
 
-# ------------------------------------------------------------------
 # Parent-child run nesting
 #
 # During HPO sweeps, a "parent" run is opened and all individual trial
 # runs are created as children.  This groups trials in the MLFlow UI
 # and lets you log aggregate results (best params, best metric) on
 # the parent run itself.
-# ------------------------------------------------------------------
 def start_parent_run(
     experiment_name: str,
     run_name: str,
@@ -215,13 +213,11 @@ def create_child_mlflow_logger(
     )
 
 
-# ------------------------------------------------------------------
 # Artifact logging
 #
 # After training, checkpoint files and final model weights can be
 # uploaded to MLFlow as artifacts.  This makes them browsable and
 # downloadable from the MLFlow UI without needing filesystem access.
-# ------------------------------------------------------------------
 def log_checkpoint_artifacts(
     checkpoint_dir: Path,
     tracking_uri: str = DEFAULT_MLFLOW_URI,
@@ -296,20 +292,17 @@ def log_artifact(
     logger.info(f"Training complete.  Model saved to {str(model_path)}")
 
 
-# ---------------------------------------------------------------------------
 # MLflow-based param loading for guided-VAE retraining
-# ---------------------------------------------------------------------------
-
 _GUIDED_VAE_PARAM_TYPES: dict[str, type] = {
-    "latent_dim":            int,
-    "supervised_dim":        int,
-    "batch_size":            int,
-    "encoder_hidden_dims":   list,
+    "latent_dim": int,
+    "supervised_dim": int,
+    "batch_size": int,
+    "encoder_hidden_dims": list,
     "classification_weight": float,
-    "learning_rate":         float,
-    "learning_rate_cls":     float,
-    "weight_decay":          float,
-    "weight_decay_cls":      float,
+    "learning_rate": float,
+    "learning_rate_cls": float,
+    "weight_decay": float,
+    "weight_decay_cls": float,
 }
 
 

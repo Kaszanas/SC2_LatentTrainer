@@ -44,9 +44,7 @@ class NormalizedDataWithLabels:
     std: torch.Tensor
 
 
-# ------------------------------------------------------------------
 # Protocol for any VAE-like encoder (LitVAE, SimpleVAE, suGuidedVAE…)
-# ------------------------------------------------------------------
 class Encoder(Protocol):
     """Structural type for any model that exposes an ``encode`` method.
 
@@ -59,9 +57,7 @@ class Encoder(Protocol):
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]: ...
 
 
-# ------------------------------------------------------------------
 # Dataset wrapper (used by train_model.py / GuidedVAE path)
-# ------------------------------------------------------------------
 class CachedSC2Dataset(Dataset):
     """Wraps pre-processed feature and label tensors as a PyTorch Dataset."""
 

@@ -82,7 +82,7 @@ torchvision = [
 ]
 
 
-# --- Index Definitions ---
+# Index Definitions:
 # ... PyTorch index definitions ...
 [[tool.uv.index]]
 name = "pytorch-cpu"

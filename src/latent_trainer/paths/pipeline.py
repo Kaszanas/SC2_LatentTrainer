@@ -1,6 +1,3 @@
-# ---------------------------------------------------------------------------
-# Shared pipeline
-# ---------------------------------------------------------------------------
 from functools import partial
 
 import numpy as np
@@ -127,7 +124,7 @@ def run_path_charting_pipeline(
     n_win, n_loss, n_path = len(Z_win_np), len(Z_loss_np), len(path_z_np)
     all_data = np.concatenate([Z_win_np, Z_loss_np, path_z_np])
 
-    # --- PCA projection ---
+    # PCA projection:
     print("  Fitting PCA...")
     pca = PCA(n_components=2)
     coords = pca.fit_transform(all_data)
@@ -143,7 +140,7 @@ def run_path_charting_pipeline(
         subtitle=f" ({pca.explained_variance_ratio_[0]:.1%})",
     )
 
-    # --- UMAP projection ---
+    # UMAP projection:
     print("  Fitting UMAP...")
     umap_reducer = UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.1)
     coords = umap_reducer.fit_transform(all_data)
@@ -158,7 +155,7 @@ def run_path_charting_pipeline(
         proj_label="UMAP",
     )
 
-    # --- t-SNE projection (subsample background; always keep path points) ---
+    # t-SNE projection (subsample background; always keep path points):
     print("  Fitting t-SNE...")
     n_bg = n_win + n_loss
     rng = np.random.default_rng(42)
