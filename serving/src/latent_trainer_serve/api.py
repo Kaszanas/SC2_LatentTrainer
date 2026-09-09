@@ -165,6 +165,13 @@ def _plot_urls(saved_files: dict, request_id: str) -> dict:
     return urls
 
 
+# Always computed, in this order, for every upload -- one report comparing
+# all three, rather than making the caller pick just one. 'neural_flow' is
+# excluded: it needs a separately trained OT-flow-matching checkpoint that
+# doesn't exist for this feature set (see paths/cli.py's cmd_neural_flow).
+_STRATEGIES = ("linear", "gradient_ascent", "optimal_transport")
+
+
 @app.post("/analyze")
 async def analyze(
     file: UploadFile = File(...),
@@ -201,33 +208,49 @@ async def analyze(
         encoding="utf-8",
     )
 
-    try:
-        result = predict_replay(
-            replay_path=replay_path,
-            model_path=MODEL_PATH,
-            reference_pack_path=REFERENCE_PACK_PATH,
-            player=player,
-            strategy="linear",
-            method=method,
-            k_neighbours=k_neighbours,
-            n_steps=n_steps,
-            top_k=top_k,
-            docker_image=DOCKER_IMAGE,
-            extractor_binary=EXTRACTOR_BINARY,
-            cache_dir=CACHE_DIR,
-            output_dir=request_dir,
-        )
-    except ReplayExtractionError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+    strategies_out: dict = {}
+    for strategy in _STRATEGIES:
+        try:
+            # Extraction is cached by replay content hash (see
+            # inference/pipeline.py::_extract_features_cached), so only the
+            # first of these three calls actually runs SC2InfoExtractorGo --
+            # the rest reuse the cached feature tensor.
+            result = predict_replay(
+                replay_path=replay_path,
+                model_path=MODEL_PATH,
+                reference_pack_path=REFERENCE_PACK_PATH,
+                player=player,
+                strategy=strategy,
+                method=method,
+                k_neighbours=k_neighbours,
+                n_steps=n_steps,
+                top_k=top_k,
+                docker_image=DOCKER_IMAGE,
+                extractor_binary=EXTRACTOR_BINARY,
+                cache_dir=CACHE_DIR,
+                output_dir=request_dir,
+            )
+        except ReplayExtractionError as e:
+            # Extraction failing means every strategy would fail the same
+            # way -- no point trying the rest, and this is the client's
+            # fault (bad/corrupt replay), not a 500.
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        except ValueError as e:
+            # A single strategy's own failure (e.g. optimal_transport's
+            # non-finite-result guard) doesn't invalidate the others.
+            strategies_out[strategy] = {"error": str(e)}
+            continue
+
+        strategies_out[strategy] = {
+            "feedback": _feedback_to_json(result["feedback"]),
+            "plots": _plot_urls(result["saved_files"], request_id),
+        }
 
     response = {
         "request_id": request_id,
         "replay_name": upload_name,
         "created_at": created_at,
-        "feedback": _feedback_to_json(result["feedback"]),
-        "plots": _plot_urls(result["saved_files"], request_id),
+        "strategies": strategies_out,
     }
     (request_dir / "report.json").write_text(json.dumps(response), encoding="utf-8")
     return JSONResponse(response)

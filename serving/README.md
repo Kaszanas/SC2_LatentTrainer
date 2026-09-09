@@ -36,9 +36,9 @@ python -m latent_trainer_serve predict \
     --reference-pack reference_pack.pt
 ```
 
-Only the `linear` (centroid/nearest-k-NN) strategy is wired up so far. `gradient_ascent`/`optimal_transport`/`neural_flow` use the identical `PathContext` this pipeline builds -- see `latent_trainer/paths/cli.py`'s `cmd_gradient_ascent`/`cmd_optimal_transport`/`cmd_neural_flow` for the pattern to extend `latent_trainer/inference/pipeline.py::predict_replay` with them.
+`--strategy` selects one of `linear` (centroid/nearest-k-NN target), `gradient_ascent` (P(win) ascent + KDE density regularization), or `optimal_transport` (Wasserstein-barycentric path). `neural_flow` is not available here -- it needs a separately trained OT-flow-matching checkpoint (`latent_trainer/paths/cli.py`'s `cmd_neural_flow`) that doesn't exist for this granular feature set.
 
-Extraction results are cached by replay content hash under `~/.cache/latent_trainer_serve/` (override with `--cache-dir`), so re-running `predict` on the same replay (e.g. to try a different `--method`) skips both the Docker extraction and the feature computation.
+Extraction results are cached by replay content hash under `~/.cache/latent_trainer_serve/` (override with `--cache-dir`), so re-running `predict` on the same replay (e.g. to try a different `--strategy`) skips both the extraction and the feature computation.
 
 ## API + web UI
 
@@ -55,7 +55,7 @@ Then either:
 curl -F file=@game.SC2Replay http://localhost:8000/analyze
 ```
 
-or open <http://localhost:8000/> in a browser, upload a replay, and view the ranked feedback tables + plots inline (each plot links to its PDF for the publication-quality version).
+or open <http://localhost:8000/> in a browser, upload a replay, and view the ranked feedback tables + plots inline (each plot links to its PDF for the publication-quality version). `/analyze` always computes all three strategies (`linear`, `gradient_ascent`, `optimal_transport`) for every upload -- one report comparing all three, rather than picking one -- so a single upload takes a few minutes. If one strategy fails (e.g. `optimal_transport`'s non-finite-result guard), its section shows the error while the other two still render normally.
 
 The `api` service's `MODEL_PATH`/`REFERENCE_PACK_PATH` env vars are hardcoded in `docker-compose.yml` to the k18 checkpoint + `reference_pack_k18_fixedstd.pt` -- these are the only model files mounted into the container, so there's no way to point a request at a different (or leaky) model. Every request's plots are written to a fresh, timestamped directory under `RESULTS_DIR` (`./api_results` on the host, via the compose volume) so concurrent uploads never overwrite each other's output, and results stay traceable by creation time.
 

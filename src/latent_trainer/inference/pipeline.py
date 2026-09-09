@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -35,9 +36,13 @@ from latent_trainer.paths.data import (
     encode_player,
     get_supervised_dim,
     nearest_winning_target,
+    opponent_aware_logit,
+    opponent_aware_score,
 )
 from latent_trainer.paths.pipeline import run_path_charting_pipeline
 from latent_trainer.paths.strategies import path_linear
+from latent_trainer.paths.strategies.gradient_ascent import path_gradient_ascent
+from latent_trainer.paths.strategies.optimal_transport import path_optimal_transport
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +125,15 @@ def predict_replay(
     extractor_binary: Path | None = None,
     cache_dir: Path | None = None,
     output_dir: Path | None = None,
+    # gradient_ascent-only tunables (see paths/cli.py::cmd_gradient_ascent):
+    ga_steps: int = 1000,
+    ga_lr: float = 0.005,
+    ga_momentum: float = 0.5,
+    density_weight: float = 0.3,
+    kde_bandwidth: float = 0.5,
+    convergence_threshold: float = 0.95,
+    # optimal_transport-only tunable (see paths/cli.py::cmd_optimal_transport):
+    ot_reg: float = 0.01,
 ) -> dict:
     """Run extraction -> features -> encode -> path -> feedback for one replay.
 
@@ -130,7 +144,11 @@ def predict_replay(
         player actually lost the match (the natural choice: every game has
         exactly one loser, and that's who the "improvement path" is for).
     strategy:
-        Only ``"linear"`` is implemented right now; see module docstring.
+        ``"linear"``, ``"gradient_ascent"``, or ``"optimal_transport"``.
+        ``"neural_flow"`` is not supported here -- it needs a separately
+        trained OT-flow-matching checkpoint (paths/cli.py's
+        ``cmd_neural_flow``) that doesn't exist for the granular feature
+        set this pipeline serves.
     extractor_binary:
         Path to a locally available SC2InfoExtractorGo binary. When set,
         extraction runs that binary directly -- no Docker involved. When
@@ -210,13 +228,14 @@ def predict_replay(
         chosen=chosen,
     )
 
-    if strategy != "linear":
+    if strategy not in ("linear", "gradient_ascent", "optimal_transport"):
         raise NotImplementedError(
-            f"strategy={strategy!r} isn't wired up in predict_replay() yet; "
-            "only 'linear' is implemented so far. paths/cli.py's "
-            "cmd_gradient_ascent / cmd_optimal_transport / cmd_neural_flow "
-            "show the pattern to add it here -- same path_context, just a "
-            "different path_z_np computation before run_path_charting_pipeline."
+            f"strategy={strategy!r} isn't supported. Choices: 'linear', "
+            "'gradient_ascent', 'optimal_transport'. 'neural_flow' needs a "
+            "separately trained OT-flow-matching checkpoint that doesn't "
+            "exist for the granular feature set this pipeline serves -- see "
+            "paths/cli.py's cmd_neural_flow for that pattern if one is "
+            "trained later."
         )
 
     win_latents = compute_win_latents(
@@ -229,39 +248,86 @@ def predict_replay(
     z_free = z_start_full[sup_dim:]
     win_latents_sup = win_latents[:, :sup_dim]
 
-    if method == "centroid":
-        # Robust to a stray outlier latent (e.g. from a poisoned/near-zero-std
-        # training feature -- see _load_model's std floor): drop points whose
-        # norm is many median-absolute-deviations away from the median norm
-        # before averaging, instead of a plain mean that a single
-        # astronomically large outlier could otherwise dominate completely.
-        norms = win_latents_sup.norm(dim=1)
-        median_norm = norms.median()
-        mad = (norms - median_norm).abs().median() + 1e-6
-        inliers = (norms - median_norm).abs() <= 10 * mad
-        if not inliers.any():
-            inliers = torch.ones_like(inliers)
-        target_z = win_latents_sup[inliers].mean(dim=0).cpu().numpy()
-    elif method == "nearest":
-        target_z = (
-            nearest_winning_target(
-                sample_z=path_context.sample_z[:sup_dim],
-                win_latents=win_latents_sup,
-                k=k_neighbours,
+    if strategy == "linear":
+        if method == "centroid":
+            # Robust to a stray outlier latent (e.g. from a poisoned/near-zero-std
+            # training feature -- see _load_model's std floor): drop points whose
+            # norm is many median-absolute-deviations away from the median norm
+            # before averaging, instead of a plain mean that a single
+            # astronomically large outlier could otherwise dominate completely.
+            norms = win_latents_sup.norm(dim=1)
+            median_norm = norms.median()
+            mad = (norms - median_norm).abs().median() + 1e-6
+            inliers = (norms - median_norm).abs() <= 10 * mad
+            if not inliers.any():
+                inliers = torch.ones_like(inliers)
+            target_z = win_latents_sup[inliers].mean(dim=0).cpu().numpy()
+        elif method == "nearest":
+            target_z = (
+                nearest_winning_target(
+                    sample_z=path_context.sample_z[:sup_dim],
+                    win_latents=win_latents_sup,
+                    k=k_neighbours,
+                )
+                .cpu()
+                .numpy()
             )
-            .cpu()
-            .numpy()
-        )
-    else:
-        raise ValueError(
-            f"Unknown method: {method!r}, expected 'centroid' or 'nearest'."
+        else:
+            raise ValueError(
+                f"Unknown method: {method!r}, expected 'centroid' or 'nearest'."
+            )
+        path_z_sup = path_linear(
+            z_start=z_start_full[:sup_dim],
+            z_target=target_z,
+            n_waypoints=n_steps,
         )
 
-    path_z_sup = path_linear(
-        z_start=z_start_full[:sup_dim],
-        z_target=target_z,
-        n_waypoints=n_steps,
-    )
+    elif strategy == "gradient_ascent":
+        opponent_z = (
+            path_context.latents_p1[path_context.chosen]
+            if path_context.player_idx == 0
+            else path_context.latents_p0[path_context.chosen]
+        )
+        score_fn = partial(
+            opponent_aware_score,
+            guided_vae=path_context.guided_vae,
+            opponent_z=opponent_z,
+            player_idx=path_context.player_idx,
+        )
+        logit_fn = partial(
+            opponent_aware_logit,
+            guided_vae=path_context.guided_vae,
+            opponent_z=opponent_z,
+            player_idx=path_context.player_idx,
+        )
+        path_z_sup = path_gradient_ascent(
+            z_start=z_start_full[:sup_dim],
+            score_fn=score_fn,
+            logit_fn=logit_fn,
+            Z_all=win_latents_sup.cpu().numpy(),
+            steps=ga_steps,
+            lr=ga_lr,
+            momentum=ga_momentum,
+            density_weight=density_weight,
+            kde_bandwidth=kde_bandwidth,
+            n_waypoints=n_steps,
+            convergence_threshold=convergence_threshold,
+        )
+
+    else:  # optimal_transport
+        path_z_sup = path_optimal_transport(
+            z_start=z_start_full[:sup_dim],
+            Z_win=win_latents_sup.cpu().numpy(),
+            reg=ot_reg,
+            n_waypoints=n_steps,
+        )
+        if not torch.isfinite(torch.as_tensor(path_z_sup)).all():
+            raise ValueError(
+                "Optimal transport produced non-finite values (NaN/Inf). "
+                "Try ot_reg=0.0 for exact EMD or a larger regularization "
+                "such as ot_reg=0.05 or ot_reg=0.1."
+            )
+
     path_z_np = np.concatenate(
         [path_z_sup, np.tile(z_free, (len(path_z_sup), 1))], axis=1
     )
@@ -271,7 +337,7 @@ def predict_replay(
         path_context=path_context,
         n_steps=n_steps,
         top_k=top_k,
-        strategy="linear",
+        strategy=strategy,
         path_z_np=path_z_np,
         feature_names=build_granular_feature_names(n_bins=n_bins),
         output_dir=output_dir,

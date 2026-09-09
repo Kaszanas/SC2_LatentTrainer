@@ -19,6 +19,9 @@
   th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
   th { background: #f5f5f5; }
   .section-title { font-weight: bold; margin: 1.2rem 0 0.4rem; }
+  .strategy-section { border-top: 3px solid #333; margin-top: 2.5rem; padding-top: 0.5rem; }
+  .strategy-title { font-size: 1.2rem; font-weight: bold; text-transform: capitalize; }
+  .strategy-error { color: #c0392b; background: #fdecea; border-radius: 6px; padding: 0.75rem 1rem; font-size: 0.9rem; }
   .plot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(640px, 1fr)); gap: 1.25rem; }
   .plot-card { border: 1px solid #ddd; border-radius: 6px; padding: 0.5rem; }
   .plot-card img { width: 100%; border-radius: 4px; cursor: zoom-in; }
@@ -59,9 +62,8 @@
   <div id="error" hidden></div>
   <div id="report" hidden>
     <h2 id="report-title">Report</h2>
-    <div id="tables"></div>
-    <div class="section-title">Plots</div>
-    <div id="plots" class="plot-grid"></div>
+    <p style="font-size:0.85rem;color:#666;">Three path-charting strategies are always computed together for comparison: linear interpolation, gradient ascent (P(win) + density regularization), and optimal transport (Wasserstein-barycentric).</p>
+    <div id="strategy-sections"></div>
   </div>
 
 <script>
@@ -70,8 +72,7 @@ const statusEl = document.getElementById("status");
 const errorEl = document.getElementById("error");
 const reportEl = document.getElementById("report");
 const reportTitleEl = document.getElementById("report-title");
-const tablesEl = document.getElementById("tables");
-const plotsEl = document.getElementById("plots");
+const strategySectionsEl = document.getElementById("strategy-sections");
 const historyListEl = document.getElementById("history-list");
 const historyEmptyEl = document.getElementById("history-empty");
 const historySearchEl = document.getElementById("history-search");
@@ -105,24 +106,53 @@ function renderTable(rows, title) {
 }
 
 function renderPlots(plots) {
-  plotsEl.innerHTML = "";
+  const grid = document.createElement("div");
+  grid.className = "plot-grid";
   for (const [key, urls] of Object.entries(plots)) {
     const card = document.createElement("div");
     card.className = "plot-card";
     card.innerHTML = `<a href="${urls.png}" target="_blank" rel="noopener">` +
       `<img src="${urls.png}" alt="${key}" loading="lazy" /></a>` +
       `<div>${key} -- <a href="${urls.pdf}" target="_blank" rel="noopener">Download PDF</a></div>`;
-    plotsEl.appendChild(card);
+    grid.appendChild(card);
   }
+  return grid;
+}
+
+function renderStrategySection(name, strategyData) {
+  const section = document.createElement("div");
+  section.className = "strategy-section";
+
+  const title = document.createElement("div");
+  title.className = "strategy-title";
+  title.textContent = name.replace(/_/g, " ");
+  section.appendChild(title);
+
+  if (strategyData.error) {
+    const err = document.createElement("div");
+    err.className = "strategy-error";
+    err.textContent = strategyData.error;
+    section.appendChild(err);
+    return section;
+  }
+
+  for (const [key, labelKey] of TABLE_SECTIONS) {
+    section.appendChild(renderTable(strategyData.feedback[key], strategyData.feedback[labelKey]));
+  }
+  const plotsTitle = document.createElement("div");
+  plotsTitle.className = "section-title";
+  plotsTitle.textContent = "Plots";
+  section.appendChild(plotsTitle);
+  section.appendChild(renderPlots(strategyData.plots));
+  return section;
 }
 
 function renderReport(data) {
   reportTitleEl.textContent = `Report -- ${data.replay_name} (${data.request_id})`;
-  tablesEl.innerHTML = "";
-  for (const [key, labelKey] of TABLE_SECTIONS) {
-    tablesEl.appendChild(renderTable(data.feedback[key], data.feedback[labelKey]));
+  strategySectionsEl.innerHTML = "";
+  for (const [name, strategyData] of Object.entries(data.strategies)) {
+    strategySectionsEl.appendChild(renderStrategySection(name, strategyData));
   }
-  renderPlots(data.plots);
   errorEl.hidden = true;
   statusEl.hidden = true;
   reportEl.hidden = false;
@@ -181,7 +211,7 @@ form.addEventListener("submit", async (ev) => {
   errorEl.hidden = true;
   reportEl.hidden = true;
   statusEl.hidden = false;
-  statusEl.textContent = "Uploading and analyzing -- this can take a minute (replay extraction + model inference)...";
+  statusEl.textContent = "Uploading and analyzing -- computing linear, gradient-ascent, and optimal-transport paths can take a few minutes...";
 
   const fileInput = document.getElementById("file");
   const player = document.getElementById("player").value;
