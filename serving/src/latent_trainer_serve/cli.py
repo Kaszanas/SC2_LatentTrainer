@@ -96,10 +96,11 @@ def cmd_build_reference_pack(model_path: Path, dataset_path: Path, output_path: 
 )
 @click.option(
     "--strategy",
-    type=click.Choice(["linear"]),
+    type=click.Choice(["linear", "gradient_ascent", "optimal_transport"]),
     default="linear",
     show_default=True,
-    help="Path-generation strategy. Only 'linear' is wired up so far.",
+    help="Path-generation strategy. 'neural_flow' needs a separately "
+    "trained flow checkpoint not available for this feature set.",
 )
 @click.option(
     "--method",
