@@ -128,6 +128,19 @@ logger = logging.getLogger(__name__)
         "If omitted, auto-generated as '<source>_<timestamp>'."
     ),
 )
+@click.option(
+    "--max_input_dim",
+    type=int,
+    default=None,
+    help=(
+        "Truncate the loaded feature tensor to its first N columns before "
+        "training ('best' mode only). Per-feature normalization is "
+        "slice-invariant, so this is equivalent to caching only those "
+        "columns. Useful for sweeping over a single wide cache (e.g. the "
+        "'granular' transform's cumulative 5%-of-game bins) without "
+        "reprocessing per sweep point."
+    ),
+)
 def main(
     pipeline: str,
     dataset_filename: str,
@@ -141,6 +154,7 @@ def main(
     source_experiment: str | None,
     source_run: str | None,
     run_name: str | None,
+    max_input_dim: int | None,
 ) -> None:
     """SC2 Latent Trainer — unified training & HPO entrypoint."""
     logging.basicConfig(
@@ -166,6 +180,7 @@ def main(
         mlflow_source_experiment=source_experiment,
         mlflow_source_run=source_run,
         run_name=run_name,
+        max_input_dim=max_input_dim,
     )
 
     setup_mlflow(

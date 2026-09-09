@@ -1,0 +1,57 @@
+# Frontend (this serving package). SC2InfoExtractorGo's binary is baked
+# directly into the image (see Dockerfile's multi-stage COPY) -- no
+# Docker-out-of-Docker, no docker CLI, no host socket needed.
+#
+# Usage:
+#   docker compose -f serving/docker-compose.yml run --rm frontend predict \
+#       --replay /replays/game.SC2Replay \
+#       --model /models/best.ckpt \
+#       --reference-pack /models/reference_pack_k18_fixedstd.pt \
+#       --extractor-binary /usr/local/bin/SC2InfoExtractorGo
+
+services:
+  frontend:
+    build:
+      context: ..
+      dockerfile: serving/Dockerfile
+    volumes:
+      # Replays to analyze, model checkpoints + reference packs, and the
+      # extraction dependency cache (map data, persisted across runs).
+      - ./replays:/replays
+      - ../output/checkpoints:/models:ro
+      - ./sc2_extractor_dependencies:/root/.cache/latent_trainer_serve/sc2_extractor_dependencies
+
+  # Upload API + web UI: `docker compose -f serving/docker-compose.yml up api`,
+  # then POST a replay to http://localhost:8000/analyze or open
+  # http://localhost:8000/ in a browser. Only ever mounts the k18 granular
+  # checkpoint (first 18 of 20 5%-of-game bins, 90% of the game, 703 dims,
+  # ~88% val_acc) -- k19/k20 show a clear "already decided" collapse
+  # signature in the last 10-15% of the game (see
+  # docs/robust_temporal_model_roadmap.md), and the old leaky 196-dim
+  # best.ckpt/best_flow.ckpt are never reachable from this service.
+  api:
+    build:
+      context: ..
+      dockerfile: serving/Dockerfile
+    entrypoint: []
+    command:
+      [
+        "uvicorn",
+        "latent_trainer_serve.api:app",
+        "--host", "0.0.0.0",
+        "--port", "8000",
+      ]
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_PATH: /models/best.ckpt
+      REFERENCE_PACK_PATH: /reference_pack.pt
+      EXTRACTOR_BINARY: /usr/local/bin/SC2InfoExtractorGo
+    volumes:
+      - ../output/checkpoints/guided_vae_granular_sweep/guided_vae_k18_dim703_fixedstd:/models:ro
+      # Mounted at a separate top-level path, not nested inside the
+      # already-read-only /models mount -- Docker can't create a mountpoint
+      # for a file inside a directory whose own mount is read-only.
+      - ./reference_pack_k18_fixedstd.pt:/reference_pack.pt:ro
+      - ./sc2_extractor_dependencies:/root/.cache/latent_trainer_serve/sc2_extractor_dependencies
+      - ./api_results:/root/.cache/latent_trainer_serve/api_results

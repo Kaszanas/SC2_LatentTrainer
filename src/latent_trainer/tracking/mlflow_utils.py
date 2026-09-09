@@ -385,6 +385,19 @@ def load_guided_vae_params_from_mlflow(
     raw = runs[0].data.params
     filtered = {k: v for k, v in raw.items() if k in _GUIDED_VAE_PARAM_TYPES}
 
+    # batch_size is the only fixed-choice hyperparameter in the guided-VAE
+    # search space (configs/search_space.py always suggests 64), and the
+    # standalone train_guided.py CLI also defaults to 64. Some historical
+    # "retrain from best params" runs didn't re-log it, even though every
+    # guided-VAE model in this project was in fact trained at batch_size=64.
+    if "batch_size" not in filtered:
+        logger.warning(
+            "Run '%s' has no logged 'batch_size'; defaulting to 64 "
+            "(the only value the search space ever produces).",
+            runs[0].info.run_name,
+        )
+        filtered["batch_size"] = "64"
+
     missing = set(_GUIDED_VAE_PARAM_TYPES) - set(filtered)
     if missing:
         raise ValueError(

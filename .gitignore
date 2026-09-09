@@ -136,3 +136,9 @@ ray_tmp/
 *.db
 
 *.png
+
+# serving/: runtime artifacts from actually running the API/CLI locally --
+# not source, must not ship in a commit meant for someone else to clone.
+serving/api_results/
+serving/sc2_extractor_dependencies/
+serving/replays/

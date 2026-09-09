@@ -183,16 +183,34 @@ def run_guided_vae_best(config: ExperimentConfig) -> None:
         trial_tag = f"retrain_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     data = load_and_normalize(DATA_DIR / config.dataset_filename)
+    train_X, val_X, norm_mean, norm_std = (
+        data.train_X,
+        data.val_X,
+        data.mean,
+        data.std,
+    )
+    if config.max_input_dim is not None:
+        # Per-feature z-score normalization is slice-invariant, so truncating
+        # after normalizing is equivalent to having cached only these columns.
+        train_X = train_X[..., : config.max_input_dim]
+        val_X = val_X[..., : config.max_input_dim]
+        norm_mean = norm_mean[..., : config.max_input_dim]
+        norm_std = norm_std[..., : config.max_input_dim]
+        logger.info(
+            "Truncated features to first %d columns (max_input_dim).",
+            config.max_input_dim,
+        )
+
     train_guided_pipeline(
-        train_X=data.train_X,
+        train_X=train_X,
         train_y=data.train_y,
-        val_X=data.val_X,
+        val_X=val_X,
         val_y=data.val_y,
-        input_dim=data.train_X.shape[-1],
+        input_dim=train_X.shape[-1],
         config=config,
         params=params,
-        norm_mean=data.mean,
-        norm_std=data.std,
+        norm_mean=norm_mean,
+        norm_std=norm_std,
         trial_tag=trial_tag,
         sweep_mode=False,
     )

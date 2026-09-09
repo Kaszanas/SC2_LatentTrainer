@@ -105,6 +105,14 @@ class ExperimentConfig:
     # None → auto-generated as "{source_label}_{timestamp}".
     run_name: str | None = None
 
+    # Truncate the loaded feature tensor to its first N columns before
+    # training (per-feature z-score normalization is slice-invariant, so
+    # this is equivalent to having cached only those columns). Used to sweep
+    # over a single wide cache (e.g. the "granular" transform's cumulative
+    # 5%-of-game bins) without reprocessing the dataset per sweep point.
+    # None → use the full cached feature width.
+    max_input_dim: int | None = None
+
     # HPO objective: weighted sum of validation metrics.
     # Keys must match metric names logged by LitGuidedVAE:
     #   val_loss, val_vae_loss, val_cls_loss, val_acc

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import matplotlib
 
 matplotlib.use("Agg")  # non-interactive backend — safe for threads and scripts
@@ -6,6 +8,24 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from scipy.stats import gaussian_kde
+
+
+def _save_dual(save_path) -> dict:
+    """Save the current figure as both PDF (vector, publication-quality) and
+    PNG (raster, for inline web display) at the same base path, then close it.
+
+    Returns {"pdf": Path, "png": Path} so callers can hand both back to an API
+    response without re-rendering.
+    """
+    save_path = Path(save_path)
+    pdf_path = save_path.with_suffix(".pdf")
+    png_path = save_path.with_suffix(".png")
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(pdf_path, dpi=300, bbox_inches="tight")
+    plt.savefig(png_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved -> {pdf_path} (+ .png)")
+    return {"pdf": pdf_path, "png": png_path}
 
 
 def plot_main_proj(
@@ -137,9 +157,7 @@ def plot_main_proj(
     ax2.grid(True, alpha=0.15)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved -> {save_path}")
+    return _save_dual(save_path)
 
 
 def plot_feature_delta(delta, feature_names, top_k, save_path):
@@ -161,9 +179,7 @@ def plot_feature_delta(delta, feature_names, top_k, save_path):
     ax.axvline(0, color="grey", linewidth=0.8)
     ax.grid(True, axis="x", alpha=0.2)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved -> {save_path}")
+    return _save_dual(save_path)
 
 
 def plot_feature_evolution(
@@ -181,9 +197,7 @@ def plot_feature_evolution(
     ax.legend(fontsize=9, loc="best")
     ax.grid(True, alpha=0.2)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved -> {save_path}")
+    return _save_dual(save_path)
 
 
 def plot_distance(path_z, win_centroid, alphas, save_path):
@@ -196,9 +210,7 @@ def plot_distance(path_z, win_centroid, alphas, save_path):
     ax.set_title("Distance to Win Region Along Path", fontsize=13, fontweight="bold")
     ax.grid(True, alpha=0.2)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved -> {save_path}")
+    return _save_dual(save_path)
 
 
 def plot_three_signal_feedback(
@@ -238,6 +250,4 @@ def plot_three_signal_feedback(
         ax.grid(True, axis="x", alpha=0.2)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Saved -> {save_path}")
+    return _save_dual(save_path)

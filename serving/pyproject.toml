@@ -1,0 +1,32 @@
+[project]
+name = "latent-trainer-serve"
+version = "0.1.0"
+description = "Single-replay hosting pipeline for the SC2 Latent Trainer counterfactual model."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+
+dependencies = [
+    "click>=8.5.0",
+    "latent-trainer[cpu]",
+]
+
+[dependency-groups]
+api = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "python-multipart>=0.0.20",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.22,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+# Match the root project: only resolve for platforms this actually runs on.
+environments = [
+    "sys_platform == 'win32'",
+    "sys_platform == 'linux'",
+]
+
+[tool.uv.sources]
+latent-trainer = { path = "../", editable = true }

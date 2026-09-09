@@ -2,6 +2,7 @@
 # Shared pipeline
 # ---------------------------------------------------------------------------
 from functools import partial
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -44,8 +45,32 @@ def run_path_charting_pipeline(
     top_k: int,
     strategy: str,
     path_z_np: "np.ndarray",
-) -> None:
-    """Common post-path logic: P(win) curve, feedback, plots."""
+    feature_names: list[str] | None = None,
+    output_dir: "Path | None" = None,
+    plots_dir: "Path | None" = None,
+) -> dict:
+    """Common post-path logic: P(win) curve, feedback, plots.
+
+    feature_names defaults to FEATURE_NAMES (the bulk rich_transform's
+    196-dim layout) -- pass the matching names explicitly for a model
+    trained on a different feature layout (e.g. the granular transform).
+
+    output_dir/plots_dir default to the process-wide OUTPUT_DIR/PLOTS_DIR
+    (today's CLI behavior) -- pass request-scoped directories when calling
+    this from a server handling concurrent requests, so plots from different
+    calls don't overwrite each other.
+
+    Returns {"feedback": feedback_dict, "saved_files": {plot_key: {"pdf":
+    Path, "png": Path}}} so callers (e.g. an API) can serialize the report
+    instead of only relying on the printed output / files on disk.
+    """
+    if feature_names is None:
+        feature_names = FEATURE_NAMES
+    if output_dir is None:
+        output_dir = OUTPUT_DIR
+    if plots_dir is None:
+        plots_dir = PLOTS_DIR
+    saved_files: dict = {}
 
     win_latents = compute_win_latents(
         labels_tensor=path_context.labels_tensor,
@@ -87,7 +112,7 @@ def run_path_charting_pipeline(
         score_fn=score_fn,
         norm_mean=path_context.guided_vae.mean,
         norm_std=path_context.guided_vae.std,
-        feature_names=FEATURE_NAMES,
+        feature_names=feature_names,
         top_k=top_k,
         method_name=strategy.upper(),
         device=device,
@@ -95,10 +120,10 @@ def run_path_charting_pipeline(
     print_feedback_report(feedback=feedback, top_k=top_k)
 
     print("\nGenerating plots...")
-    plot_three_signal_feedback(
+    saved_files["three_signal"] = plot_three_signal_feedback(
         feedback=feedback,
-        feature_names=FEATURE_NAMES,
-        save_path=OUTPUT_DIR / f"feedback_{strategy}_three_signal.pdf",
+        feature_names=feature_names,
+        save_path=output_dir / f"feedback_{strategy}_three_signal.pdf",
         top_k=top_k,
     )
     path_features = decode_features(
@@ -107,19 +132,19 @@ def run_path_charting_pipeline(
         norm_mean=path_context.guided_vae.mean,
         norm_std=path_context.guided_vae.std,
     )
-    plot_feature_evolution(
+    saved_files["feature_evolution"] = plot_feature_evolution(
         path_features=path_features,
         delta=feedback["_raw_delta"],
-        feature_names=FEATURE_NAMES,
+        feature_names=feature_names,
         n_top=min(5, top_k),
         alphas=alphas,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_feature_evolution.pdf",
+        save_path=plots_dir / f"feedback_{strategy}_feature_evolution.pdf",
     )
-    plot_feature_delta(
+    saved_files["feature_delta"] = plot_feature_delta(
         delta=feedback["_raw_delta"],
-        feature_names=FEATURE_NAMES,
+        feature_names=feature_names,
         top_k=top_k,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_feature_delta.pdf",
+        save_path=plots_dir / f"feedback_{strategy}_feature_delta.pdf",
     )
 
     Z_win_np = win_latents.detach().cpu().numpy()
@@ -132,13 +157,13 @@ def run_path_charting_pipeline(
     pca = PCA(n_components=2)
     coords = pca.fit_transform(all_data)
     win_c, loss_c, path_c = _slice_proj(coords, n_win, n_loss)
-    plot_main_proj(
+    saved_files["latent_pca"] = plot_main_proj(
         win_c=win_c,
         loss_c=loss_c,
         path_c=path_c,
         alphas=alphas,
         win_probs=win_probs,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_pca.pdf",
+        save_path=plots_dir / f"feedback_{strategy}_latent_pca.pdf",
         proj_label="PC",
         subtitle=f" ({pca.explained_variance_ratio_[0]:.1%})",
     )
@@ -148,13 +173,13 @@ def run_path_charting_pipeline(
     umap_reducer = UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.1)
     coords = umap_reducer.fit_transform(all_data)
     win_c, loss_c, path_c = _slice_proj(coords, n_win, n_loss)
-    plot_main_proj(
+    saved_files["latent_umap"] = plot_main_proj(
         win_c=win_c,
         loss_c=loss_c,
         path_c=path_c,
         alphas=alphas,
         win_probs=win_probs,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_umap.pdf",
+        save_path=plots_dir / f"feedback_{strategy}_latent_umap.pdf",
         proj_label="UMAP",
     )
 
@@ -179,21 +204,23 @@ def run_path_charting_pipeline(
     sub_win_c = bg_coords[sub_is_win]
     sub_loss_c = bg_coords[~sub_is_win]
     sub_path_c = coords[len(sub_bg) :]
-    plot_main_proj(
+    saved_files["latent_tsne"] = plot_main_proj(
         win_c=sub_win_c,
         loss_c=sub_loss_c,
         path_c=sub_path_c,
         alphas=alphas,
         win_probs=win_probs,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_latent_tsne.pdf",
+        save_path=plots_dir / f"feedback_{strategy}_latent_tsne.pdf",
         proj_label="t-SNE",
         subtitle=f" (perp={perplexity})",
     )
 
-    plot_distance(
+    saved_files["distance_curve"] = plot_distance(
         path_z=path_z_tensor,
         win_centroid=win_centroid,
         alphas=alphas,
-        save_path=PLOTS_DIR / f"feedback_{strategy}_distance_curve.pdf",
+        save_path=plots_dir / f"feedback_{strategy}_distance_curve.pdf",
     )
-    print(f"\nDone! All plots saved to {PLOTS_DIR}/ (strategy={strategy})")
+    print(f"\nDone! All plots saved to {plots_dir}/ (strategy={strategy})")
+
+    return {"feedback": feedback, "saved_files": saved_files}
