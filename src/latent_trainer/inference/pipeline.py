@@ -22,6 +22,7 @@ import numpy as np
 import torch
 
 from latent_trainer.features.rich_transform import (
+    GAME_LOOPS_PER_SECOND,
     N_GRANULAR_BINS,
     rich_transform_granular,
 )
@@ -77,11 +78,17 @@ def _extract_features_cached(
     cache_dir: Path,
     docker_image: str,
     extractor_binary: Path | None = None,
-) -> tuple[torch.Tensor, int]:
+) -> tuple[torch.Tensor, int, float | None]:
     """Extract + transform a replay, caching the result by content hash.
 
     Re-analyzing the same replay (e.g. with a different --strategy) then
     skips both the extraction and the feature computation.
+
+    Returns (features, label, duration_seconds). duration_seconds is the
+    replay's real-world length (elapsedGameLoops / GAME_LOOPS_PER_SECOND),
+    used to translate each bin's event-index-fraction window into an
+    approximate wall-clock time range for display. ``None`` if the header's
+    elapsedGameLoops isn't available for some reason.
     """
     replay_hash = _replay_hash(replay_path)
     cache_path = cache_dir / f"{replay_hash}_granular_features.pt"
@@ -89,7 +96,7 @@ def _extract_features_cached(
     if cache_path.exists():
         logger.info("Using cached features for %s", replay_path.name)
         cached = torch.load(str(cache_path), weights_only=True)
-        return cached["features"], int(cached["label"])
+        return cached["features"], int(cached["label"]), cached.get("duration_seconds")
 
     logger.info("Extracting %s...", replay_path.name)
     sc2_replay = extract_replay(
@@ -106,9 +113,18 @@ def _extract_features_cached(
             "or be missing PlayerStats/player info."
         )
     features, label = result
+    try:
+        duration_seconds = (
+            float(sc2_replay.header.elapsedGameLoops) / GAME_LOOPS_PER_SECOND
+        )
+    except (AttributeError, ValueError, TypeError):
+        duration_seconds = None
     cache_dir.mkdir(parents=True, exist_ok=True)
-    torch.save({"features": features, "label": label}, str(cache_path))
-    return features, label
+    torch.save(
+        {"features": features, "label": label, "duration_seconds": duration_seconds},
+        str(cache_path),
+    )
+    return features, label, duration_seconds
 
 
 def predict_replay(
@@ -171,7 +187,7 @@ def predict_replay(
     replay_path = Path(replay_path)
     cache_dir = Path(cache_dir) if cache_dir is not None else DEFAULT_CACHE_DIR
 
-    features, true_label = _extract_features_cached(
+    features, true_label, duration_seconds = _extract_features_cached(
         replay_path=replay_path,
         cache_dir=cache_dir,
         docker_image=docker_image,
@@ -333,7 +349,7 @@ def predict_replay(
     )
 
     n_bins = (features.shape[-1] - 1) // 39
-    return run_path_charting_pipeline(
+    result = run_path_charting_pipeline(
         path_context=path_context,
         n_steps=n_steps,
         top_k=top_k,
@@ -343,3 +359,10 @@ def predict_replay(
         output_dir=output_dir,
         plots_dir=output_dir,
     )
+    # For translating each "binNN_..." feature name into an approximate
+    # wall-clock time range: bins are always 1/N_GRANULAR_BINS-of-the-game
+    # windows regardless of how many leading bins a truncated checkpoint
+    # actually uses (see build_granular_feature_names/N_GRANULAR_BINS).
+    result["game_duration_seconds"] = duration_seconds
+    result["n_bins_total"] = N_GRANULAR_BINS
+    return result

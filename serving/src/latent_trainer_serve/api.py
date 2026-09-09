@@ -149,10 +149,48 @@ def _list_history(query: str | None = None) -> list[dict]:
     return entries
 
 
-def _feedback_to_json(feedback: dict) -> dict:
+_BIN_FEATURE_RE = re.compile(r"^bin(\d+)_")
+
+
+def _format_mmss(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _add_bin_time_range(row: dict, duration_seconds: float | None, n_bins_total: int) -> dict:
+    """Add bin_start/bin_end (mm:ss) to one ranked-table row, if its feature
+    is a "binNN_..." granular feature and the replay's duration is known.
+
+    Bins are always 1/n_bins_total-of-the-game windows by event-index
+    fraction (see docs/robust_temporal_model_roadmap.md for the caveat that
+    this is an approximation of real time, not an exact one) -- meta
+    features (e.g. supplyCappedPercent) aren't tied to any bin and get
+    ``None`` for both.
+    """
+    match = _BIN_FEATURE_RE.match(row["feature"])
+    if not match or duration_seconds is None:
+        return {**row, "bin_start": None, "bin_end": None}
+    bin_idx = int(match.group(1))
+    start = bin_idx / n_bins_total * duration_seconds
+    end = (bin_idx + 1) / n_bins_total * duration_seconds
+    return {**row, "bin_start": _format_mmss(start), "bin_end": _format_mmss(end)}
+
+
+def _feedback_to_json(
+    feedback: dict, duration_seconds: float | None, n_bins_total: int
+) -> dict:
     """Strip the raw numpy-array (`_`-prefixed) keys -- only the already-
-    plain-Python ranked tables and labels are meant for a client."""
-    return {k: v for k, v in feedback.items() if not k.startswith("_")}
+    plain-Python ranked tables and labels are meant for a client. Also
+    annotates each ranked-table row with its bin's approximate real-game-time
+    start/end, for display."""
+    out = {k: v for k, v in feedback.items() if not k.startswith("_")}
+    for key in ("raw", "minimum_viable", "gain_weighted"):
+        if key in out:
+            out[key] = [
+                _add_bin_time_range(row, duration_seconds, n_bins_total)
+                for row in out[key]
+            ]
+    return out
 
 
 def _plot_urls(saved_files: dict, request_id: str) -> dict:
@@ -242,7 +280,11 @@ async def analyze(
             continue
 
         strategies_out[strategy] = {
-            "feedback": _feedback_to_json(result["feedback"]),
+            "feedback": _feedback_to_json(
+                result["feedback"],
+                result["game_duration_seconds"],
+                result["n_bins_total"],
+            ),
             "plots": _plot_urls(result["saved_files"], request_id),
         }
 
