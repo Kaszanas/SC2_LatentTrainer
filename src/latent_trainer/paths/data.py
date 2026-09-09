@@ -28,6 +28,16 @@ def _build_feature_names() -> list[str]:
 FEATURE_NAMES: list[str] = _build_feature_names()
 
 
+def build_granular_feature_names(n_bins: int) -> list[str]:
+    """Feature names matching rich_transform.prepare_player_features_granular's
+    layout: [meta(1), bin0(39), bin1(39), ..., bin{n_bins-1}(39)]."""
+    names: list[str] = list(META_FEATURE_NAMES)
+    for i in range(n_bins):
+        for field in SORTED_PLAYERSTATS_KEYS:
+            names.append(f"bin{i:02d}_{field}")
+    return names
+
+
 def get_supervised_dim(vae: LitGuidedVAE) -> int:
     """Number of supervised latent dimensions in the trained model."""
     return vae.model.supervised_dim
@@ -90,8 +100,17 @@ def load_model_and_data(
 
     mean = vae_model.mean.cpu()
     std = vae_model.std.cpu()
-    shape = spec.test_features.shape
-    test_flat = spec.test_features.float().reshape(-1, shape[-1])
+    test_features = spec.test_features.float()
+    input_dim = mean.shape[-1]
+    if test_features.shape[-1] != input_dim:
+        # The checkpoint was trained on a truncated cache (--max_input_dim
+        # during a bin-count/leakage sweep) -- per-feature z-score
+        # normalization is slice-invariant, so truncating the wider cache's
+        # raw features to the checkpoint's own width first, before
+        # normalizing with its stored mean/std, reproduces training exactly.
+        test_features = test_features[..., :input_dim]
+    shape = test_features.shape
+    test_flat = test_features.reshape(-1, shape[-1])
     test_X = ((test_flat - mean) / std).reshape(shape).to(device)
     test_y = spec.test_labels.float().to(device)
     print(f"  Data device: X={test_X.device}, y={test_y.device}")

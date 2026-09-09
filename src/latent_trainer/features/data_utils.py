@@ -51,7 +51,17 @@ def normalize(
     test_flat = test_X.reshape(-1, shape[-1])
 
     mean = train_flat.mean(dim=0, keepdim=True)
-    std = train_flat.std(dim=0, keepdim=True) + 1e-8
+    # A plain `+ 1e-8` epsilon is not a real floor for near-constant features
+    # (e.g. a rare stat that's ~always 0): true std there can itself be
+    # ~1e-8, so dividing by ~2e-8 still blows up any nonzero outlier value
+    # into an enormous z-score (confirmed: a single training game with one
+    # nonzero occurrence of an otherwise-always-zero stat produced a z-score
+    # of ~1.5e10, which propagated into an astronomically large encoded
+    # latent vector and poisoned downstream latent-space centroids/means).
+    # These are raw count/aggregate features with typical scale in the
+    # hundreds-to-thousands, so a std floor of 1.0 is a real floor, not a
+    # no-op, while being negligible for every normally-scaled feature.
+    std = train_flat.std(dim=0, keepdim=True).clamp(min=1.0)
 
     train_flat = (train_flat - mean) / std
     val_flat = (val_flat - mean) / std

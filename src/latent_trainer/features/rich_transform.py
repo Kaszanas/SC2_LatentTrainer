@@ -1,13 +1,20 @@
 """Rich feature transform for SC2 replays.
 
 Extracts a comprehensive feature vector per player including:
-- Temporal economy snapshots (early/mid/late game) — 39 features × 3 time windows
-- Final economy state — 39 features
+- Temporal economy snapshots (early/mid/late game, by event-index fraction of
+  that replay's own PlayerStats event stream) — 39 features x 3 windows
+- Final economy state (the last PlayerStats event of the game) — 39 features
 - Economy rate-of-change (late minus early) — 39 features
 - Player meta stats: supplyCappedPercent — 1 feature
 
-Total: per player = 39*5 + 1 = 196 features
-Output shape: [2, 196] per replay
+Total (all blocks): per player = 39*5 + 1 = 196 features.
+Output shape: [2, 196] per replay.
+
+``final``/``late``/``econDelta`` are close to a restatement of the game
+outcome (cumulative army/resource counters collapse for the loser by the
+final tick) rather than genuine mid-game behavior. Use ``feature_blocks`` to
+build a reduced, less leakage-prone vector, e.g.
+``feature_blocks=("early", "mid", "meta")`` (79 features/player).
 """
 
 from typing import Optional, Tuple
@@ -27,6 +34,11 @@ RACE_MAP = {"Zerg": 0.0, "Protoss": 1.0, "Terran": 2.0}
 
 SORTED_PLAYERSTATS_KEYS = sorted(Stats.__dataclass_fields__.keys())
 META_FEATURE_NAMES = ["supplyCappedPercent"]
+
+# Canonical block order — concatenation order always follows this, regardless
+# of the order blocks are requested in.
+ALL_FEATURE_BLOCKS: tuple[str, ...] = ("early", "mid", "late", "final", "econDelta", "meta")
+DEFAULT_FEATURE_BLOCKS: tuple[str, ...] = ALL_FEATURE_BLOCKS
 
 
 def _get_stats_values(stats_obj) -> list:
@@ -239,6 +251,7 @@ def prepare_player_features(
     sc2_replay: SC2ReplayData,
     player_id: int,
     game_duration: float,
+    feature_blocks: tuple[str, ...] = DEFAULT_FEATURE_BLOCKS,
 ) -> Optional[np.ndarray]:
 
     # 1. Temporal economy snapshots
@@ -320,27 +333,36 @@ def prepare_player_features(
     # REVIEW: What will the model learn to do with duration? It is not player
     # REVIEW: specific information.
 
-    # Concatenate all features for this player
+    # Concatenate the requested blocks, always in canonical order regardless
+    # of the order they were requested in.
+    block_values = {
+        "early": early_stats,
+        "mid": mid_stats,
+        "late": late_stats,
+        "final": final_stats,
+        "econDelta": econ_delta,
+        "meta": meta_features,
+    }
     player_feat = np.concatenate(
-        [
-            early_stats,  # 39
-            mid_stats,  # 39
-            late_stats,  # 39
-            final_stats,  # 39
-            econ_delta,  # 39
-            meta_features,  # 1
-            # [units_born],  # 1
-            # [units_killed],  # 1
-            # [upgrade_count],  # 1
-            # duration,  # 1
-        ]
+        [block_values[name] for name in ALL_FEATURE_BLOCKS if name in feature_blocks]
     )
 
     return player_feat
 
 
-def rich_transform(sc2_replay: SC2ReplayData) -> Tuple[torch.Tensor, int] | None:
+def rich_transform(
+    sc2_replay: SC2ReplayData,
+    feature_blocks: tuple[str, ...] = DEFAULT_FEATURE_BLOCKS,
+) -> Tuple[torch.Tensor, int] | None:
     """Extract rich features from an SC2 replay.
+
+    Parameters
+    ----------
+    feature_blocks : tuple[str, ...]
+        Which of ``ALL_FEATURE_BLOCKS`` to include in the output vector.
+        Defaults to all blocks (196 features/player). Pass a reduced set,
+        e.g. ``("early", "mid", "meta")``, to exclude the leakage-prone
+        ``final``/``late``/``econDelta`` blocks.
 
     Returns:
         Tuple of (features_tensor [2, N_features], label) or None to skip.
@@ -366,10 +388,99 @@ def rich_transform(sc2_replay: SC2ReplayData) -> Tuple[torch.Tensor, int] | None
             sc2_replay=sc2_replay,
             player_id=player_id,
             game_duration=game_duration,
+            feature_blocks=feature_blocks,
         )
         if player_feat is None:
             return None
 
+        player_features.append(player_feat)
+
+    features = torch.tensor(np.stack(player_features), dtype=torch.float32)
+
+    return features, label
+
+
+# ---------------------------------------------------------------------------
+# Fine-grained (5%-of-game) binned transform, for leakage-localization sweeps.
+#
+# Rather than 3 coarse thirds, this slices each replay's PlayerStats event
+# stream (by event-index fraction, same convention as _temporal_snapshot)
+# into N_GRANULAR_BINS equal bins and averages the 39 Stats fields within
+# each. Output layout is [meta(1), bin0(39), bin1(39), ..., binN-1(39)] —
+# meta first so that "cumulative first k bins" is a contiguous slice
+# X[..., : 1 + k * GRANULAR_STATS_PER_BIN], letting a leakage-localization
+# sweep ("how much of the game do we need to see") reuse a single cache via
+# slicing instead of reprocessing the dataset once per sweep point.
+# ---------------------------------------------------------------------------
+N_GRANULAR_BINS = 20
+GRANULAR_STATS_PER_BIN = len(SORTED_PLAYERSTATS_KEYS)  # 39
+
+
+def prepare_player_features_granular(
+    sc2_replay: SC2ReplayData,
+    player_id: int,
+    n_bins: int = N_GRANULAR_BINS,
+) -> Optional[np.ndarray]:
+    """Build a [meta(1), bin0(39), ..., bin{n_bins-1}(39)] vector for one player."""
+
+    events = _get_player_stats_timeseries(sc2_replay=sc2_replay, player_id=player_id)
+    if not events:
+        return None
+
+    player_info = _get_player_info(sc2_replay=sc2_replay, player_id=player_id)
+    if player_info is None:
+        return None
+
+    meta_features = np.array(
+        [
+            float(player_info.supplyCappedPercent)
+            if player_info.supplyCappedPercent
+            else 0.0,
+        ],
+        dtype=np.float32,
+    )
+
+    bins = [
+        _temporal_snapshot(events=events, start_frac=i / n_bins, end_frac=(i + 1) / n_bins)
+        for i in range(n_bins)
+    ]
+
+    return np.concatenate([meta_features, *bins])
+
+
+def rich_transform_granular(
+    sc2_replay: SC2ReplayData,
+    n_bins: int = N_GRANULAR_BINS,
+) -> Tuple[torch.Tensor, int] | None:
+    """Extract the fine-grained 5%-bin feature vector from an SC2 replay.
+
+    Output shape: [2, 1 + n_bins * 39] per replay (meta + n_bins temporal
+    bins). Use the contiguous prefix ``X[..., : 1 + k * 39]`` at training
+    time to select "the first k bins of the game" without reprocessing.
+
+    Returns:
+        Tuple of (features_tensor [2, N_features], label) or None to skip.
+    """
+    label = _get_outcome(sc2_replay=sc2_replay)
+    if label is None:
+        return None
+
+    try:
+        game_duration = float(sc2_replay.header.elapsedGameLoops)
+        if game_duration < 4032:
+            return None
+    except (AttributeError, ValueError, TypeError):
+        return None
+
+    player_features = []
+    for player_id in [1, 2]:
+        player_feat = prepare_player_features_granular(
+            sc2_replay=sc2_replay,
+            player_id=player_id,
+            n_bins=n_bins,
+        )
+        if player_feat is None:
+            return None
         player_features.append(player_feat)
 
     features = torch.tensor(np.stack(player_features), dtype=torch.float32)

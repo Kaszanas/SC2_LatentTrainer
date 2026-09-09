@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SC2 Latent Trainer -- Improvement Path Feedback</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 1400px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.05rem; margin-top: 2rem; }
+  form { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 1.5rem; }
+  label { font-size: 0.85rem; color: #555; }
+  input[type="number"] { width: 4.5rem; }
+  input[type="search"] { padding: 0.4rem 0.6rem; min-width: 16rem; }
+  button { padding: 0.5rem 1.2rem; cursor: pointer; }
+  #status { margin: 1rem 0; font-size: 0.9rem; color: #555; }
+  #error { color: #c0392b; white-space: pre-wrap; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; font-size: 0.85rem; }
+  th, td { border: 1px solid #ddd; padding: 0.35rem 0.6rem; text-align: right; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  th { background: #f5f5f5; }
+  .section-title { font-weight: bold; margin: 1.2rem 0 0.4rem; }
+  .plot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(640px, 1fr)); gap: 1.25rem; }
+  .plot-card { border: 1px solid #ddd; border-radius: 6px; padding: 0.5rem; }
+  .plot-card img { width: 100%; border-radius: 4px; cursor: zoom-in; }
+  .plot-card a { font-size: 0.8rem; }
+  #history-list { list-style: none; margin: 0.5rem 0 0; padding: 0; border: 1px solid #ddd; border-radius: 6px; max-height: 14rem; overflow-y: auto; }
+  #history-list li { padding: 0.5rem 0.75rem; border-bottom: 1px solid #eee; cursor: pointer; display: flex; justify-content: space-between; gap: 1rem; font-size: 0.85rem; }
+  #history-list li:last-child { border-bottom: none; }
+  #history-list li:hover { background: #f5f5f5; }
+  #history-list .ts { color: #888; white-space: nowrap; }
+  #history-empty { font-size: 0.85rem; color: #888; padding: 0.5rem 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <h1>SC2 Latent Trainer -- Improvement Path Feedback</h1>
+  <p>Upload a <code>.SC2Replay</code> file to get a counterfactual "what would have needed to change to win" report.</p>
+
+  <form id="upload-form">
+    <input type="file" id="file" accept=".SC2Replay" required />
+    <label>Player
+      <select id="player">
+        <option value="">auto (loser)</option>
+        <option value="0">0</option>
+        <option value="1">1</option>
+      </select>
+    </label>
+    <label>Target <select id="method"><option value="centroid">centroid</option><option value="nearest">nearest</option></select></label>
+    <label>Top-K <input type="number" id="top_k" value="15" min="1" max="50" /></label>
+    <button type="submit">Analyze</button>
+  </form>
+
+  <h2>Past analyses</h2>
+  <input type="search" id="history-search" placeholder="Search by replay name..." />
+  <ul id="history-list"></ul>
+  <div id="history-empty" hidden>No analyses yet -- upload a replay above.</div>
+
+  <div id="status" hidden></div>
+  <div id="error" hidden></div>
+  <div id="report" hidden>
+    <h2 id="report-title">Report</h2>
+    <div id="tables"></div>
+    <div class="section-title">Plots</div>
+    <div id="plots" class="plot-grid"></div>
+  </div>
+
+<script>
+const form = document.getElementById("upload-form");
+const statusEl = document.getElementById("status");
+const errorEl = document.getElementById("error");
+const reportEl = document.getElementById("report");
+const reportTitleEl = document.getElementById("report-title");
+const tablesEl = document.getElementById("tables");
+const plotsEl = document.getElementById("plots");
+const historyListEl = document.getElementById("history-list");
+const historyEmptyEl = document.getElementById("history-empty");
+const historySearchEl = document.getElementById("history-search");
+
+const TABLE_SECTIONS = [
+  ["raw", "raw_label"],
+  ["minimum_viable", "mv_label"],
+  ["gain_weighted", "wgt_label"],
+];
+
+function renderTable(rows, title) {
+  const wrap = document.createElement("div");
+  const h = document.createElement("div");
+  h.className = "section-title";
+  h.textContent = title;
+  wrap.appendChild(h);
+
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr><th>#</th><th>Feature</th><th>Current</th><th>Target</th><th>Delta</th></tr></thead>`;
+  const tbody = document.createElement("tbody");
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${r.priority}</td><td>${r.feature}</td>` +
+      `<td>${r.current.toFixed(3)}</td><td>${r.target.toFixed(3)}</td>` +
+      `<td>${r.direction} ${Math.abs(r.delta).toFixed(3)}</td>`;
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function renderPlots(plots) {
+  plotsEl.innerHTML = "";
+  for (const [key, urls] of Object.entries(plots)) {
+    const card = document.createElement("div");
+    card.className = "plot-card";
+    card.innerHTML = `<a href="${urls.png}" target="_blank" rel="noopener">` +
+      `<img src="${urls.png}" alt="${key}" loading="lazy" /></a>` +
+      `<div>${key} -- <a href="${urls.pdf}" target="_blank" rel="noopener">Download PDF</a></div>`;
+    plotsEl.appendChild(card);
+  }
+}
+
+function renderReport(data) {
+  reportTitleEl.textContent = `Report -- ${data.replay_name} (${data.request_id})`;
+  tablesEl.innerHTML = "";
+  for (const [key, labelKey] of TABLE_SECTIONS) {
+    tablesEl.appendChild(renderTable(data.feedback[key], data.feedback[labelKey]));
+  }
+  renderPlots(data.plots);
+  errorEl.hidden = true;
+  statusEl.hidden = true;
+  reportEl.hidden = false;
+  reportEl.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function showError(message) {
+  statusEl.hidden = true;
+  reportEl.hidden = true;
+  errorEl.hidden = false;
+  errorEl.textContent = message;
+}
+
+async function loadHistory(query) {
+  try {
+    const url = query ? `/history?q=${encodeURIComponent(query)}` : "/history";
+    const res = await fetch(url);
+    const entries = await res.json();
+    historyListEl.innerHTML = "";
+    historyEmptyEl.hidden = entries.length > 0;
+    for (const entry of entries) {
+      const li = document.createElement("li");
+      const when = new Date(entry.created_at).toLocaleString();
+      li.innerHTML = `<span>${entry.replay_name}</span><span class="ts">${when}</span>`;
+      li.addEventListener("click", () => loadPastReport(entry.request_id));
+      historyListEl.appendChild(li);
+    }
+  } catch (err) {
+    // History is a convenience panel -- a failure here shouldn't block
+    // uploading/analyzing a new replay.
+    console.error("Failed to load history:", err);
+  }
+}
+
+async function loadPastReport(requestId) {
+  statusEl.hidden = false;
+  statusEl.textContent = "Loading saved report...";
+  try {
+    const res = await fetch(`/history/${requestId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+    renderReport(data);
+  } catch (err) {
+    showError(String(err.message || err));
+  }
+}
+
+let searchDebounce;
+historySearchEl.addEventListener("input", () => {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => loadHistory(historySearchEl.value.trim()), 200);
+});
+
+form.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  errorEl.hidden = true;
+  reportEl.hidden = true;
+  statusEl.hidden = false;
+  statusEl.textContent = "Uploading and analyzing -- this can take a minute (replay extraction + model inference)...";
+
+  const fileInput = document.getElementById("file");
+  const player = document.getElementById("player").value;
+  const method = document.getElementById("method").value;
+  const topK = document.getElementById("top_k").value;
+
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
+  if (player !== "") formData.append("player", player);
+  formData.append("method", method);
+  formData.append("top_k", topK);
+
+  try {
+    const res = await fetch("/analyze", { method: "POST", body: formData });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.detail || `Request failed (${res.status})`);
+    }
+    renderReport(data);
+    loadHistory(historySearchEl.value.trim());
+  } catch (err) {
+    showError(String(err.message || err));
+  }
+});
+
+loadHistory();
+</script>
+</body>
+</html>

@@ -7,11 +7,8 @@
 The main training CLI supports two pipelines and two modes:
 
 ```bash
-# Two-stage pipeline, single run:
-uv run python -m latent_trainer --pipeline two_stage --cache data/cached_dataset_rich.pt
-
 # Guided VAE pipeline:
-uv run python -m latent_trainer --pipeline guided_vae --cache data/cached_dataset_rich.pt
+uv run python -m latent_trainer --pipeline guided_vae --cache data/cached_dataset_rich_sc2egset.pt
 
 # Hyperparameter sweep (Ray Tune + Optuna):
 uv run python -m latent_trainer --mode sweep --n-trials 30
@@ -26,7 +23,7 @@ uv run python -m latent_trainer --help
 ### Standalone Guided VAE
 
 ```bash
-uv run python -m latent_trainer.models.train_model --cached data/cached_dataset_rich.pt
+uv run python -m latent_trainer.models.train_model --cached data/cached_dataset_rich_sc2egset.pt
 ```
 
 ## MLFlow Tracking

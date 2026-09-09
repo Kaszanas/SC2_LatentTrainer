@@ -1,3 +1,4 @@
+import functools
 import logging
 from pathlib import Path
 from typing import Callable
@@ -10,6 +11,7 @@ from latent_trainer.features.preprocess_dataset import (
     preprocess_dataset_chunked_profile,
     preprocess_dataset_test_only,
 )
+from latent_trainer.features.rich_transform import ALL_FEATURE_BLOCKS, rich_transform
 from latent_trainer.settings import DATA_DIR, LOGGING_FORMAT, SEED
 
 
@@ -18,10 +20,16 @@ from latent_trainer.settings import DATA_DIR, LOGGING_FORMAT, SEED
 )
 @click.option(
     "--transform",
-    type=TransformEnumFunction(["rich", "averaged_economy"]),
+    type=TransformEnumFunction(["rich", "averaged_economy", "granular"]),
     default="rich",
     show_default=True,
-    help="Transform to use: 'rich' (temporal+meta+units, 204 features) or 'averaged_economy' (averaged economy, 39 features)",
+    help=(
+        "Transform to use: 'rich' (temporal+meta, 196 features/player), "
+        "'averaged_economy' (averaged economy, 39 features/player), or "
+        "'granular' (20 x 5%-of-game bins + meta, 781 features/player -- "
+        "for leakage-localization sweeps; slice the cache at training time "
+        "instead of reprocessing per sweep point)."
+    ),
 )
 @click.option(
     "--single_json_dataset_path",
@@ -61,6 +69,17 @@ from latent_trainer.settings import DATA_DIR, LOGGING_FORMAT, SEED
         "Use this for path-charting evaluation on an independent dataset."
     ),
 )
+@click.option(
+    "--feature_blocks",
+    default=None,
+    help=(
+        "Comma-separated subset of the 'rich' transform's feature blocks to include: "
+        f"{','.join(ALL_FEATURE_BLOCKS)}. Only applies to '--transform rich'. "
+        "Default (omit this flag): all blocks, i.e. unchanged 196-feature/player output. "
+        "Use e.g. 'early,mid,meta' to drop the leakage-prone final/late/econDelta blocks "
+        "for a leakage-audit cache; the output filename gets a matching suffix."
+    ),
+)
 def main(
     transform: Callable,
     single_json_dataset_path: Path,
@@ -68,9 +87,25 @@ def main(
     n_samples: int,
     seed: int,
     test_only: bool,
+    feature_blocks: str | None,
 ) -> None:
     """Pre-process Single JSON SC2_Dataset and cache the transformed tensors to drive."""
     transform_name = TransformEnumFunction._TRANSFORM_NAMES[transform]
+
+    if feature_blocks is not None:
+        if transform is not rich_transform:
+            raise click.BadParameter(
+                "--feature_blocks only applies to '--transform rich'."
+            )
+        blocks = tuple(b.strip() for b in feature_blocks.split(","))
+        unknown = set(blocks) - set(ALL_FEATURE_BLOCKS)
+        if unknown:
+            raise click.BadParameter(
+                f"Unknown feature block(s) {sorted(unknown)}; "
+                f"valid blocks: {ALL_FEATURE_BLOCKS}"
+            )
+        transform = functools.partial(rich_transform, feature_blocks=blocks)
+        transform_name = f"{transform_name}_{'-'.join(blocks)}"
 
     logging.basicConfig(
         level=logging.INFO,
