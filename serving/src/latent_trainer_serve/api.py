@@ -279,10 +279,25 @@ async def history_detail(request_id: str) -> JSONResponse:
     return JSONResponse(json.loads(report_path.read_text(encoding="utf-8")))
 
 
+class _NoCacheStaticFiles(StaticFiles):
+    """Always revalidate -- a browser silently serving a stale cached
+    index.html/script against a newer API response shape (e.g. after the
+    /analyze response changed from {feedback,plots} to {strategies:{...}})
+    is exactly the kind of bug that's invisible server-side and confusing
+    client-side ("Cannot read properties of undefined"). The web UI is tiny,
+    so there's no real cost to never caching it.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 # Static mounts -- registered after the routes above so /analyze/etc always
 # match first; StaticFiles("/") would otherwise shadow them.
 app.mount("/results", StaticFiles(directory=RESULTS_DIR), name="results")
 
 _WEB_DIR = Path(__file__).resolve().parent / "web"
 if _WEB_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=_WEB_DIR, html=True), name="web")
+    app.mount("/", _NoCacheStaticFiles(directory=_WEB_DIR, html=True), name="web")

@@ -149,8 +149,12 @@ function renderStrategySection(name, strategyData) {
 
 function renderReport(data) {
   reportTitleEl.textContent = `Report -- ${data.replay_name} (${data.request_id})`;
+  // Backward compat: a report.json saved before /analyze always computed
+  // all three strategies has the old {feedback, plots} shape instead of
+  // {strategies: {...}} -- normalize it here rather than crashing on it.
+  const strategies = data.strategies || { linear: { feedback: data.feedback, plots: data.plots } };
   strategySectionsEl.innerHTML = "";
-  for (const [name, strategyData] of Object.entries(data.strategies)) {
+  for (const [name, strategyData] of Object.entries(strategies)) {
     strategySectionsEl.appendChild(renderStrategySection(name, strategyData));
   }
   errorEl.hidden = true;
