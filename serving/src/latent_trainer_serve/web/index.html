@@ -91,11 +91,12 @@ function renderTable(rows, title) {
   wrap.appendChild(h);
 
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr><th>#</th><th>Feature</th><th>Current</th><th>Target</th><th>Delta</th></tr></thead>`;
+  table.innerHTML = `<thead><tr><th>#</th><th>Feature</th><th>Start</th><th>End</th><th>Current</th><th>Target</th><th>Delta</th></tr></thead>`;
   const tbody = document.createElement("tbody");
   for (const r of rows) {
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${r.priority}</td><td>${r.feature}</td>` +
+      `<td>${r.bin_start ?? "–"}</td><td>${r.bin_end ?? "–"}</td>` +
       `<td>${r.current.toFixed(3)}</td><td>${r.target.toFixed(3)}</td>` +
       `<td>${r.direction} ${Math.abs(r.delta).toFixed(3)}</td>`;
     tbody.appendChild(tr);

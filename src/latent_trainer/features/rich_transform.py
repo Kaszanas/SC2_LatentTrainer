@@ -35,6 +35,12 @@ RACE_MAP = {"Zerg": 0.0, "Protoss": 1.0, "Terran": 2.0}
 SORTED_PLAYERSTATS_KEYS = sorted(Stats.__dataclass_fields__.keys())
 META_FEATURE_NAMES = ["supplyCappedPercent"]
 
+# SC2 replays are recorded at "Faster" game speed: 22.4 game loops per real
+# second. This is the same conversion implicit in the >=4032-loop (3 minute)
+# minimum-duration filter below (4032 / 180 = 22.4) -- named here so it can
+# be reused wherever a loop count needs to become a real-world duration.
+GAME_LOOPS_PER_SECOND = 22.4
+
 # Canonical block order — concatenation order always follows this, regardless
 # of the order blocks are requested in.
 ALL_FEATURE_BLOCKS: tuple[str, ...] = ("early", "mid", "late", "final", "econDelta", "meta")
