@@ -325,6 +325,19 @@ def _plot_recon_error(
     help="Label for each OOD dataset (same order as --ood_dataset). "
          "Defaults to 'OOD 1', 'OOD 2', ...",
 )
+@click.option(
+    "--max_input_dim",
+    type=int,
+    default=None,
+    help=(
+        "Truncate the loaded feature tensor to its first N columns before "
+        "evaluating -- for checkpoints trained on a truncated bin-count cutoff "
+        "(e.g. the k18 granular checkpoint, 703 of 781 dims). Per-feature "
+        "normalization is slice-invariant, so this is equivalent to having "
+        "cached only those columns. Applied to in-distribution and any OOD "
+        "datasets alike."
+    ),
+)
 def main(
     model_path: Path,
     dataset: str,
@@ -334,6 +347,7 @@ def main(
     run_id: str | None,
     ood_dataset: tuple[Path, ...],
     ood_label: tuple[str, ...],
+    max_input_dim: int | None,
 ) -> None:
     """Evaluate a GuidedVAE checkpoint on the held-out test set and optional OOD datasets."""
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
@@ -346,6 +360,13 @@ def main(
 
     logger.info("Loading in-distribution dataset...")
     data = load_and_normalize(cached_dataset_filepath=DATA_DIR / dataset)
+    if max_input_dim is not None:
+        data.train_X = data.train_X[..., :max_input_dim]
+        data.val_X = data.val_X[..., :max_input_dim]
+        data.test_X = data.test_X[..., :max_input_dim]
+        data.mean = data.mean[..., :max_input_dim]
+        data.std = data.std[..., :max_input_dim]
+        logger.info("Truncated features to first %d columns (max_input_dim).", max_input_dim)
 
     results: dict[str, dict] = {}
     for split, (X, y) in [
@@ -365,7 +386,10 @@ def main(
         logger.info(f"Loading OOD dataset '{label}' from {path}...")
         cached: dict[str, torch.Tensor] = torch.load(str(path), weights_only=True)
         spec = CachedDatasetFileSpec(**cached)
-        X_ood = (spec.test_features.float() - data.mean) / data.std
+        ood_features = spec.test_features.float()
+        if max_input_dim is not None:
+            ood_features = ood_features[..., :max_input_dim]
+        X_ood = (ood_features - data.mean) / data.std
         y_ood = spec.test_labels.float()
         logger.info(f"Running forward pass on OOD '{label}' ({len(X_ood)} samples)...")
         res = _forward_pass(model, X_ood, y_ood, batch_size, device)
