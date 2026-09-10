@@ -24,6 +24,7 @@ from latent_trainer.paths.compare.results import MethodSpec, PathRunResult
 from latent_trainer.paths.data import (
     FEATURE_NAMES,
     PathContext,
+    build_granular_feature_names,
     get_supervised_dim,
     nearest_winning_target,
     opponent_aware_logit,
@@ -266,14 +267,24 @@ def _run_method_inner(
     kde_start = float(win_kde.score_samples(z_start_np[:sup_dim].reshape(1, -1))[0])
     kde_end = float(win_kde.score_samples(path_z_np[-1, :sup_dim].reshape(1, -1))[0])
 
-    # Feedback (lightweight — no PNG plots)
+    # Feedback (lightweight — no PNG plots). feature_names must match the
+    # checkpoint's own input width -- self-detect rather than hardcoding the
+    # old 196-dim rich-transform names, which mismatch any granular-transform
+    # checkpoint (e.g. k18, 703 dims) and previously caused a silent
+    # IndexError in _rank_table (reported as "P(win): nan -> nan" upstream).
+    input_dim = ctx.guided_vae.mean.shape[-1]
+    feature_names = (
+        FEATURE_NAMES
+        if input_dim == len(FEATURE_NAMES)
+        else build_granular_feature_names(n_bins=(input_dim - 1) // 39)
+    )
     feedback = compute_feedback(
         path_z=path_z_np,
         decode_fn=ctx.guided_vae.model.decode,
         score_fn=score_fn,
         norm_mean=ctx.guided_vae.mean,
         norm_std=ctx.guided_vae.std,
-        feature_names=FEATURE_NAMES,
+        feature_names=feature_names,
         top_k=top_k,
         method_name=spec.name,
         device=device,

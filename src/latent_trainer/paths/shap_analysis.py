@@ -30,7 +30,7 @@ import torch.nn as nn
 
 from latent_trainer.features.data_utils import load_and_normalize
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
-from latent_trainer.paths.data import FEATURE_NAMES
+from latent_trainer.paths.data import FEATURE_NAMES, build_granular_feature_names
 from latent_trainer.settings import DATA_DIR, LOGGING_FORMAT, PLOTS_DIR
 
 logger = logging.getLogger(__name__)
@@ -374,6 +374,16 @@ def analyze_pwin(
     type=click.Path(path_type=Path, resolve_path=True),
     help="Directory to save SHAP plots.",
 )
+@click.option(
+    "--max_input_dim",
+    type=int,
+    default=None,
+    help=(
+        "Truncate the loaded feature tensor to its first N columns before "
+        "explaining -- for a checkpoint trained on a truncated bin-count "
+        "cutoff (e.g. the k18 granular checkpoint, 703 of 781 dims)."
+    ),
+)
 def main(
     model_path: Path,
     dataset_filename: str,
@@ -381,6 +391,7 @@ def main(
     n_explain: int,
     top_k: int,
     output_dir: Path,
+    max_input_dim: int | None,
 ) -> None:
     """SHAP attribution analysis for the GuidedVAE (P(win) and/or reconstruction)."""
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
@@ -392,6 +403,9 @@ def main(
 
     logger.info("Loading dataset...")
     data = load_and_normalize(cached_dataset_filepath=DATA_DIR / dataset_filename)
+    if max_input_dim is not None:
+        data.test_X = data.test_X[..., :max_input_dim]
+        logger.info("Truncated features to first %d columns (max_input_dim).", max_input_dim)
 
     rng = np.random.default_rng(42)
     n_test = len(data.test_X)
@@ -402,11 +416,18 @@ def main(
     input_dim = guided_vae.model.input_dim
     feature_names: list[str] = FEATURE_NAMES
     if len(feature_names) != input_dim:
-        logger.warning(
-            f"FEATURE_NAMES length ({len(feature_names)}) != model input_dim ({input_dim}). "
-            "Using generic names."
-        )
-        feature_names = [f"feat_{i}" for i in range(input_dim)]
+        if (input_dim - 1) % 39 == 0:
+            feature_names = build_granular_feature_names(n_bins=(input_dim - 1) // 39)
+            logger.info(
+                f"FEATURE_NAMES length ({len(FEATURE_NAMES)}) != model input_dim "
+                f"({input_dim}); using granular bin names instead."
+            )
+        else:
+            logger.warning(
+                f"FEATURE_NAMES length ({len(FEATURE_NAMES)}) != model input_dim ({input_dim}). "
+                "Using generic names."
+            )
+            feature_names = [f"feat_{i}" for i in range(input_dim)]
 
     logger.info(
         f"input_dim={input_dim}  background={len(background)}  explain={len(explain_set)}"
