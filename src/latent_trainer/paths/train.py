@@ -106,6 +106,18 @@ logger = logging.getLogger(__name__)
     help="Adam learning rate.",
 )
 @click.option(
+    "--max_input_dim",
+    type=int,
+    default=None,
+    help=(
+        "Truncate the loaded feature tensor to its first N columns before "
+        "encoding -- for GuidedVAE checkpoints trained on a truncated "
+        "bin-count cutoff (e.g. the k18 granular checkpoint, 703 of 781 "
+        "dims). Per-feature normalization is slice-invariant under "
+        "truncation, so this reproduces the checkpoint's own training input."
+    ),
+)
+@click.option(
     "--mlflow_uri",
     default=DEFAULT_MLFLOW_URI,
     show_default=True,
@@ -127,6 +139,7 @@ def main(
     epochs: int,
     batch_size: int,
     learning_rate: float,
+    max_input_dim: int | None,
     mlflow_uri: str,
     output_dir: Path,
 ) -> None:
@@ -142,6 +155,10 @@ def main(
 
     logger.info("Loading and normalizing dataset...")
     data = load_and_normalize(cached_dataset_filepath=DATA_DIR / dataset_filename)
+    if max_input_dim is not None:
+        data.train_X = data.train_X[..., :max_input_dim]
+        data.val_X = data.val_X[..., :max_input_dim]
+        logger.info("Truncated features to first %d columns (max_input_dim).", max_input_dim)
 
     def _make_pairs(
         X: torch.Tensor, y: torch.Tensor

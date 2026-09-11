@@ -447,6 +447,8 @@ def write_cross_dataset_table(
 \\centering
 \\caption{{{caption}}}
 \\label{{{label}}}
+\\small
+\\renewcommand{{\\arraystretch}}{{0.9}}
 \\begin{{tabular}}{{{col_spec}}}
 \\toprule
 {header}
