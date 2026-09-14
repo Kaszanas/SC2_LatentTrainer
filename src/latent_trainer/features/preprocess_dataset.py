@@ -38,7 +38,11 @@ from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 
-from latent_trainer.features.rich_transform import rich_transform, rich_transform_granular
+from latent_trainer.features.event_transform import event_transform
+from latent_trainer.features.rich_transform import (
+    rich_transform,
+    rich_transform_granular,
+)
 from latent_trainer.features.type import CachedDatasetFileSpec
 from latent_trainer.settings import DATA_DIR
 
@@ -395,6 +399,7 @@ class TransformEnumFunction(click.Choice):
         rich_transform: "rich",
         economy_average_vs_outcome: "averaged_economy",
         rich_transform_granular: "granular",
+        event_transform: "events",
     }
 
     def convert(self, value, param, ctx):
@@ -405,6 +410,9 @@ class TransformEnumFunction(click.Choice):
                 return economy_average_vs_outcome
             case "granular":
                 return rich_transform_granular
+            case "events":
+                # Ragged output; dispatched to its own entrypoint by main().
+                return event_transform
             case _:
                 raise click.BadParameter(f"Invalid transform choice: {value}")
 

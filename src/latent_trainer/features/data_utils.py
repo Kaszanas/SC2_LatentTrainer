@@ -18,6 +18,9 @@ from latent_trainer.features.type import (
     CachedDatasetFileSpec,
     CachedSC2Dataset,
     Encoder,
+    EventCacheFileSpec,
+    EventDataBundle,
+    EventSplit,
     NormalizedData,
     NormalizedDataloaders,
     NormalizedDataWithLabels,
@@ -183,6 +186,170 @@ def load_cached_dataloaders(
         input_dim=input_dim,
         mean=normalized_data.mean,
         std=normalized_data.std,
+    )
+
+
+# ------------------------------------------------------------------
+# Event-sequence pipeline
+# ------------------------------------------------------------------
+def _pad_stack(
+    streams: list[torch.Tensor],
+    n_players: int,
+    pad_value: float = 0.0,
+) -> torch.Tensor:
+    """Pad a flat list of ``B * n_players`` streams and fold back to ``[B, P, L, ...]``."""
+
+    max_len = max((stream.shape[0] for stream in streams), default=0)
+    trailing = streams[0].shape[1:] if streams else ()
+
+    padded = torch.full(
+        (len(streams), max_len, *trailing),
+        pad_value,
+        dtype=streams[0].dtype,
+    )
+    for index, stream in enumerate(streams):
+        padded[index, : stream.shape[0]] = stream
+
+    return padded.reshape(-1, n_players, max_len, *trailing)
+
+
+def collate_event_sequences(batch: list[dict]) -> dict[str, torch.Tensor]:
+    """Pad a batch of ragged event samples to *that batch's* maximum lengths.
+
+    Padding per batch rather than to a global maximum matters here because the
+    event stream varies by well over an order of magnitude between a fast all-in
+    and a long macro game (Phase 0: p50 ~2 events/tick, p99 13.5k tokens per
+    player).  Padding everything to the global maximum would spend most of the
+    attention budget on masked-out positions.
+
+    Both players are padded together, so the returned tensors are
+    ``[B, 2, L, ...]`` and the masks mark real positions with ``True``.
+    """
+    n_players = len(batch[0]["players"])
+    streams = [player for sample in batch for player in sample["players"]]
+
+    stat_lengths = torch.tensor(
+        [stream["stat_values"].shape[0] for stream in streams], dtype=torch.long
+    )
+    evt_lengths = torch.tensor(
+        [stream["evt_type"].shape[0] for stream in streams], dtype=torch.long
+    )
+
+    collated = {
+        "stat_values": _pad_stack(
+            [stream["stat_values"] for stream in streams], n_players
+        ),
+        "stat_loops": _pad_stack(
+            [stream["stat_loops"].long() for stream in streams], n_players
+        ),
+        "stat_slice": _pad_stack(
+            [stream["stat_slice"].long() for stream in streams], n_players
+        ),
+        "evt_type": _pad_stack(
+            [stream["evt_type"].long() for stream in streams], n_players
+        ),
+        "evt_unit": _pad_stack(
+            [stream["evt_unit"].long() for stream in streams], n_players
+        ),
+        "evt_loops": _pad_stack(
+            [stream["evt_loops"].long() for stream in streams], n_players
+        ),
+        "evt_slice": _pad_stack(
+            [stream["evt_slice"].long() for stream in streams], n_players
+        ),
+        "label": torch.stack([sample["label"] for sample in batch]),
+    }
+
+    stat_max = collated["stat_values"].shape[2]
+    evt_max = collated["evt_type"].shape[2]
+    positions_stat = torch.arange(stat_max).unsqueeze(0)
+    positions_evt = torch.arange(evt_max).unsqueeze(0)
+
+    collated["stat_mask"] = (positions_stat < stat_lengths.unsqueeze(1)).reshape(
+        -1, n_players, stat_max
+    )
+    collated["evt_mask"] = (positions_evt < evt_lengths.unsqueeze(1)).reshape(
+        -1, n_players, evt_max
+    )
+
+    # Number of level-2 slices per stream: the stat stream defines the horizon,
+    # since a player can fall event-silent late without the game being over.
+    n_slices = torch.tensor(
+        [
+            int(stream["stat_slice"][-1]) + 1 if stream["stat_slice"].numel() else 0
+            for stream in streams
+        ],
+        dtype=torch.long,
+    )
+    collated["n_slices"] = n_slices.reshape(-1, n_players)
+
+    return collated
+
+
+def _split_from_spec(spec: EventCacheFileSpec, prefix: str) -> EventSplit:
+    """Pull one split's ten ragged tensors off the cache spec."""
+    return EventSplit(
+        stat_values=getattr(spec, f"{prefix}_stat_values").float(),
+        stat_loops=getattr(spec, f"{prefix}_stat_loops"),
+        stat_tick=getattr(spec, f"{prefix}_stat_tick"),
+        stat_offsets=getattr(spec, f"{prefix}_stat_offsets"),
+        evt_type=getattr(spec, f"{prefix}_evt_type"),
+        evt_unit=getattr(spec, f"{prefix}_evt_unit"),
+        evt_loops=getattr(spec, f"{prefix}_evt_loops"),
+        evt_tick=getattr(spec, f"{prefix}_evt_tick"),
+        evt_offsets=getattr(spec, f"{prefix}_evt_offsets"),
+        labels=getattr(spec, f"{prefix}_labels"),
+    )
+
+
+def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
+    """Load an ``events`` cache and z-score the stat channels.
+
+    Only ``stat_values`` is normalised, per channel, fitted on train.  The event
+    stream is categorical ids and game loops: those are embedded and positionally
+    encoded, never standardised.
+
+    No masking is needed when fitting the statistics, which is the quiet payoff
+    of the ragged layout — the flat stat array contains only real ticks, so
+    ``mean``/``std`` over it are already exactly the masked statistics.  A padded
+    layout would have biased both toward zero in proportion to game length.
+    """
+    logger.info(f"Loading event data from {cached_dataset_filepath}")
+    cached = torch.load(f=str(cached_dataset_filepath), weights_only=False)
+    spec = EventCacheFileSpec(**cached)
+
+    train = _split_from_spec(spec, "train")
+    val = _split_from_spec(spec, "val")
+    test = _split_from_spec(spec, "test")
+
+    mean = train.stat_values.mean(dim=0, keepdim=True)
+    # Same std floor, and for the same reason, as `normalize` above: these are
+    # raw counts in the hundreds-to-thousands, and a near-constant channel whose
+    # true std is ~1e-8 would otherwise turn a single nonzero game into a
+    # ~1e10 z-score that poisons every downstream latent centroid.
+    std = train.stat_values.std(dim=0, keepdim=True).clamp(min=1.0)
+
+    for split in (train, val, test):
+        if split.stat_values.numel():
+            split.stat_values = (split.stat_values - mean) / std
+
+    logger.info(
+        f"Event cache: train {len(train.labels)} / val {len(val.labels)} / "
+        f"test {len(test.labels)} replays  |  "
+        f"{len(spec.stat_channel_names)} stat channels, "
+        f"{len(spec.unit_vocab)} unit types"
+    )
+
+    return EventDataBundle(
+        train=train,
+        val=val,
+        test=test,
+        mean=mean,
+        std=std,
+        stat_channel_names=spec.stat_channel_names,
+        unit_vocab=spec.unit_vocab,
+        event_type_names=spec.event_type_names,
+        tick_interval_loops=spec.tick_interval_loops,
     )
 
 

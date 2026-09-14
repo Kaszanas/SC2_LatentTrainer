@@ -6,11 +6,13 @@ from typing import Callable
 import click
 import lightning as pl
 
+from latent_trainer.features.event_transform import event_transform
 from latent_trainer.features.preprocess_dataset import (
     TransformEnumFunction,
     preprocess_dataset_chunked_profile,
     preprocess_dataset_test_only,
 )
+from latent_trainer.features.preprocess_events import preprocess_event_dataset
 from latent_trainer.features.rich_transform import ALL_FEATURE_BLOCKS, rich_transform
 from latent_trainer.settings import DATA_DIR, LOGGING_FORMAT, SEED
 
@@ -20,15 +22,18 @@ from latent_trainer.settings import DATA_DIR, LOGGING_FORMAT, SEED
 )
 @click.option(
     "--transform",
-    type=TransformEnumFunction(["rich", "averaged_economy", "granular"]),
+    type=TransformEnumFunction(["rich", "averaged_economy", "granular", "events"]),
     default="rich",
     show_default=True,
     help=(
         "Transform to use: 'rich' (temporal+meta, 196 features/player), "
-        "'averaged_economy' (averaged economy, 39 features/player), or "
+        "'averaged_economy' (averaged economy, 39 features/player), "
         "'granular' (20 x 5%-of-game bins + meta, 781 features/player -- "
         "for leakage-localization sweeps; slice the cache at training time "
-        "instead of reprocessing per sweep point)."
+        "instead of reprocessing per sweep point), or "
+        "'events' (raw PlayerStats + UnitBorn/UnitInit/UnitDied/Upgrade "
+        "streams at full 7.1s temporal resolution, cached ragged for the "
+        "sequence pipeline -- no binning, no aggregation)."
     ),
 )
 @click.option(
@@ -114,29 +119,49 @@ def main(
 
     pl.seed_everything(SEED)
 
-    try:
+    # The event transform is ragged (a variable number of stat ticks and events
+    # per player), so it cannot go through the dense `torch.stack` assembly the
+    # other three transforms share. It has its own entrypoint and its own cache
+    # layout; --test_only and --feature_blocks do not apply to it.
+    if transform is event_transform:
         if test_only:
-            preprocess_dataset_test_only(
-                output_directory=DATA_DIR,
-                single_json_dataset_path=single_json_dataset_path,
-                transform_fn=transform,
-                transform_name=transform_name,
-                n_workers=n_workers,
-                n_samples=n_samples,
-                seed=seed,
+            raise click.BadParameter(
+                "--test_only is not supported for '--transform events'."
             )
-        else:
-            preprocess_dataset_chunked_profile(
-                output_directory=DATA_DIR,
-                single_json_dataset_path=single_json_dataset_path,
-                transform_fn=transform,
-                transform_name=transform_name,
-                n_workers=n_workers,
-                n_samples=n_samples,
-                seed=seed,
-            )
-    except Exception as e:
-        logging.error(f"Error during dataset preprocessing: {e}")
+        preprocess_event_dataset(
+            output_directory=DATA_DIR,
+            single_json_dataset_path=single_json_dataset_path,
+            n_workers=n_workers,
+            n_samples=n_samples,
+            seed=seed,
+        )
+        return
+
+    # Deliberately unguarded. This used to sit inside a bare `except Exception`
+    # that logged and then exited 0, so a preprocessing run that produced
+    # nothing at all still looked successful -- which is exactly how a NameError
+    # in the --test_only path survived unnoticed for every transform. A failure
+    # here should fail the command.
+    if test_only:
+        preprocess_dataset_test_only(
+            output_directory=DATA_DIR,
+            single_json_dataset_path=single_json_dataset_path,
+            transform_fn=transform,
+            transform_name=transform_name,
+            n_workers=n_workers,
+            n_samples=n_samples,
+            seed=seed,
+        )
+    else:
+        preprocess_dataset_chunked_profile(
+            output_directory=DATA_DIR,
+            single_json_dataset_path=single_json_dataset_path,
+            transform_fn=transform,
+            transform_name=transform_name,
+            n_workers=n_workers,
+            n_samples=n_samples,
+            seed=seed,
+        )
 
 
 if __name__ == "__main__":
