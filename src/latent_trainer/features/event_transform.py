@@ -65,6 +65,68 @@ RESERVED_UNIT_TOKENS: tuple[str, ...] = (PAD_UNIT_TOKEN, UNK_UNIT_TOKEN)
 
 PLAYER_IDS: tuple[int, int] = (1, 2)
 
+# ---------------------------------------------------------------------------
+# Non-gameplay entities.
+#
+# The tracker stream attributes a number of engine, UI and cosmetic entities to
+# a controlling player exactly as if they were units.  Measured over a 500-replay
+# sample they are ~16% of all event tokens, and they are race-skewed
+# (AdeptPhaseShift is Protoss-only, BroodlingEscort Zerg-only), so leaving them
+# in would spend a sixth of every slice's attention budget on bookkeeping and
+# hand the model a race cue dressed up as behaviour.
+#
+# The line drawn here is "did a player decide this, and can they act on it".
+# Deployed ability units that a player aims and that affect the game are KEPT:
+# KD8Charge, OracleStasisTrap, Changeling*, Interceptor, LocustMP, Broodling,
+# CreepTumor, MULE.  Larva is emphatically kept -- larva births encode inject
+# cadence, which is exactly the kind of coachable macro this project exists to
+# give feedback on.
+# ---------------------------------------------------------------------------
+NON_GAMEPLAY_PREFIXES: tuple[str, ...] = (
+    "Beacon",  # rally / control-group UI markers, spawned once per player
+    "Spray",  # cosmetic emote sprays
+    "RewardDance",  # cosmetic victory dances
+    "LoadOut",  # cosmetic loadouts, e.g. LoadOutSpray@1
+)
+# Substring rather than suffix: Blizzard is not consistent about placement, so
+# "Skin" catches AdeptSkin and PylonSkin but also GhostSkinNova.
+NON_GAMEPLAY_SUBSTRINGS: tuple[str, ...] = ("Skin",)
+# Suffix: the engine's placeholder targets all end this way -- InvisibleTargetDummy
+# (~10.6% of raw tokens on its own), ParasiticBombDummy, ParasiticBombRelayDummy.
+NON_GAMEPLAY_SUFFIXES: tuple[str, ...] = ("Dummy",)
+NON_GAMEPLAY_NAMES: frozenset[str] = frozenset(
+    {
+        "GameHeartActive",  # map-script entity
+        "AdeptPhaseShift",  # ability placeholder, not the Adept itself
+        "AdeptPiercingAttack",  # ability placeholder
+        "DisruptorPhased",  # Purification Nova projectile entity
+        "LocustMPPrecursor",  # spawn artifact; the Locust itself is kept
+        "BroodlingEscort",  # attack visual; the Broodling itself is kept
+        "GhostAlternate",  # alternate-model skin variant
+        "ColossusTal",  # Tal'darim skin variant
+    }
+)
+
+
+def is_gameplay_entity(type_name: str) -> bool:
+    """Whether a unit or upgrade name represents something a player actually did.
+
+    Applies to ``Upgrade`` events as well as unit events, and must: SC2 records
+    cosmetics as *upgrades*, so ``PylonSkin``, ``SprayZerg`` and
+    ``RewardDanceColossus`` arrive through the upgrade branch rather than as
+    units.  Real upgrades are mostly lower-case (``zerglingmovementspeed``), but
+    plenty are not (``ProtossGroundWeaponsLevel1``, ``Stimpack``, ``BlinkTech``),
+    so case is a tell and not a rule.
+    """
+    if type_name in NON_GAMEPLAY_NAMES:
+        return False
+    if type_name.startswith(NON_GAMEPLAY_PREFIXES):
+        return False
+    if type_name.endswith(NON_GAMEPLAY_SUFFIXES):
+        return False
+    return not any(token in type_name for token in NON_GAMEPLAY_SUBSTRINGS)
+
+
 # Same minimum-duration guard as rich_transform: 4032 loops = 3 minutes.
 MIN_GAME_LOOPS = 4032
 
@@ -175,8 +237,13 @@ def _extract_streams(
 
         elif name in ("UnitBorn", "UnitInit"):
             key = (event.unitTagIndex, event.unitTagRecycle)
+            # Recorded for every entity, filtered or not: the tag map is what
+            # later resolves a death's type and owner, so pruning it would
+            # reintroduce the orphaned-death problem it exists to solve.
             spawn_by_tag[key] = (event.unitTypeName, event.controlPlayerId)
-            if event.controlPlayerId in events_by_player:
+            if event.controlPlayerId in events_by_player and is_gameplay_entity(
+                event.unitTypeName
+            ):
                 events_by_player[event.controlPlayerId].append(
                     (event.loop, EVENT_TYPE_IDS[name], event.unitTypeName)
                 )
@@ -196,13 +263,17 @@ def _extract_streams(
                 # skip rather than emit an untyped, unattributed death.
                 continue
             type_name, owner_id = spawned
-            if owner_id in events_by_player:
+            if owner_id in events_by_player and is_gameplay_entity(type_name):
                 events_by_player[owner_id].append(
                     (event.loop, EVENT_TYPE_IDS["UnitDied"], type_name)
                 )
 
         elif name == "Upgrade":
-            if event.playerId in events_by_player:
+            # Cosmetics (skins, sprays, dances) are recorded as upgrades, so
+            # the same filter has to run on this branch too.
+            if event.playerId in events_by_player and is_gameplay_entity(
+                event.upgradeTypeName
+            ):
                 events_by_player[event.playerId].append(
                     (event.loop, EVENT_TYPE_IDS["Upgrade"], event.upgradeTypeName)
                 )
