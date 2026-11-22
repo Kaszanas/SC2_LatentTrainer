@@ -344,52 +344,53 @@ def _extract_streams(
     for event in _sorted_tracker_events(sc2_replay):
         name = type(event).__name__
 
-        if name == "PlayerStats":
-            if event.playerId in stats_by_player:
-                stats_by_player[event.playerId].append(event)
+        match name:
+            case "PlayerStats":
+                if event.playerId in stats_by_player:
+                    stats_by_player[event.playerId].append(event)
 
-        elif name in ("UnitBorn", "UnitInit"):
-            key = (event.unitTagIndex, event.unitTagRecycle)
-            # Recorded for every entity, filtered or not: the tag map is what
-            # later resolves a death's type and owner, so pruning it would
-            # reintroduce the orphaned-death problem it exists to solve.
-            spawn_by_tag[key] = (event.unitTypeName, event.controlPlayerId)
-            if event.controlPlayerId in events_by_player and is_gameplay_entity(
-                event.unitTypeName
-            ):
-                events_by_player[event.controlPlayerId].append(
-                    (event.loop, EVENT_TYPE_IDS[name], event.unitTypeName)
-                )
+            case "UnitBorn" | "UnitInit":
+                key = (event.unitTagIndex, event.unitTagRecycle)
+                # Recorded for every entity, filtered or not: the tag map is
+                # what later resolves a death's type and owner, so pruning it
+                # would reintroduce the orphaned-death problem it exists to solve.
+                spawn_by_tag[key] = (event.unitTypeName, event.controlPlayerId)
+                if event.controlPlayerId in events_by_player and is_gameplay_entity(
+                    event.unitTypeName
+                ):
+                    events_by_player[event.controlPlayerId].append(
+                        (event.loop, EVENT_TYPE_IDS[name], event.unitTypeName)
+                    )
 
-        elif name == "UnitTypeChange":
-            key = (event.unitTagIndex, event.unitTagRecycle)
-            existing = spawn_by_tag.get(key)
-            if existing is not None:
-                # Keep the owner; only the type changes.
-                spawn_by_tag[key] = (event.unitTypeName, existing[1])
+            case "UnitTypeChange":
+                key = (event.unitTagIndex, event.unitTagRecycle)
+                existing = spawn_by_tag.get(key)
+                if existing is not None:
+                    # Keep the owner; only the type changes.
+                    spawn_by_tag[key] = (event.unitTypeName, existing[1])
 
-        elif name == "UnitDied":
-            key = (event.unitTagIndex, event.unitTagRecycle)
-            spawned = spawn_by_tag.get(key)
-            if spawned is None:
-                # Phase 0 measured this at 0% with both spawn sources joined;
-                # skip rather than emit an untyped, unattributed death.
-                continue
-            type_name, owner_id = spawned
-            if owner_id in events_by_player and is_gameplay_entity(type_name):
-                events_by_player[owner_id].append(
-                    (event.loop, EVENT_TYPE_IDS["UnitDied"], type_name)
-                )
+            case "UnitDied":
+                key = (event.unitTagIndex, event.unitTagRecycle)
+                spawned = spawn_by_tag.get(key)
+                if spawned is None:
+                    # Phase 0 measured this at 0% with both spawn sources
+                    # joined; skip rather than emit an untyped, unattributed death.
+                    continue
+                type_name, owner_id = spawned
+                if owner_id in events_by_player and is_gameplay_entity(type_name):
+                    events_by_player[owner_id].append(
+                        (event.loop, EVENT_TYPE_IDS["UnitDied"], type_name)
+                    )
 
-        elif name == "Upgrade":
-            # Cosmetics (skins, sprays, dances) are recorded as upgrades, so
-            # the same filter has to run on this branch too.
-            if event.playerId in events_by_player and is_gameplay_entity(
-                event.upgradeTypeName
-            ):
-                events_by_player[event.playerId].append(
-                    (event.loop, EVENT_TYPE_IDS["Upgrade"], event.upgradeTypeName)
-                )
+            case "Upgrade":
+                # Cosmetics (skins, sprays, dances) are recorded as upgrades, so
+                # the same filter has to run on this branch too.
+                if event.playerId in events_by_player and is_gameplay_entity(
+                    event.upgradeTypeName
+                ):
+                    events_by_player[event.playerId].append(
+                        (event.loop, EVENT_TYPE_IDS["Upgrade"], event.upgradeTypeName)
+                    )
 
     for player_id in PLAYER_IDS:
         if not stats_by_player[player_id]:
