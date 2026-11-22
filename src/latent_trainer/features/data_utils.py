@@ -224,7 +224,8 @@ def _pad_stack(
     for index, stream in enumerate(streams):
         padded[index, : stream.shape[0]] = stream
 
-    return padded.reshape(-1, n_players, max_len, *trailing)
+    # Explicit batch size: with max_len == 0 a -1 would be ambiguous.
+    return padded.reshape(len(streams) // n_players, n_players, max_len, *trailing)
 
 
 def _group_events(
@@ -232,7 +233,7 @@ def _group_events(
     stat_slice: torch.Tensor,
     stat_loops: torch.Tensor,
     max_events_per_slice: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Index one stream's events by slice, capped at ``K`` per slice.
 
@@ -254,10 +255,11 @@ def _group_events(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
         ``group`` ``[S, K]`` event positions (0 where masked), ``mask``
-        ``[S, K]``, ``count`` ``[S]`` true events per slice, and ``slice_loops``
-        ``[S]`` the loop of each slice's last stat tick, with
+        ``[S, K]``, ``count`` ``[S]`` true events per slice, ``slice_loops``
+        ``[S]`` the loop of each slice's last stat tick, and ``last_row``
+        ``[S]`` that tick's row in the stream (forward-filled over gaps), with
         ``S = last stat slice + 1``.
 
     Raises
@@ -285,7 +287,18 @@ def _group_events(
     slice_loops = torch.zeros(n_slices, dtype=torch.long).scatter_reduce(
         0, stat_slice.long(), stat_loops.long(), reduce="amax", include_self=False
     )
-    return group, mask, count, slice_loops
+    # Row of each slice's last stat tick; a slice without a tick (a rare gap in
+    # the grid) reuses the previous one, which stays causal.
+    last_row = torch.full((n_slices,), -1, dtype=torch.long).scatter_reduce(
+        0,
+        stat_slice.long(),
+        torch.arange(len(stat_slice)),
+        reduce="amax",
+        include_self=True,
+    )
+    if n_slices:
+        last_row = torch.cummax(last_row, dim=0).values.clamp(min=0)
+    return group, mask, count, slice_loops, last_row
 
 
 def collate_event_sequences(
@@ -314,7 +327,8 @@ def collate_event_sequences(
         ``[B, 2, Ls]``; ``evt_type``/``evt_unit``/``evt_loops``/``evt_slice``
         ``[B, 2, Le]``; ``stat_mask``/``evt_mask`` (bool); ``n_slices``
         ``[B, 2]``; ``slice_loops`` ``[B, 2, S]`` (loop of each slice's last
-        tick) with ``slice_mask``; ``evt_group`` ``[B, 2, S, K]`` positions into
+        tick) with ``slice_mask``; ``slice_stat_index`` ``[B, 2, S]`` (row of
+        that tick in ``stat_values``); ``evt_group`` ``[B, 2, S, K]`` positions into
         the event dimension with ``evt_group_mask``; ``evt_count`` ``[B, 2, S]``
         true events per slice before the cap; ``race`` ``[B, 2]``;
         ``crop_loop`` ``[B]``; ``label`` ``[B]``.
@@ -380,17 +394,19 @@ def collate_event_sequences(
     )
     collated["evt_count"] = _pad_stack([g[2] for g in grouped], n_players)
     collated["slice_loops"] = _pad_stack([g[3] for g in grouped], n_players)
+    collated["slice_stat_index"] = _pad_stack([g[4] for g in grouped], n_players)
 
     stat_max = collated["stat_values"].shape[2]
     evt_max = collated["evt_type"].shape[2]
     positions_stat = torch.arange(stat_max).unsqueeze(0)
     positions_evt = torch.arange(evt_max).unsqueeze(0)
 
+    n_batch = len(batch)
     collated["stat_mask"] = (positions_stat < stat_lengths.unsqueeze(1)).reshape(
-        -1, n_players, stat_max
+        n_batch, n_players, stat_max
     )
     collated["evt_mask"] = (positions_evt < evt_lengths.unsqueeze(1)).reshape(
-        -1, n_players, evt_max
+        n_batch, n_players, evt_max
     )
 
     # Number of level-2 slices per stream: the stat stream defines the horizon,
@@ -402,11 +418,11 @@ def collate_event_sequences(
         ],
         dtype=torch.long,
     )
-    collated["n_slices"] = n_slices.reshape(-1, n_players)
+    collated["n_slices"] = n_slices.reshape(n_batch, n_players)
     slice_max = collated["slice_loops"].shape[2]
     collated["slice_mask"] = (
         torch.arange(slice_max).unsqueeze(0) < n_slices.unsqueeze(1)
-    ).reshape(-1, n_players, slice_max)
+    ).reshape(n_batch, n_players, slice_max)
 
     return collated
 
@@ -506,11 +522,11 @@ def _check_split_layout(split: EventSplit, name: str, ids: list[str]) -> None:
 
 def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
     """
-    Load an ``events`` cache and z-score the stat channels.
+    Load an ``events`` cache with raw stat channels.
 
-    Only ``stat_values`` is normalised, per channel, fitted on train. Event ids
-    and loops are categorical/positional and left raw. The flat stat array holds
-    no padding, so the statistics need no masking.
+    Stat values stay in raw units: the event model owns its input scaling
+    (``ChannelTransform``, fitted on ``bundle.train.stat_values``), so the
+    checkpoint carries it and serving cannot normalise differently.
 
     Parameters
     ----------
@@ -520,7 +536,7 @@ def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
     Returns
     -------
     EventDataBundle
-        Normalised splits, normalisation statistics and cache metadata.
+        Raw splits and cache metadata.
 
     Raises
     ------
@@ -543,17 +559,6 @@ def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
     for name, split in (("train", train), ("val", val), ("test", test)):
         _check_split_layout(split, name, getattr(spec, f"{name}_ids"))
 
-    mean = train.stat_values.mean(dim=0, keepdim=True)
-    # Same std floor, and for the same reason, as `normalize` above: these are
-    # raw counts in the hundreds-to-thousands, and a near-constant channel whose
-    # true std is ~1e-8 would otherwise turn a single nonzero game into a
-    # ~1e10 z-score that poisons every downstream latent centroid.
-    std = train.stat_values.std(dim=0, keepdim=True).clamp(min=1.0)
-
-    for split in (train, val, test):
-        if split.stat_values.numel():
-            split.stat_values = (split.stat_values - mean) / std
-
     logger.info(
         f"Event cache: train {len(train.labels)} / val {len(val.labels)} / "
         f"test {len(test.labels)} replays  |  "
@@ -565,8 +570,6 @@ def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
         train=train,
         val=val,
         test=test,
-        mean=mean,
-        std=std,
         stat_channel_names=spec.stat_channel_names,
         race_names=spec.race_names,
         unit_vocab=spec.unit_vocab,

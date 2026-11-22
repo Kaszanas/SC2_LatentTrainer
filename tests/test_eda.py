@@ -63,18 +63,12 @@ def _split(n: int, seed: int) -> EventSplit:
 
 
 def _bundle(val_seed: int = 100) -> EventDataBundle:
-    """Return a small normalised bundle; ``val_seed`` changes val and test only."""
+    """Return a small raw bundle; ``val_seed`` changes val and test only."""
     train, val, test = _split(12, 0), _split(4, val_seed), _split(4, val_seed + 50)
-    mean = train.stat_values.mean(0, keepdim=True)
-    std = train.stat_values.std(0, keepdim=True).clamp(min=1.0)
-    for split in (train, val, test):
-        split.stat_values = (split.stat_values - mean) / std
     return EventDataBundle(
         train=train,
         val=val,
         test=test,
-        mean=mean,
-        std=std,
         stat_channel_names=list(STAT_CHANNEL_NAMES),
         race_names=list(RACE_NAMES),
         unit_vocab=["<PAD>", "<UNK>", "Marine"],

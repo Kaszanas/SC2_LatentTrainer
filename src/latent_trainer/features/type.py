@@ -306,8 +306,8 @@ class EventSplit:
     Parameters
     ----------
     stat_values : torch.Tensor
-        PlayerStats channels per tick, ``[sum_t, C]`` float32 (normalised once
-        loaded by ``load_event_cache``).
+        Stat channels per tick in raw units, ``[sum_t, C]`` float32 (the model
+        scales them with its fitted ``ChannelTransform``).
     stat_loops : torch.Tensor
         Game loop of each tick, ``[sum_t]``.
     stat_tick : torch.Tensor
@@ -348,21 +348,17 @@ class EventDataBundle:
     """
     Return type of ``load_event_cache``: three splits plus their metadata.
 
-    ``mean``/``std`` are per stat channel, fitted on the training split only,
-    and must be persisted with the checkpoint so inference normalises identically.
+    Stat values are raw; the event model fits its ``ChannelTransform`` on
+    ``train.stat_values`` and stores it in the checkpoint.
 
     Parameters
     ----------
     train : EventSplit
-        Training split, stat channels normalised.
+        Training split.
     val : EventSplit
-        Validation split, stat channels normalised.
+        Validation split.
     test : EventSplit
-        Test split, stat channels normalised.
-    mean : torch.Tensor
-        Per-channel training mean, ``[1, C]``.
-    std : torch.Tensor
-        Per-channel training std floored at 1.0, ``[1, C]``.
+        Test split.
     stat_channel_names : list[str]
         Names of the stat channels.
     race_names : list[str]
@@ -382,9 +378,6 @@ class EventDataBundle:
     train: "EventSplit"
     val: "EventSplit"
     test: "EventSplit"
-
-    mean: torch.Tensor  # [1, C]
-    std: torch.Tensor  # [1, C]
 
     stat_channel_names: list[str]
     race_names: list[str]

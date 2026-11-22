@@ -3,7 +3,7 @@ Tidy pandas views of the events cache (plus optional metadata) for the EDA.
 
 ``replays`` and ``players`` cover all splits; ``ticks`` and ``units`` are built
 from the training split only, because everything computed from them can inform
-a modelling choice. Stat values are de-normalised back to raw units.
+a modelling choice. Stat values are in raw units, as stored in the cache.
 """
 
 from __future__ import annotations
@@ -82,13 +82,9 @@ class EDAData:
     units : pd.DataFrame
         Training event counts per ``unit`` and ``race``.
     stat_values : torch.Tensor
-        Normalised training stat values ``[sum_t, C]``.
+        Raw training stat values ``[sum_t, C]``.
     stat_channel_names : list[str]
         Names of the ``C`` channels.
-    mean : torch.Tensor
-        Training mean per channel ``[1, C]``.
-    std : torch.Tensor
-        Training std per channel after the floor ``[1, C]``.
     has_metadata : bool
         Whether replay metadata (patch, players, true length) was joined.
     skip_report : dict | None
@@ -101,8 +97,6 @@ class EDAData:
     units: pd.DataFrame
     stat_values: torch.Tensor
     stat_channel_names: list[str]
-    mean: torch.Tensor
-    std: torch.Tensor
     has_metadata: bool
     skip_report: dict | None
 
@@ -252,7 +246,7 @@ def _tick_table(bundle: EventDataBundle, replays: pd.DataFrame) -> pd.DataFrame:
     stream = _stream_index(split.stat_offsets)
     tick = split.stat_tick.long().numpy()
     names = bundle.stat_channel_names
-    raw = (split.stat_values * bundle.std + bundle.mean).numpy()
+    raw = split.stat_values.numpy()
 
     # Events per (stream, tick): events of tick k belong to the slice ending at k.
     evt_stream = _stream_index(split.evt_offsets)
@@ -415,8 +409,6 @@ def build_eda_data(
         units=_unit_table(bundle, race_names),
         stat_values=bundle.train.stat_values,
         stat_channel_names=list(bundle.stat_channel_names),
-        mean=bundle.mean,
-        std=bundle.std,
         has_metadata=metadata is not None,
         skip_report=skip_report,
     )

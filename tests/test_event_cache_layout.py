@@ -81,7 +81,6 @@ def test_valid_cache_loads_and_pairs_streams_with_their_replay(tmp_path):
     """A producer-built cache loads, and replay i reads streams 2i and 2i + 1."""
     bundle = _load(tmp_path, _cache())
     dataset = EventSequenceDataset(bundle.val, drop_tail_frac=0.0)
-    mean, std = bundle.mean[0, 0], bundle.std[0, 0]
 
     second = dataset[1]
     p1, p2 = second["players"]
@@ -89,8 +88,9 @@ def test_valid_cache_loads_and_pairs_streams_with_their_replay(tmp_path):
     assert second["race"].tolist() == [2, 1]
     # 5 and 2 ticks: the pair is cut to the shorter player's horizon.
     assert p1["stat_values"].shape[0] == 2 and p2["stat_values"].shape[0] == 2
-    assert torch.allclose(p1["stat_values"][:, 0] * std + mean, torch.tensor(30.0))
-    assert torch.allclose(p2["stat_values"][:, 0] * std + mean, torch.tensor(40.0))
+    # Stat values are raw: the model owns its scaling.
+    assert torch.allclose(p1["stat_values"][:, 0], torch.tensor(30.0))
+    assert torch.allclose(p2["stat_values"][:, 0], torch.tensor(40.0))
     assert p1["evt_type"].numel() == 0 and p2["evt_type"].numel() == 3
 
 

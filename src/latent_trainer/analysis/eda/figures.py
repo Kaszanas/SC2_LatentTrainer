@@ -14,10 +14,12 @@ from dataclasses import dataclass
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch
 from scipy import stats
 
 from latent_trainer.analysis.eda import style
 from latent_trainer.analysis.eda.data import MATCHUP_ORDER, SECONDS_PER_TICK, EDAData
+from latent_trainer.features.channel_transform import ChannelTransform
 from latent_trainer.features.event_transform import SKIP_REASONS
 
 RACES = ("Terr", "Prot", "Zerg")
@@ -993,7 +995,7 @@ def compute_pac_whole_game(data: EDAData) -> pd.DataFrame:
 # 8. Normalisation:
 def compute_normalisation(data: EDAData) -> pd.DataFrame:
     """
-    Describe every stat channel's distribution before and after z-scoring.
+    Describe every raw stat channel and its plain z-score.
 
     Parameters
     ----------
@@ -1003,21 +1005,20 @@ def compute_normalisation(data: EDAData) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Per channel: mean, std, whether the std floor of 1 applies, skewness,
-        excess kurtosis, share of zeros, 99th percentile and maximum of |z|.
+        Per channel: mean, std, whether the std is below 1 (where the former
+        global floor of 1 muted the channel), skewness, excess kurtosis, share
+        of zeros, 99th percentile and maximum of the plain z-score's |z|.
     """
-    z = data.stat_values.numpy().astype(np.float64)
-    mean = data.mean.numpy()[0]
-    std = data.std.numpy()[0]
-    raw = z * std + mean
-    abs_z = np.abs(z)
+    raw = data.stat_values.numpy().astype(np.float64)
+    mean = raw.mean(axis=0)
     raw_std = raw.std(axis=0)
+    abs_z = np.abs((raw - mean) / np.maximum(raw_std, 1e-12))
     return pd.DataFrame(
         {
             "Channel": data.stat_channel_names,
             "Mean": mean,
             "Std": raw_std,
-            "Floored": np.where(raw_std < 1.0, "yes", ""),
+            "Std < 1": np.where(raw_std < 1.0, "yes", ""),
             "Skew": stats.skew(raw, axis=0),
             "Kurtosis": stats.kurtosis(raw, axis=0),
             "Zero share": (np.abs(raw) < ZERO_TOLERANCE).mean(axis=0),
@@ -1073,8 +1074,7 @@ def _heavy_tail_channels(data: EDAData, n_other: int = 3) -> list[str]:
         Channel names.
     """
     names = data.stat_channel_names
-    z = data.stat_values.numpy()
-    raw = z * data.std.numpy()[0] + data.mean.numpy()[0]
+    raw = data.stat_values.numpy()
     mostly_zero = (np.abs(raw) < ZERO_TOLERANCE).mean(axis=0) > 0.5
     skew = np.nan_to_num(stats.skew(raw, axis=0), nan=0.0)
     others = [
@@ -1102,8 +1102,7 @@ def compute_heavy_tails(data: EDAData) -> pd.DataFrame:
         standardised values.
     """
     names = data.stat_channel_names
-    z = data.stat_values.numpy().astype(np.float64)
-    raw = z * data.std.numpy()[0] + data.mean.numpy()[0]
+    raw = data.stat_values.numpy().astype(np.float64)
     rows = []
     for channel in _heavy_tail_channels(data):
         column = raw[:, names.index(channel)]
@@ -1138,8 +1137,7 @@ def compute_heavy_tail_hist(data: EDAData, bins: int = 60) -> pd.DataFrame:
         ``channel``, ``transform``, ``left``, ``right``, ``density``.
     """
     names = data.stat_channel_names
-    z = data.stat_values.numpy().astype(np.float64)
-    raw = z * data.std.numpy()[0] + data.mean.numpy()[0]
+    raw = data.stat_values.numpy().astype(np.float64)
     rows = []
     for channel in _heavy_tail_channels(data):
         column = raw[:, names.index(channel)]
@@ -1206,6 +1204,53 @@ def plot_heavy_tail_hist(table: pd.DataFrame) -> plt.Figure:
     for ax in axes[-1]:
         ax.set_xlabel("Standardised value (to p99.9)")
     return fig
+
+
+def compute_channel_transform(data: EDAData) -> pd.DataFrame:
+    """
+    Check the model's per-channel scaling on every channel.
+
+    Fits :class:`ChannelTransform` on the training ticks exactly as the model
+    does and reports each channel's shape before and after it.
+
+    Parameters
+    ----------
+    data : EDAData
+        EDA tables (train only).
+
+    Returns
+    -------
+    pd.DataFrame
+        ``Channel``, ``Treatment``, ``Clip at`` (raw units), skewness before and
+        after, and the 99.9th percentile and maximum of |value| after.
+    """
+    raw = data.stat_values.float()
+    transform = ChannelTransform(data.stat_channel_names).fit(raw)
+    with torch.no_grad():
+        scaled = transform(raw).double().numpy()
+    raw_np = raw.double().numpy()
+    names = data.stat_channel_names
+    rows = []
+    for out_index, (name, kind) in enumerate(
+        zip(transform.output_names, transform.kinds(), strict=True)
+    ):
+        after = scaled[:, out_index]
+        clip = float(transform.clip_max[out_index])
+        rows.append(
+            {
+                "Channel": name,
+                "Treatment": kind,
+                "Clip at": clip if np.isfinite(clip) else np.nan,
+                "Skew before": float(stats.skew(raw_np[:, names.index(name)])),
+                "Skew after": float(stats.skew(after)),
+                "p99.9 |after|": float(np.percentile(np.abs(after), 99.9)),
+                "Max |after|": float(np.abs(after).max()),
+            }
+        )
+    for name in names:
+        if name not in transform.output_names:
+            rows.append({"Channel": name, "Treatment": "drop"})
+    return pd.DataFrame(rows)
 
 
 # 9. Duration confound:
@@ -1612,6 +1657,15 @@ OUTPUTS: tuple[Output, ...] = (
         plot_heavy_tail_hist,
         "Distributions of the heavy-tailed channels under each candidate "
         "transform, up to the 99.9th percentile (training split).",
+    ),
+    Output(
+        "channel_transform",
+        "train",
+        compute_channel_transform,
+        None,
+        "The model's per-channel input scaling fitted on the training split: "
+        "treatment, clip limit, and each channel's shape before and after.",
+        latex=True,
     ),
     Output(
         "duration_confound",
