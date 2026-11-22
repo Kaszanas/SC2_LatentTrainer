@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-import lightning as pl
 import torch
 import torch.nn.functional as F
-import torch.optim as optim
 
 from latent_trainer.models.guided_vae import Classifier, suGuidedVAE
+from latent_trainer.models.lightning.guided_base import GuidedAdversarialModule
 from latent_trainer.models.losses import loss_supervised
 
 
-class LitGuidedVAE(pl.LightningModule):
+class LitGuidedVAE(GuidedAdversarialModule):
     """
     Lightning module for supervised guided VAE training.
 
-    Uses manual optimisation with three optimizers per step: (1) the VAE on
-    reconstruction + KL + weighted outcome BCE, (2) the adversary on the detached
-    free dims, (3) the VAE to push the adversary towards 0.5.
+    Uses the three-step adversarial loop of :class:`GuidedAdversarialModule`:
+    (1) the VAE on reconstruction + KL + weighted outcome BCE, (2) the adversary
+    on the detached free dims, (3) the VAE to push the adversary towards 0.5.
+    Both heads output probabilities.
 
     Parameters
     ----------
@@ -99,63 +99,96 @@ class LitGuidedVAE(pl.LightningModule):
             supervised_dim=supervised_dim,
         )
 
-    # Helpers
-    @staticmethod
-    def _prepare_label(label: torch.Tensor) -> torch.Tensor:
+    # Hooks of GuidedAdversarialModule:
+    def _unpack(self, batch) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Coerce labels to ``[B, 1]`` float32 and check they are 0 or 1.
+        Split ``(features [B, 2, F], labels [B])`` and prepare the labels.
 
         Parameters
         ----------
-        label : torch.Tensor
-            Labels ``[B]`` or ``[B, 1]``.
+        batch : tuple[torch.Tensor, torch.Tensor]
+            Features and labels.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor]
+            Features and ``[B, 1]`` float labels.
+        """
+        return batch[0], self._prepare_label(label=batch[1])
+
+    def _vae_forward(
+        self, inputs: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
+        """
+        Reconstruct the features and predict the outcome.
+
+        Parameters
+        ----------
+        inputs : torch.Tensor
+            Features ``[B, 2, F]``.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor, dict]
+            MSE + KL loss, win probability ``[B, 1]``, no extra logs.
+        """
+        recon_batch, mu, logvar, probability = self.model(inputs)
+        vae_loss = loss_supervised(recon_batch, inputs, mu, logvar)[0]
+        return vae_loss, probability, {}
+
+    def _outcome_loss(
+        self, outcome: torch.Tensor, target: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Return the BCE of a probability against a target.
+
+        Parameters
+        ----------
+        outcome : torch.Tensor
+            Win probability ``[B, 1]``.
+        target : torch.Tensor
+            Target ``[B, 1]``.
 
         Returns
         -------
         torch.Tensor
-            Labels as ``[B, 1]`` float32.
-
-        Raises
-        ------
-        ValueError
-            If any label is outside ``[0, 1]``; invalid samples must be filtered
-            upstream.
+            Mean binary cross-entropy.
         """
-        if label.dtype != torch.float32:
-            label = label.float()
-        if label.dim() == 1:
-            label = label.unsqueeze(1)
+        return F.binary_cross_entropy(outcome, target, reduction="mean")
 
-        if (label < 0).any() or (label > 1).any():
-            raise ValueError(
-                "Batch contains labels outside [0, 1]. "
-                "Filter invalid samples in the dataset/dataloader, not here."
-            )
-        return label
-
-    def _slice_free_dims(self, z: torch.Tensor) -> torch.Tensor:
+    def _predicts_player_1(self, outcome: torch.Tensor) -> torch.Tensor:
         """
-        Slice the free (non-supervised) latent dims passed to the adversary.
+        Threshold a probability at 0.5.
 
         Parameters
         ----------
-        z : torch.Tensor
-            Latents ``[B, latent_dim]`` or ``[B, 2, latent_dim]``.
+        outcome : torch.Tensor
+            Win probability ``[B, 1]``.
 
         Returns
         -------
         torch.Tensor
-            ``z[..., supervised_dim:]``.
+            0/1 predictions as float.
         """
-        # 3-D: per-player latents [batch, players, latent] → slice last dim
-        # 2-D: flat latents [batch, latent] → slice last dim
-        return (
-            z[:, :, self.supervised_dim :]
-            if z.dim() == 3
-            else z[:, self.supervised_dim :]
-        )
+        return (outcome > 0.5).float()
 
-    # Forward / training / validation
+    def _sample_z(self, inputs: torch.Tensor) -> torch.Tensor:
+        """
+        Encode and sample per-player latents.
+
+        Parameters
+        ----------
+        inputs : torch.Tensor
+            Features ``[B, 2, F]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Latents ``[B, 2, latent_dim]``.
+        """
+        mu, logvar = self.model.encode(inputs)
+        return self.model.reparameterize(mu, logvar)
+
     def forward(self, x: torch.Tensor):  # noqa: D401
         """
         Run the underlying :class:`suGuidedVAE`.
@@ -171,211 +204,3 @@ class LitGuidedVAE(pl.LightningModule):
             ``(reconstruction, mu, logvar, win_probability)``.
         """
         return self.model(x)
-
-    def training_step(self, batch, batch_idx: int):
-        """
-        Run the three optimisation steps on one batch.
-
-        Parameters
-        ----------
-        batch : tuple[torch.Tensor, torch.Tensor]
-            ``(features [B, 2, F], labels [B])``.
-        batch_idx : int
-            Index of the batch in the epoch.
-
-        Returns
-        -------
-        torch.Tensor
-            Sum of the three losses (for logging; optimisation is manual).
-        """
-        data, label = batch[0], batch[1]
-        valid_data = data
-        valid_label = self._prepare_label(label=label)
-
-        optimizer_vae, optimizer_classification, optimizer_adversarial = (
-            self.optimizers()
-        )
-        # Step 1: VAE
-        optimizer_vae.zero_grad()
-        recon_batch, mu, logvar, re = self.model(valid_data)
-        vae_loss = loss_supervised(recon_batch, valid_data, mu, logvar)[0]
-        cls_loss = F.binary_cross_entropy(re, valid_label, reduction="mean")
-        vae_total = vae_loss + cls_loss * self.classification_weight
-
-        acc = (
-            (re > 0.5).float().eq(valid_label).sum().item() / valid_label.numel() * 100
-        )
-
-        self.log("train_vae_loss", vae_loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train_cls_loss", cls_loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train_vae_acc", acc, prog_bar=True, on_step=True, on_epoch=True)
-
-        self.manual_backward(vae_total)
-        optimizer_vae.step()
-
-        # Step 2: Adversarial classifier
-        optimizer_classification.zero_grad()
-        mu, logvar = self.model.encode(valid_data)
-        z = self.model.reparameterize(mu, logvar).detach()
-        cls1 = self.adversarial_classifier(self._slice_free_dims(z))
-        adversarial_classification_loss = (
-            F.binary_cross_entropy(cls1, valid_label, reduction="mean")
-            * self.classification_weight
-        )
-
-        adversarial_classification_accuracy = (
-            (cls1 > 0.5).float().eq(valid_label).sum().item()
-            / valid_label.numel()
-            * 100
-        )
-
-        self.log(
-            "train_adv_cls_loss",
-            adversarial_classification_loss,
-            prog_bar=True,
-            on_step=True,
-            on_epoch=True,
-        )
-        self.log(
-            "train_adv_cls_acc",
-            adversarial_classification_accuracy,
-            prog_bar=True,
-            on_step=True,
-            on_epoch=True,
-        )
-
-        self.manual_backward(adversarial_classification_loss)
-        optimizer_classification.step()
-
-        # Step 3: Adversarial (VAE fools the classifier)
-        optimizer_adversarial.zero_grad()
-        mu, logvar = self.model.encode(valid_data)
-        z = self.model.reparameterize(mu, logvar)
-        cls2 = self.adversarial_classifier(self._slice_free_dims(z))
-        label_half = torch.empty_like(valid_label).fill_(0.5)
-        adv_loss = (
-            F.binary_cross_entropy(cls2, label_half, reduction="mean")
-            * self.classification_weight
-        )
-
-        self.log(
-            "train_adv_loss",
-            adv_loss,
-            prog_bar=True,
-            on_step=True,
-            on_epoch=True,
-        )
-        self.manual_backward(adv_loss)
-        optimizer_adversarial.step()
-
-        return vae_total + adversarial_classification_loss + adv_loss
-
-    def on_train_epoch_end(self) -> None:
-        """Step the three cosine LR schedulers."""
-        sch1, sch2, sch3 = self.lr_schedulers()
-        sch1.step()
-        sch2.step()
-        sch3.step()
-
-    def validation_step(self, batch, batch_idx):
-        """
-        Compute and log ``val_loss``, ``val_vae_loss``, ``val_cls_loss`` and ``val_acc``.
-
-        Parameters
-        ----------
-        batch : tuple[torch.Tensor, torch.Tensor]
-            ``(features [B, 2, F], labels [B])``.
-        batch_idx : int
-            Index of the batch in the epoch.
-
-        Returns
-        -------
-        torch.Tensor
-            VAE loss plus weighted classification loss.
-        """
-        data, label = batch[0], batch[1]
-        valid_data = data
-        valid_label = self._prepare_label(label)
-
-        recon_batch, mu, logvar, re = self.model(valid_data)
-        vae_loss = loss_supervised(recon_batch, valid_data, mu, logvar)[0]
-        cls_loss = F.binary_cross_entropy(re, valid_label, reduction="mean")
-        total_loss = vae_loss + cls_loss * self.classification_weight
-
-        acc = (
-            (re > 0.5).float().eq(valid_label).sum().item() / valid_label.numel() * 100
-        )
-
-        self.log("val_loss", total_loss, prog_bar=True, sync_dist=True)
-        self.log("val_vae_loss", vae_loss, prog_bar=True, sync_dist=True)
-        self.log("val_cls_loss", cls_loss, prog_bar=True, sync_dist=True)
-        self.log("val_acc", acc, prog_bar=True, sync_dist=True)
-
-        return total_loss
-
-    def test_step(self, batch, batch_idx):
-        """
-        Evaluate a test batch exactly like a validation batch.
-
-        Parameters
-        ----------
-        batch : tuple[torch.Tensor, torch.Tensor]
-            ``(features [B, 2, F], labels [B])``.
-        batch_idx : int
-            Index of the batch.
-
-        Returns
-        -------
-        torch.Tensor
-            VAE loss plus weighted classification loss.
-        """
-        return self.validation_step(batch, batch_idx)
-
-    def configure_optimizers(self):
-        """
-        Create the VAE, adversary and adversarial optimizers with cosine schedulers.
-
-        Returns
-        -------
-        tuple[list[torch.optim.Optimizer], list[torch.optim.lr_scheduler.LRScheduler]]
-            Three AdamW optimizers and their ``CosineAnnealingLR`` schedulers.
-
-        Raises
-        ------
-        ValueError
-            If the trainer has no ``max_epochs`` (needed for ``T_max``).
-        """
-        if not self.trainer.max_epochs:
-            raise ValueError(
-                "Trainer max_epochs must be set for LR scheduler configuration."
-            )
-
-        opt_vae = optim.AdamW(
-            self.model.parameters(),
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay,
-        )
-        opt_cls = optim.AdamW(
-            self.adversarial_classifier.parameters(),
-            lr=self.learning_rate_cls,
-            weight_decay=self.weight_decay_cls,
-        )
-        # Adversarial optimizer updates VAE params to fool the classifier
-        opt_adv = optim.AdamW(
-            self.model.parameters(),
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay,
-        )
-
-        epochs = self.trainer.max_epochs
-        sched_vae = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer=opt_vae, T_max=epochs
-        )
-        sched_cls = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer=opt_cls, T_max=epochs
-        )
-        sched_adv = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer=opt_adv, T_max=epochs
-        )
-
-        return [opt_vae, opt_cls, opt_adv], [sched_vae, sched_cls, sched_adv]
