@@ -148,12 +148,14 @@ def _compute_vae_metrics(
     test_mse = float(recon_mse.mean())
     test_mse_norm = float(recon_mse_norm.mean())
     # KL per sample: -0.5 * sum_j(1 + logvar_j - mu_j^2 - exp(logvar_j))
-    kl_per_sample = -0.5 * (1.0 + logvar - mu ** 2 - np.exp(logvar)).sum(axis=1)
+    kl_per_sample = -0.5 * (1.0 + logvar - mu**2 - np.exp(logvar)).sum(axis=1)
     test_kl = float(kl_per_sample.mean())
     return {"test_mse": test_mse, "test_mse_norm": test_mse_norm, "test_kl": test_kl}
 
 
-def _compute_classifier_metrics(probs: np.ndarray, targets: np.ndarray) -> dict[str, float]:
+def _compute_classifier_metrics(
+    probs: np.ndarray, targets: np.ndarray
+) -> dict[str, float]:
     """
     Compute accuracy, ROC-AUC, Brier score and F1 of the win classifier.
 
@@ -180,7 +182,9 @@ def _compute_classifier_metrics(probs: np.ndarray, targets: np.ndarray) -> dict[
 
 
 def _plot_confusion_matrix(
-    probs: np.ndarray, targets: np.ndarray, output_dir: Path
+    probs: np.ndarray,
+    targets: np.ndarray,
+    output_dir: Path,
 ) -> None:
     """
     Plot the confusion matrix at threshold 0.5.
@@ -377,7 +381,14 @@ def _plot_recon_error(
         ["Train", "Val", "Test"],
         _PALETTE,
     ):
-        ax.hist(mse, bins=60, alpha=0.55, color=color, label=label, density=True)
+        ax.hist(
+            mse,
+            bins=60,
+            alpha=0.55,
+            color=color,
+            label=label,
+            density=True,
+        )
     ax.set_xlabel("Per-Sample Reconstruction MSE")
     ax.set_ylabel("Density")
     ax.set_title("Reconstruction Error Distribution", fontweight="bold")
@@ -436,7 +447,7 @@ def _plot_recon_error(
     multiple=True,
     default=(),
     help="Label for each OOD dataset (same order as --ood_dataset). "
-         "Defaults to 'OOD 1', 'OOD 2', ...",
+    "Defaults to 'OOD 1', 'OOD 2', ...",
 )
 @click.option(
     "--max_input_dim",
@@ -503,7 +514,9 @@ def main(
         data.test_X = data.test_X[..., :max_input_dim]
         data.mean = data.mean[..., :max_input_dim]
         data.std = data.std[..., :max_input_dim]
-        logger.info("Truncated features to first %d columns (max_input_dim).", max_input_dim)
+        logger.info(
+            "Truncated features to first %d columns (max_input_dim).", max_input_dim
+        )
 
     results: dict[str, dict] = {}
     for split, (X, y) in [
@@ -515,7 +528,9 @@ def main(
         results[split] = _forward_pass(model, X, y, batch_size, device)
 
     # Resolve OOD labels
-    labels = list(ood_label) + [f"OOD {i + 1}" for i in range(len(ood_dataset) - len(ood_label))]
+    labels = list(ood_label) + [
+        f"OOD {i + 1}" for i in range(len(ood_dataset) - len(ood_label))
+    ]
 
     # Load and evaluate each OOD dataset using in-distribution normalisation stats
     ood_results: list[tuple[str, dict[str, float], dict[str, float]]] = []
@@ -530,12 +545,16 @@ def main(
         y_ood = spec.test_labels.float()
         logger.info(f"Running forward pass on OOD '{label}' ({len(X_ood)} samples)...")
         res = _forward_pass(model, X_ood, y_ood, batch_size, device)
-        v = _compute_vae_metrics(res["recon_mse"], res["recon_mse_norm"], res["mu"], res["logvar"])
+        v = _compute_vae_metrics(
+            res["recon_mse"], res["recon_mse_norm"], res["mu"], res["logvar"]
+        )
         c = _compute_classifier_metrics(res["probs"], res["targets"])
         ood_results.append((label, v, c))
 
     test = results["test"]
-    vae_metrics = _compute_vae_metrics(test["recon_mse"], test["recon_mse_norm"], test["mu"], test["logvar"])
+    vae_metrics = _compute_vae_metrics(
+        test["recon_mse"], test["recon_mse_norm"], test["mu"], test["logvar"]
+    )
     cls_metrics = _compute_classifier_metrics(test["probs"], test["targets"])
     all_metrics = {**vae_metrics, **cls_metrics}
 

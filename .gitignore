@@ -142,3 +142,5 @@ ray_tmp/
 serving/api_results/
 serving/sc2_extractor_dependencies/
 serving/replays/
+
+responses_questionnaire/

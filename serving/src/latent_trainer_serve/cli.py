@@ -20,7 +20,9 @@ from latent_trainer.inference.reference_pack import (
     save_reference_pack,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 
 @click.group()
@@ -51,7 +53,9 @@ def cli() -> None:
     type=click.Path(dir_okay=False, path_type=Path, resolve_path=True),
     help="Where to save the reference pack.",
 )
-def cmd_build_reference_pack(model_path: Path, dataset_path: Path, output_path: Path) -> None:
+def cmd_build_reference_pack(
+    model_path: Path, dataset_path: Path, output_path: Path
+) -> None:
     """
     Precompute the reference latent pool for a checkpoint (one-time, offline).
 

@@ -37,9 +37,8 @@ import os
 import re
 import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -48,7 +47,9 @@ from fastapi.staticfiles import StaticFiles
 from latent_trainer.inference.extract import DEFAULT_DOCKER_IMAGE, ReplayExtractionError
 from latent_trainer.inference.pipeline import DEFAULT_CACHE_DIR, predict_replay
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -130,7 +131,7 @@ def _request_dir() -> Path:
     Path
         The created directory.
     """
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     request_id = f"{stamp}_{uuid.uuid4().hex[:8]}"
     request_dir = RESULTS_DIR / request_id
     request_dir.mkdir(parents=True, exist_ok=False)
@@ -189,7 +190,9 @@ def _format_mmss(seconds: float) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
-def _add_bin_time_range(row: dict, duration_seconds: float | None, n_bins_total: int) -> dict:
+def _add_bin_time_range(
+    row: dict, duration_seconds: float | None, n_bins_total: int
+) -> dict:
     """
     Add ``bin_start``/``bin_end`` (``m:ss``) to one ranked-table row.
 
@@ -289,7 +292,7 @@ _STRATEGIES = ("linear", "gradient_ascent", "optimal_transport")
 @app.post("/analyze")
 async def analyze(
     file: UploadFile = File(...),
-    player: Optional[int] = Form(None),
+    player: int | None = Form(None),
     method: str = Form("centroid"),
     k_neighbours: int = Form(5),
     n_steps: int = Form(50),
@@ -327,11 +330,13 @@ async def analyze(
     if player is not None and player not in (0, 1):
         raise HTTPException(status_code=400, detail="player must be 0 or 1")
     if method not in ("centroid", "nearest"):
-        raise HTTPException(status_code=400, detail="method must be 'centroid' or 'nearest'")
+        raise HTTPException(
+            status_code=400, detail="method must be 'centroid' or 'nearest'"
+        )
 
     request_dir = _request_dir()
     request_id = request_dir.name
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(UTC).isoformat()
 
     upload_name = Path(file.filename or "replay.SC2Replay").name
     replay_path = request_dir / upload_name
@@ -341,13 +346,11 @@ async def analyze(
     # Written before extraction/prediction so the entry (and replay name) is
     # already searchable via /history even if analysis itself fails later.
     (request_dir / "meta.json").write_text(
-        json.dumps(
-            {
-                "request_id": request_id,
-                "replay_name": upload_name,
-                "created_at": created_at,
-            }
-        ),
+        json.dumps({
+            "request_id": request_id,
+            "replay_name": upload_name,
+            "created_at": created_at,
+        }),
         encoding="utf-8",
     )
 
@@ -404,7 +407,7 @@ async def analyze(
 
 
 @app.get("/history")
-async def history(q: Optional[str] = None) -> JSONResponse:
+async def history(q: str | None = None) -> JSONResponse:
     """
     List past analyses, newest first. ?q= filters by replay filename.
 
@@ -451,7 +454,9 @@ async def history_detail(request_id: str) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Invalid request_id")
     report_path = RESULTS_DIR / request_id / "report.json"
     if not report_path.is_file():
-        raise HTTPException(status_code=404, detail=f"No report found for {request_id!r}")
+        raise HTTPException(
+            status_code=404, detail=f"No report found for {request_id!r}"
+        )
     return JSONResponse(json.loads(report_path.read_text(encoding="utf-8")))
 
 
