@@ -1,8 +1,6 @@
 """Model/data loading, latent encoding and opponent-aware scoring for path charting."""
 
-# ---------------------------------------------------------------------------
-# Model loading and encoding
-# ---------------------------------------------------------------------------
+# Model loading and encoding:
 from dataclasses import dataclass
 from pathlib import Path
 

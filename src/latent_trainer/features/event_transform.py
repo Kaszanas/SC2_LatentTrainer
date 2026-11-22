@@ -66,8 +66,7 @@ RESERVED_UNIT_TOKENS: tuple[str, ...] = (PAD_UNIT_TOKEN, UNK_UNIT_TOKEN)
 
 PLAYER_IDS: tuple[int, int] = (1, 2)
 
-# ---------------------------------------------------------------------------
-# Non-gameplay entities.
+# Non-gameplay entities:
 #
 # The tracker stream attributes a number of engine, UI and cosmetic entities to
 # a controlling player exactly as if they were units.  Measured over a 500-replay
@@ -82,7 +81,6 @@ PLAYER_IDS: tuple[int, int] = (1, 2)
 # CreepTumor, MULE.  Larva is emphatically kept -- larva births encode inject
 # cadence, which is exactly the kind of coachable macro this project exists to
 # give feedback on.
-# ---------------------------------------------------------------------------
 NON_GAMEPLAY_PREFIXES: tuple[str, ...] = (
     "Beacon",  # rally / control-group UI markers, spawned once per player
     "Spray",  # cosmetic emote sprays
@@ -108,8 +106,7 @@ NON_GAMEPLAY_NAMES: frozenset[str] = frozenset(
     }
 )
 
-# ---------------------------------------------------------------------------
-# Automatically-spawned entities.
+# Automatically-spawned entities:
 #
 # Distinct from the artifacts above: these are real gameplay objects that fight
 # and die, but no player *decided* to create them. The structure spawns them on
@@ -127,7 +124,6 @@ NON_GAMEPLAY_NAMES: frozenset[str] = frozenset(
 # larva births are singletons and only 0.5% arrive in threes, so inject cadence
 # is not actually present in this signal. Larva deaths are additionally
 # redundant, since morphing a larva already emits the resulting unit's birth.
-# ---------------------------------------------------------------------------
 AUTO_SPAWNED_NAMES: frozenset[str] = frozenset(
     {
         "Larva",  # Hatchery regenerates automatically

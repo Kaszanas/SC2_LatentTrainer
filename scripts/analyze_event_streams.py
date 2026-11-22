@@ -92,7 +92,7 @@ def _analyze_replay(replay) -> dict | None:
     if elapsed_loops < MIN_GAME_LOOPS:
         return None
 
-    # --- one pass over trackerEvents, bucketed by type -------------------
+    # One pass over trackerEvents, bucketed by type:
     # The tag maps are keyed by (unitTagIndex, unitTagRecycle): the recycle
     # counter is what makes this a correct join, since SC2 reuses tag indices
     # within a single game.
@@ -145,7 +145,7 @@ def _analyze_replay(replay) -> dict | None:
             if event.playerId in upgrade_loops:
                 upgrade_loops[event.playerId].append(int(event.loop))
 
-    # --- resolve deaths back to an owner and a type ----------------------
+    # Resolve deaths back to an owner and a type:
     died_loops: dict[int, list[int]] = {pid: [] for pid in PLAYER_IDS}
     deaths_total = len(died_events)
     deaths_joined = 0

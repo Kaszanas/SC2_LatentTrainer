@@ -190,9 +190,7 @@ def load_cached_dataloaders(
     )
 
 
-# ------------------------------------------------------------------
-# Event-sequence pipeline
-# ------------------------------------------------------------------
+# Event-sequence pipeline:
 def _pad_stack(
     streams: list[torch.Tensor],
     n_players: int,

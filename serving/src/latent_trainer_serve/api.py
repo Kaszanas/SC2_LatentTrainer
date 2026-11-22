@@ -52,11 +52,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Config -- environment variables only, set once at process startup. This is
+# Config: environment variables only, set once at process startup. This is
 # the enforcement point for "never serve the leaky model": there is no
 # request parameter that can change MODEL_PATH/REFERENCE_PACK_PATH.
-# ---------------------------------------------------------------------------
 _SERVING_ROOT = Path(__file__).resolve().parents[3]  # serving/
 
 MODEL_PATH = Path(

@@ -16,9 +16,7 @@ from latent_trainer.features.data_utils import (
 from latent_trainer.features.type import CachedDatasetFileSpec
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+# Fixtures:
 @pytest.fixture
 def dummy_tensors() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create small train/val tensors mimicking the cached dataset shape."""
@@ -82,9 +80,7 @@ class FakeEncoder:
         return mu, logvar
 
 
-# ---------------------------------------------------------------------------
-# normalize()
-# ---------------------------------------------------------------------------
+# normalize():
 class TestNormalize:
     """Tests for :func:`normalize`."""
 
@@ -144,9 +140,7 @@ class TestNormalize:
         assert torch.isfinite(normalized_data.test_X).all()
 
 
-# ---------------------------------------------------------------------------
-# load_and_normalize()
-# ---------------------------------------------------------------------------
+# load_and_normalize():
 class TestLoadAndNormalize:
     """Tests for :func:`load_and_normalize`."""
 
@@ -181,9 +175,7 @@ class TestLoadAndNormalize:
         assert normalized_data.train_y.dtype == torch.float32
 
 
-# ---------------------------------------------------------------------------
-# load_cached_dataloaders()
-# ---------------------------------------------------------------------------
+# load_cached_dataloaders():
 class TestLoadCachedDataloaders:
     """Tests for :func:`load_cached_dataloaders`."""
 
@@ -197,9 +189,7 @@ class TestLoadCachedDataloaders:
         assert features.shape[-1] == input_dim
 
 
-# ---------------------------------------------------------------------------
-# CachedSC2Dataset
-# ---------------------------------------------------------------------------
+# CachedSC2Dataset:
 class TestCachedSC2Dataset:
     """Tests for :class:`CachedSC2Dataset`."""
 
@@ -216,9 +206,7 @@ class TestCachedSC2Dataset:
         assert label.shape == ()
 
 
-# ---------------------------------------------------------------------------
-# extract_latents()
-# ---------------------------------------------------------------------------
+# extract_latents():
 class TestExtractLatents:
     """Tests for :func:`extract_latents`."""
 

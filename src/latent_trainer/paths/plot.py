@@ -88,7 +88,7 @@ def plot_main_proj(
         fontweight="bold",
     )
 
-    # --- density background ---
+    # Density background:
     all_pts = np.vstack([win_c, loss_c])
     pad_x = 0.05 * (all_pts[:, 0].max() - all_pts[:, 0].min() or 1)
     pad_y = 0.05 * (all_pts[:, 1].max() - all_pts[:, 1].min() or 1)

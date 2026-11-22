@@ -141,7 +141,7 @@ class MethodStats:
     wall_time_mean_s: float
     wall_time_sd_s: float
 
-    # ── New metrics ────────────────────────────────────────────────────────────
+    # New metrics:
     # Feature-space path length (decoded to original scale)
     path_length_feature_mean: float
     path_length_feature_sd: float
@@ -281,7 +281,7 @@ def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
         times = [r.wall_time_s for r in good if not math.isnan(r.wall_time_s)]
         time_mean, time_sd = _mean_sd(times)
 
-        # ── New metrics
+        # New metrics:
         feat_lengths = [r.path_length_feature for r in good if not math.isnan(r.path_length_feature)]
         feat_len_mean, feat_len_sd = _mean_sd(feat_lengths)
 

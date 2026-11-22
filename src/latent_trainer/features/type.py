@@ -104,9 +104,7 @@ class NormalizedDataWithLabels:
     std: torch.Tensor
 
 
-# ------------------------------------------------------------------
-# Protocol for any VAE-like encoder (LitVAE, SimpleVAE, suGuidedVAE…)
-# ------------------------------------------------------------------
+# Encoder protocol:
 class Encoder(Protocol):
     """
     Structural type for any model that exposes an ``encode`` method.
@@ -134,9 +132,7 @@ class Encoder(Protocol):
         ...
 
 
-# ------------------------------------------------------------------
-# Dataset wrapper (used by train_model.py / GuidedVAE path)
-# ------------------------------------------------------------------
+# Dense dataset wrapper:
 class CachedSC2Dataset(Dataset):
     """
     Wrap pre-processed feature and label tensors as a PyTorch Dataset.
@@ -194,9 +190,7 @@ class CachedDatasetFileSpec:
     splits_sha256: str = ""
 
 
-# ------------------------------------------------------------------
-# Event-sequence pipeline (Transformer encoder -> guided VAE)
-# ------------------------------------------------------------------
+# Event-sequence pipeline:
 @dataclass
 class EventCacheFileSpec:
     """

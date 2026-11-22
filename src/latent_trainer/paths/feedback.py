@@ -85,10 +85,10 @@ def compute_feedback(
     x_start = x_orig[0]
     x_end = x_orig[-1]
 
-    # ── Signal 1: Raw start → end delta
+    # Signal 1: Raw start → end delta
     raw_delta = x_end - x_start
 
-    # ── Signal 2: Minimum-viable delta (stop at P(win) ≥ 0.5 crossover)
+    # Signal 2: Minimum-viable delta (stop at P(win) ≥ 0.5 crossover)
     cross_idx = np.where(np.diff(np.sign(p_vals - 0.5)))[0]
     if len(cross_idx) > 0:
         threshold_wp = cross_idx[0] + 1
@@ -101,7 +101,7 @@ def compute_feedback(
         mv_p = p_vals[mid]
         mv_label = f"midpoint (P(win)={mv_p:.3f}, no crossing found)"
 
-    # ── Signal 3: P(win)-gain-weighted delta
+    # Signal 3: P(win)-gain-weighted delta
     p_gains = np.diff(p_vals).clip(min=0)
     x_steps = np.diff(x_orig, axis=0)
     if p_gains.sum() > 0:
@@ -109,7 +109,7 @@ def compute_feedback(
     else:
         weighted_delta = raw_delta.copy()
 
-    # ── Build ranked feedback tables
+    # Build ranked feedback tables:
     def _rank_table(delta: np.ndarray, label: str):
         ranked = np.argsort(np.abs(delta))[::-1]
         rows = []

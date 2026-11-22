@@ -195,7 +195,7 @@ class PathRunResult:
     # Failure mode (None on success; error message on exception)
     error: str | None = None
 
-    # ── New metrics ────────────────────────────────────────────────────────────
+    # New metrics:
     # Feature-space geometry (decoded to original scale before measuring)
     path_length_feature: float = math.nan   # sum-of-L2-steps in decoded feature space
     n_features_changed: int = 0             # sparsity: features with |Δ| > 1σ of training data

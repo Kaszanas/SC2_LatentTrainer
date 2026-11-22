@@ -291,7 +291,7 @@ def prepare_player_features(
         Feature vector (196 values with all blocks), or None if the player has
         no stats or player info.
     """
-    # 1. Temporal economy snapshots
+    # 1. Temporal economy snapshots:
     events = _get_player_stats_timeseries(
         sc2_replay=sc2_replay,
         player_id=player_id,
@@ -317,14 +317,14 @@ def prepare_player_features(
         end_frac=1.0,
     )
 
-    # --- 2. Final economy state ---
+    # 2. Final economy state:
     final_stats = _get_stats_values(stats_obj=events[-1].stats)
     final_stats = np.array(final_stats, dtype=np.float32)
 
-    # --- 3. Economy rate of change (late - early) ---
+    # 3. Economy rate of change (late - early):
     econ_delta = late_stats - early_stats
 
-    # --- 4. Player meta stats ---
+    # 4. Player meta stats:
     player_info = _get_player_info(sc2_replay=sc2_replay, player_id=player_id)
     if player_info is None:
         return None
@@ -341,7 +341,7 @@ def prepare_player_features(
         dtype=np.float32,
     )
 
-    # --- 5. Unit activity ---
+    # 5. Unit activity:
     # units_born = float(
     #     _count_units_born(
     #         sc2_replay=sc2_replay,
@@ -355,7 +355,7 @@ def prepare_player_features(
     #     )
     # )
 
-    # # --- 6. Upgrades ---
+    # # 6. Upgrades:
     # upgrade_count = float(
     #     _count_upgrades(
     #         sc2_replay=sc2_replay,
@@ -363,7 +363,7 @@ def prepare_player_features(
     #     )
     # )
 
-    # --- 7. Game duration (same for both, but included) ---
+    # 7. Game duration (same for both, but included):
     duration = np.array([game_duration], dtype=np.float32)
 
     # REVIEW: Why do we have duration in here?
@@ -442,8 +442,7 @@ def rich_transform(
     return features, label
 
 
-# ---------------------------------------------------------------------------
-# Fine-grained (5%-of-game) binned transform, for leakage-localization sweeps.
+# Fine-grained (5%-of-game) binned transform, for leakage-localization sweeps:
 #
 # Rather than 3 coarse thirds, this slices each replay's PlayerStats event
 # stream (by event-index fraction, same convention as _temporal_snapshot)
@@ -453,7 +452,6 @@ def rich_transform(
 # X[..., : 1 + k * GRANULAR_STATS_PER_BIN], letting a leakage-localization
 # sweep ("how much of the game do we need to see") reuse a single cache via
 # slicing instead of reprocessing the dataset once per sweep point.
-# ---------------------------------------------------------------------------
 N_GRANULAR_BINS = 20
 GRANULAR_STATS_PER_BIN = len(SORTED_PLAYERSTATS_KEYS)  # 39
 
