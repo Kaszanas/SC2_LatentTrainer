@@ -6,7 +6,7 @@ client can never point the server at a different checkpoint -- in
 particular, never at the old leaky 196-dim `best.ckpt`/`best_flow.ckpt`
 (full-game-state features), nor at k19/k20 of the granular sweep (bins
 covering the last 10-15% of the game show a clear "already decided"
-collapse signature -- see docs/robust_temporal_model_roadmap.md). The
+collapse signature, i.e. they leak the outcome). The
 default here is k18 (first 18 of 20 5%-of-game bins, 90% of the game,
 703 dims, ~88% val_acc) -- the container/compose file should set these to
 match:
@@ -197,8 +197,8 @@ def _add_bin_time_range(
     Add ``bin_start``/``bin_end`` (``m:ss``) to one ranked-table row.
 
     Only ``binNN_...`` granular features get a range, and only when the game
-    length is known. Bins are fractions of each replay's event-index range, so
-    the times are approximate (see ``docs/robust_temporal_model_roadmap.md``).
+    length is known. Bins are fractions of each replay's event-index range, not
+    fixed game-time windows, so the times are approximate.
     Meta features get None for both.
 
     Parameters

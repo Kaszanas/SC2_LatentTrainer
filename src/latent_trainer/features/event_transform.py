@@ -12,8 +12,8 @@ Per player it emits two streams:
 - **event stream** — every ``UnitBorn`` / ``UnitInit`` / ``UnitDied`` /
   ``Upgrade``, as ``(loop, type_id, unit_id)``.
 
-Both streams are indexed onto a canonical tick grid.  The data study
-(``docs/event_stream_study.md``) established that ``PlayerStats`` sits on an
+Both streams are indexed onto a canonical tick grid.  The Phase 0 data study
+(``scripts/analyze_event_streams.py``) established that ``PlayerStats`` sits on an
 exact ``loop = 160 * k`` grid (7.143 s/tick) once the stream is deduped and the
 trailing partial tick is dropped, so the tick index *is* wall-clock time.  That
 is what lets decoded feedback quote real game seconds instead of bin fractions.

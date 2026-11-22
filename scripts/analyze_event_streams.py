@@ -10,7 +10,8 @@ Questions answered
 1. **Is the ``PlayerStats`` cadence a fixed game-loop grid?**
    If tick *k* lands on the same loop in every replay, then "first K ticks"
    *is* a fixed wall-clock window, and the observation cutoff and the
-   duration-leak fix (``docs/robust_temporal_model_roadmap.md``) collapse into
+   duration-leak fix (fixed game-time windows instead of fractions of each
+   game's own length) collapse into
    one mechanism.  Reported as the spread of ``loop`` at each tick index and
    the distribution of consecutive tick deltas.
 
@@ -571,8 +572,7 @@ def _render_report(summary: dict) -> str:
         "**4. The observation cutoff is a survival/horizon trade-off, and it binds",
         "much harder than expected.** Requiring both players to reach K ticks",
         "discards every shorter replay, and that loss is not random: short games are",
-        "short because they were decided early (see",
-        "`docs/robust_temporal_model_roadmap.md`), so an aggressive K is selection",
+        "short because they were decided early, so an aggressive K is selection",
         "bias, not merely a smaller sample. Read the survival column above before",
         "choosing. A cutoff near the median tick count (~94) halves the dataset.",
         "",
@@ -601,7 +601,7 @@ def _render_report(summary: dict) -> str:
 @click.option(
     "--output",
     type=click.Path(dir_okay=False, path_type=Path),
-    default=Path("docs/event_stream_study.md"),
+    default=Path("output/event_stream_study.md"),
     show_default=True,
     help="Markdown report destination. A .json sibling is written alongside.",
 )
