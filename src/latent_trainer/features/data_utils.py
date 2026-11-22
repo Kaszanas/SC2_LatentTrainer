@@ -340,6 +340,63 @@ def _split_from_spec(spec: EventCacheFileSpec, prefix: str) -> EventSplit:
     )
 
 
+def _check_split_layout(split: EventSplit, name: str, ids: list[str]) -> None:
+    """
+    Verify that a split's CSR layout matches two streams per replay.
+
+    ``EventSequenceDataset`` reads replay ``i`` as streams ``2i`` and ``2i + 1``
+    and its label as ``labels[i]``. A replay with any other number of streams
+    would shift every later replay onto its neighbour's data and label without
+    raising, so the layout is checked once here.
+
+    Parameters
+    ----------
+    split : EventSplit
+        Split as loaded from the cache.
+    name : str
+        Split name, for error messages.
+    ids : list[str]
+        Replay ids of the split; empty in caches built before the split manifest.
+
+    Raises
+    ------
+    ValueError
+        If either offsets array does not have ``2N + 1`` entries, does not start
+        at 0, decreases, or does not end at the length of its value arrays, or if
+        ``ids`` is non-empty and not one per replay.
+    """
+    n_replays = int(split.labels.numel())
+    layouts = {
+        "stat": (
+            split.stat_offsets,
+            [split.stat_values, split.stat_loops, split.stat_tick],
+        ),
+        "evt": (
+            split.evt_offsets,
+            [split.evt_type, split.evt_unit, split.evt_loops, split.evt_tick],
+        ),
+    }
+    for stream, (offsets, arrays) in layouts.items():
+        where = f"{name} {stream}_offsets"
+        if offsets.numel() != 2 * n_replays + 1:
+            raise ValueError(
+                f"{where} has {offsets.numel()} entries, expected "
+                f"2 * {n_replays} replays + 1 = {2 * n_replays + 1}"
+            )
+        if int(offsets[0]) != 0:
+            raise ValueError(f"{where} starts at {int(offsets[0])}, expected 0")
+        if bool((offsets[1:] < offsets[:-1]).any()):
+            raise ValueError(f"{where} decreases")
+        for array in arrays:
+            if array.shape[0] != int(offsets[-1]):
+                raise ValueError(
+                    f"{where} ends at {int(offsets[-1])}, but a {stream} array "
+                    f"has {array.shape[0]} rows"
+                )
+    if ids and len(ids) != n_replays:
+        raise ValueError(f"{name} has {len(ids)} replay ids for {n_replays} labels")
+
+
 def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
     """
     Load an ``events`` cache and z-score the stat channels.
@@ -357,6 +414,11 @@ def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
     -------
     EventDataBundle
         Normalised splits, normalisation statistics and cache metadata.
+
+    Raises
+    ------
+    ValueError
+        If a split's stream layout is malformed (see ``_check_split_layout``).
     """
     logger.info(f"Loading event data from {cached_dataset_filepath}")
     cached = torch.load(f=str(cached_dataset_filepath), weights_only=False)
@@ -365,6 +427,8 @@ def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
     train = _split_from_spec(spec, "train")
     val = _split_from_spec(spec, "val")
     test = _split_from_spec(spec, "test")
+    for name, split in (("train", train), ("val", val), ("test", test)):
+        _check_split_layout(split, name, getattr(spec, f"{name}_ids"))
 
     mean = train.stat_values.mean(dim=0, keepdim=True)
     # Same std floor, and for the same reason, as `normalize` above: these are
