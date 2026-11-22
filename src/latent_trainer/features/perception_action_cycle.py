@@ -37,6 +37,8 @@ rather than assuming either constant.
 
 from __future__ import annotations
 
+import bisect
+import math
 from dataclasses import dataclass, field
 
 # SC2 replays are recorded at "Faster": 22.4 game loops per real second.
@@ -366,6 +368,210 @@ def summarize_perception_action_cycles(
     return PerceptionActionCycleStats(
         n_cycles=n_cycles, ppm=ppm, pal=pal, app=app, gap=gap
     )
+
+
+# Per-tick PAC channels:
+#
+# The summary above needs the whole game. The sequence model instead reads PAC
+# as channels on the PlayerStats tick grid, and must never see a value at tick k
+# that depends on anything after tick k's loop -- the model is trained on game
+# prefixes. Cycle statistics are only settled some time after they start (a
+# fixation may still turn out too brief and merge into the previous one), so
+# each fact is stamped with the loop at which it becomes certain and is counted
+# at the first tick at or after that loop.
+PAC_CHANNEL_NAMES: tuple[str, ...] = (
+    "pac_cycles",
+    "pac_actions",
+    "pac_latency_s",
+    "pac_gap_s",
+    "pac_has_latency",
+)
+
+
+@dataclass
+class TimedPACFacts:
+    """
+    One player's PAC facts, each stamped with the loop at which it is certain.
+
+    Parameters
+    ----------
+    cycle_loops : list[int]
+        For each cycle, the loop at which it is known to stand on its own.
+    action_loops : list[int]
+        Loop of each action that belongs to a cycle.
+    latencies : list[tuple[int, int]]
+        ``(known_loop, latency_loops)`` per cycle with at least one action.
+    gaps : list[tuple[int, int]]
+        ``(known_loop, gap_loops)`` from a cycle's last action to the next cycle.
+    """
+
+    cycle_loops: list[int] = field(default_factory=list)
+    action_loops: list[int] = field(default_factory=list)
+    latencies: list[tuple[int, int]] = field(default_factory=list)
+    gaps: list[tuple[int, int]] = field(default_factory=list)
+
+
+def extract_timed_pac_facts(
+    game_events: list,
+    user_id: int,
+    displacement_threshold: float = DEFAULT_DISPLACEMENT_THRESHOLD,
+    duration_threshold_seconds: float = DEFAULT_DURATION_THRESHOLD_SECONDS,
+    loops_per_second: float = GAME_LOOPS_PER_SECOND,
+) -> TimedPACFacts:
+    """
+    Segment one player's cycles and stamp each fact with when it is certain.
+
+    Fixations are segmented exactly as in :func:`extract_perception_action_cycles`
+    and merged by the same rule: a fixation shorter than the duration threshold
+    folds into the previous cycle, the first one always stands. When each fact
+    becomes certain:
+
+    - a fixation stands once the threshold has passed without a new fixation,
+      at ``start + ceil(threshold)`` (the first fixation at its start);
+    - an action at its own loop;
+    - a cycle's latency once the cycle stands, its first action has happened and,
+      if that action fell in a brief fixation, that fixation has ended;
+    - the gap after a cycle once the next cycle stands.
+
+    The final fixation follows the same rule as every other, so it stands once
+    the threshold passes. :func:`summarize_perception_action_cycles` instead
+    measures it to its last own event, which is only known at the end of the
+    game; the two agree on every other cycle.
+
+    Parameters
+    ----------
+    game_events : list
+        The replay's game events; other users' events are ignored.
+    user_id : int
+        The ``userid`` to extract for (not the ``playerID``).
+    displacement_threshold : float
+        Maximum combined x+y camera shift within one fixation, by default 6.
+    duration_threshold_seconds : float
+        Minimum dwell for a fixation to stand on its own, by default 0.2.
+    loops_per_second : float
+        Game loops per real second, by default 22.4.
+
+    Returns
+    -------
+    TimedPACFacts
+        The player's facts with their loops.
+    """
+    # Unmerged fixations: a zero threshold disables merging.
+    fixations = extract_perception_action_cycles(
+        game_events=game_events,
+        user_id=user_id,
+        displacement_threshold=displacement_threshold,
+        duration_threshold_seconds=0.0,
+        loops_per_second=loops_per_second,
+    )
+    threshold = duration_threshold_seconds * loops_per_second
+    settle = math.ceil(threshold) if threshold > 0 else 0
+
+    # Group each standing fixation with the brief ones that merge into it.
+    groups: list[tuple[int, list[PerceptionActionCycle]]] = []
+    for index, fixation in enumerate(fixations):
+        brief = (
+            index > 0
+            and threshold > 0
+            and fixation.end_loop is not None
+            and fixation.end_loop - fixation.start_loop < threshold
+        )
+        if brief:
+            groups[-1][1].append(fixation)
+            continue
+        known = fixation.start_loop if index == 0 else fixation.start_loop + settle
+        groups.append((known, [fixation]))
+
+    facts = TimedPACFacts()
+    for group_index, (known, members) in enumerate(groups):
+        anchor = members[0]
+        facts.cycle_loops.append(known)
+
+        actions = [loop for member in members for loop in member.action_loops]
+        facts.action_loops.extend(actions)
+
+        first_with_action = next((m for m in members if m.action_loops), None)
+        if first_with_action is not None:
+            first_action = first_with_action.action_loops[0]
+            latency_known = max(known, first_action)
+            if first_with_action is not anchor:
+                # A brief member's end is what proves it merged into this cycle.
+                latency_known = max(latency_known, first_with_action.end_loop)
+            facts.latencies.append((latency_known, first_action - anchor.start_loop))
+
+        if actions and group_index + 1 < len(groups):
+            next_known, next_members = groups[group_index + 1]
+            gap = next_members[0].start_loop - actions[-1]
+            facts.gaps.append((next_known, gap))
+
+    return facts
+
+
+def per_tick_pac_channels(
+    facts: TimedPACFacts,
+    stat_loops: list[int],
+    loops_per_second: float = GAME_LOOPS_PER_SECOND,
+) -> list[list[float]]:
+    """
+    Bin timed PAC facts onto a player's stat ticks.
+
+    Each fact goes to the first tick whose loop is at or after the fact's known
+    loop, so tick ``k`` only reflects what was certain by its own loop. Facts
+    after the last tick are past the observation horizon and dropped.
+
+    Parameters
+    ----------
+    facts : TimedPACFacts
+        Output of :func:`extract_timed_pac_facts`.
+    stat_loops : list[int]
+        Loop of each stat tick, ascending.
+    loops_per_second : float
+        Game loops per real second, by default 22.4.
+
+    Returns
+    -------
+    list[list[float]]
+        ``[T, 5]`` rows in :data:`PAC_CHANNEL_NAMES` order: cycles settled,
+        actions issued, mean latency (s), mean gap (s), and 1.0 if at least one
+        latency settled at that tick (so "no latency" is not read as 0 s).
+    """
+    n_ticks = len(stat_loops)
+    cycles = [0.0] * n_ticks
+    actions = [0.0] * n_ticks
+    latency_sum = [0.0] * n_ticks
+    latency_n = [0] * n_ticks
+    gap_sum = [0.0] * n_ticks
+    gap_n = [0] * n_ticks
+
+    def tick_of(loop: int) -> int | None:
+        tick = bisect.bisect_left(stat_loops, loop)
+        return tick if tick < n_ticks else None
+
+    for loop in facts.cycle_loops:
+        if (tick := tick_of(loop)) is not None:
+            cycles[tick] += 1.0
+    for loop in facts.action_loops:
+        if (tick := tick_of(loop)) is not None:
+            actions[tick] += 1.0
+    for loop, value in facts.latencies:
+        if (tick := tick_of(loop)) is not None:
+            latency_sum[tick] += value / loops_per_second
+            latency_n[tick] += 1
+    for loop, value in facts.gaps:
+        if (tick := tick_of(loop)) is not None:
+            gap_sum[tick] += value / loops_per_second
+            gap_n[tick] += 1
+
+    return [
+        [
+            cycles[t],
+            actions[t],
+            latency_sum[t] / latency_n[t] if latency_n[t] else 0.0,
+            gap_sum[t] / gap_n[t] if gap_n[t] else 0.0,
+            1.0 if latency_n[t] else 0.0,
+        ]
+        for t in range(n_ticks)
+    ]
 
 
 class PACAlgorithm:

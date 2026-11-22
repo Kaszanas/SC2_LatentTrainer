@@ -2,14 +2,17 @@
 Build the ``events`` cache: ragged per-player event streams for the sequence model.
 
 Split membership comes from ``splits.json`` via ``extract_with_manifest``, which
-also guarantees index-ordered rows.  The unit vocabulary is a sorted union built
-after extraction, so ids never depend on worker scheduling.
+also guarantees index-ordered rows.  The unit vocabulary is the sorted set of
+names seen in the *training* split, built after extraction, so ids never depend
+on worker scheduling and nothing about val/test leaks into it; names first seen
+outside train map to ``<UNK>``, exactly as unseen names will at serving time.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
@@ -18,8 +21,12 @@ import torch
 
 from latent_trainer.features.event_transform import (
     EVENT_TYPE_NAMES,
+    N_STAT_CHANNELS,
+    RACE_NAMES,
     RESERVED_UNIT_TOKENS,
+    STAT_CHANNEL_NAMES,
     TICK_INTERVAL_LOOPS,
+    UNK_UNIT_TOKEN,
     ReplayEventSample,
     event_transform,
 )
@@ -27,7 +34,6 @@ from latent_trainer.features.extraction import (
     extract_with_manifest,
     load_source_dataset,
 )
-from latent_trainer.features.rich_transform import SORTED_PLAYERSTATS_KEYS
 from latent_trainer.features.splits import SPLIT_NAMES
 from latent_trainer.features.type import EventCacheFileSpec
 from latent_trainer.settings import DATA_DIR
@@ -37,17 +43,19 @@ logger = logging.getLogger(__name__)
 TRANSFORM_NAME = "events"
 
 
-def build_unit_vocab(sample_groups: list[list[ReplayEventSample]]) -> list[str]:
+def build_unit_vocab(train_samples: list[ReplayEventSample]) -> list[str]:
     """
-    Union every replay's local vocabulary into one sorted global vocabulary.
+    Union the training replays' local vocabularies into one sorted vocabulary.
 
-    Sorting makes ids independent of worker scheduling and sample order; the
-    reserved tokens stay first so id 0 is always padding.
+    Only the training split is used, so the vocabulary carries no information
+    about val/test. Sorting makes ids independent of worker scheduling and
+    sample order; the reserved tokens stay first so id 0 is always padding and
+    id 1 is ``<UNK>``.
 
     Parameters
     ----------
-    sample_groups : list[list[ReplayEventSample]]
-        Extracted samples, grouped (e.g. by split).
+    train_samples : list[ReplayEventSample]
+        The training split's extracted samples.
 
     Returns
     -------
@@ -55,11 +63,42 @@ def build_unit_vocab(sample_groups: list[list[ReplayEventSample]]) -> list[str]:
         ``["<PAD>", "<UNK>", *sorted(names)]``.
     """
     names: set[str] = set()
-    for group in sample_groups:
-        for sample in group:
-            names.update(sample.local_vocab)
+    for sample in train_samples:
+        names.update(sample.local_vocab)
 
     return [*RESERVED_UNIT_TOKENS, *sorted(names)]
+
+
+def unseen_unit_counts(
+    samples: list[ReplayEventSample], unit_vocab: list[str]
+) -> Counter[str]:
+    """
+    Count the events whose unit/upgrade name is not in the vocabulary.
+
+    These are the events :func:`_flatten_split` maps to ``<UNK>``; the cache
+    keeps only the id, so this is where their names can still be reported.
+
+    Parameters
+    ----------
+    samples : list[ReplayEventSample]
+        A split's samples.
+    unit_vocab : list[str]
+        The global (training) vocabulary.
+
+    Returns
+    -------
+    Counter[str]
+        Events per unseen name.
+    """
+    known = set(unit_vocab)
+    counts: Counter[str] = Counter()
+    for sample in samples:
+        for player in sample.players:
+            for local_id in player.evt_unit_local.tolist():
+                name = sample.local_vocab[local_id]
+                if name not in known:
+                    counts[name] += 1
+    return counts
 
 
 def _flatten_split(
@@ -74,14 +113,17 @@ def _flatten_split(
     samples : list[ReplayEventSample]
         The split's samples, in manifest order.
     unit_vocab : list[str]
-        Global vocabulary used to remap each replay's local unit ids.
+        Global vocabulary used to remap each replay's local unit ids; names not
+        in it map to ``<UNK>``.
 
     Returns
     -------
     dict[str, torch.Tensor]
-        The ten per-split fields of :class:`EventCacheFileSpec`, unprefixed.
+        The eleven per-split fields of :class:`EventCacheFileSpec`, unprefixed.
     """
     global_id = {name: index for index, name in enumerate(unit_vocab)}
+    unk_id = global_id[UNK_UNIT_TOKEN]
+    race: list[int] = []
 
     stat_values: list[np.ndarray] = []
     stat_loops: list[np.ndarray] = []
@@ -99,10 +141,12 @@ def _flatten_split(
     for sample in samples:
         # Local -> global id remap, one small lookup table per replay.
         local_to_global = np.asarray(
-            [global_id[name] for name in sample.local_vocab], dtype=np.int64
+            [global_id.get(name, unk_id) for name in sample.local_vocab],
+            dtype=np.int64,
         )
 
         for player in sample.players:
+            race.append(player.race)
             stat_values.append(player.stat_values)
             stat_loops.append(player.stat_loops)
             stat_tick.append(player.stat_tick)
@@ -125,7 +169,7 @@ def _flatten_split(
             return torch.empty(0, dtype=dtype)
         return torch.from_numpy(np.concatenate(arrays)).to(dtype)
 
-    empty_stats = torch.empty((0, len(SORTED_PLAYERSTATS_KEYS)), dtype=torch.float32)
+    empty_stats = torch.empty((0, N_STAT_CHANNELS), dtype=torch.float32)
 
     return {
         "stat_values": (
@@ -142,6 +186,7 @@ def _flatten_split(
         "evt_tick": _cat(evt_tick, torch.int32),
         "evt_offsets": torch.tensor(evt_offsets, dtype=torch.int64),
         "labels": torch.tensor(labels, dtype=torch.int64),
+        "race": torch.tensor(race, dtype=torch.int8),
     }
 
 
@@ -198,12 +243,21 @@ def preprocess_event_dataset(
     )
     samples: dict[str, list[ReplayEventSample]] = result.outputs
 
-    unit_vocab = build_unit_vocab([samples[split] for split in SPLIT_NAMES])
-    logger.info(f"  Unit vocabulary: {len(unit_vocab)} entries (incl. 2 reserved)")
+    unit_vocab = build_unit_vocab(samples["train"])
+    logger.info(
+        f"  Unit vocabulary (train only): {len(unit_vocab)} entries (incl. 2 reserved)"
+    )
 
     flattened = {
         split: _flatten_split(samples[split], unit_vocab) for split in SPLIT_NAMES
     }
+    unk_id = unit_vocab.index(UNK_UNIT_TOKEN)
+    for split in ("val", "test"):
+        evt_unit = flattened[split]["evt_unit"]
+        n_unk = int((evt_unit == unk_id).sum())
+        logger.info(f"  {split} events mapped to <UNK>: {n_unk:,} of {len(evt_unit):,}")
+        for name, count in unseen_unit_counts(samples[split], unit_vocab).most_common():
+            logger.info(f"    {name}: {count:,}")
     spec_fields = {
         f"{split}_{name}": tensor
         for split, streams in flattened.items()
@@ -213,7 +267,8 @@ def preprocess_event_dataset(
     manifest = result.manifest
     file_spec = EventCacheFileSpec(
         **spec_fields,
-        stat_channel_names=list(SORTED_PLAYERSTATS_KEYS),
+        stat_channel_names=list(STAT_CHANNEL_NAMES),
+        race_names=list(RACE_NAMES),
         unit_vocab=unit_vocab,
         event_type_names=list(EVENT_TYPE_NAMES),
         tick_interval_loops=TICK_INTERVAL_LOOPS,

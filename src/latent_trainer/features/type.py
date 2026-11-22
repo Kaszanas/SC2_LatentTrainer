@@ -7,6 +7,8 @@ from typing import Protocol
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from latent_trainer.features.perception_action_cycle import GAME_LOOPS_PER_SECOND
+
 
 @dataclass
 class NormalizedDataloaders:
@@ -225,8 +227,12 @@ class EventCacheFileSpec:
         CSR offsets into the event arrays, ``[2N + 1]`` int64.
     train_labels, val_labels, test_labels : torch.Tensor
         Labels per replay, ``[N]`` int64; 1 = player 1 won.
+    train_race, val_race, test_race : torch.Tensor
+        Race actually played per stream, ``[2N]`` int8, ids into ``race_names``.
     stat_channel_names : list[str]
-        Names of the ``C`` stat channels.
+        Names of the ``C`` stat channels (PlayerStats counters, then PAC).
+    race_names : list[str]
+        Race vocabulary (``Terr``, ``Prot``, ``Zerg``).
     unit_vocab : list[str]
         Unit/upgrade vocabulary; ids 0 and 1 are ``<PAD>`` and ``<UNK>``.
     event_type_names : list[str]
@@ -241,7 +247,7 @@ class EventCacheFileSpec:
         Hash of the ``splits.json`` the cache was built from; empty in old caches.
     """
 
-    train_stat_values: torch.Tensor  # [sum_t, 39] float32
+    train_stat_values: torch.Tensor  # [sum_t, C] float32
     train_stat_loops: torch.Tensor  # [sum_t]     int32
     train_stat_tick: torch.Tensor  # [sum_t]     int32
     train_stat_offsets: torch.Tensor  # [2N + 1]    int64
@@ -251,6 +257,7 @@ class EventCacheFileSpec:
     train_evt_tick: torch.Tensor  # [sum_e]     int32
     train_evt_offsets: torch.Tensor  # [2N + 1]    int64
     train_labels: torch.Tensor  # [N]         int64
+    train_race: torch.Tensor  # [2N]        int8
 
     val_stat_values: torch.Tensor
     val_stat_loops: torch.Tensor
@@ -262,6 +269,7 @@ class EventCacheFileSpec:
     val_evt_tick: torch.Tensor
     val_evt_offsets: torch.Tensor
     val_labels: torch.Tensor
+    val_race: torch.Tensor
 
     test_stat_values: torch.Tensor
     test_stat_loops: torch.Tensor
@@ -273,8 +281,10 @@ class EventCacheFileSpec:
     test_evt_tick: torch.Tensor
     test_evt_offsets: torch.Tensor
     test_labels: torch.Tensor
+    test_race: torch.Tensor
 
     stat_channel_names: list[str]
+    race_names: list[str]
     unit_vocab: list[str]
     event_type_names: list[str]
     tick_interval_loops: int
@@ -316,6 +326,8 @@ class EventSplit:
         CSR offsets into the event arrays, ``[2N + 1]``.
     labels : torch.Tensor
         Labels per replay, ``[N]``; 1 = player 1 won.
+    race : torch.Tensor
+        Race actually played per stream, ``[2N]``.
     """
 
     stat_values: torch.Tensor
@@ -328,6 +340,7 @@ class EventSplit:
     evt_tick: torch.Tensor
     evt_offsets: torch.Tensor
     labels: torch.Tensor
+    race: torch.Tensor
 
 
 @dataclass
@@ -352,6 +365,8 @@ class EventDataBundle:
         Per-channel training std floored at 1.0, ``[1, C]``.
     stat_channel_names : list[str]
         Names of the stat channels.
+    race_names : list[str]
+        Race vocabulary.
     unit_vocab : list[str]
         Unit/upgrade vocabulary.
     event_type_names : list[str]
@@ -368,10 +383,11 @@ class EventDataBundle:
     val: "EventSplit"
     test: "EventSplit"
 
-    mean: torch.Tensor  # [1, 39]
-    std: torch.Tensor  # [1, 39]
+    mean: torch.Tensor  # [1, C]
+    std: torch.Tensor  # [1, C]
 
     stat_channel_names: list[str]
+    race_names: list[str]
     unit_vocab: list[str]
     event_type_names: list[str]
     tick_interval_loops: int
@@ -384,8 +400,17 @@ class EventSequenceDataset(Dataset):
     """
     Serve one replay (both players' ragged streams) per index.
 
-    Two load-time policies are applied here rather than baked into the cache,
-    so both stay sweepable without re-extracting the dataset.
+    Three load-time policies are applied here rather than baked into the cache,
+    so they stay sweepable without re-extracting the dataset. Each one is
+    applied to the *pair*, so both players always cover the same game time:
+
+    1. Slices of ``slice_ticks`` ticks.
+    2. Tail drop: the last ``drop_tail_frac`` of the pair's slices (counted on
+       the shorter of the two streams) is removed. This sets the pair's
+       *horizon*, the loop of the last tick both players keep.
+    3. Prefix crop at a cutoff loop ``<= horizon``: a stat tick is kept if its
+       loop is ``<= cutoff``, an event if its loop is ``<= cutoff`` and its tick
+       is kept. Nothing after the cutoff reaches the model.
 
     Parameters
     ----------
@@ -399,11 +424,23 @@ class EventSequenceDataset(Dataset):
         Fraction of each game's slices to drop from the end. Endgame slices encode
         the outcome through collapsed counters rather than actionable behaviour;
         0.0 keeps everything, by default 0.1.
+    crop : None | str | float
+        ``None`` keeps everything up to the horizon. ``"random"`` draws a cutoff
+        uniformly in ``[min_crop_s, horizon]`` seconds on every access (games
+        shorter than ``min_crop_s`` are served uncropped); the draw uses torch's
+        global RNG, which the DataLoader seeds per worker, so a seeded run is
+        reproducible. A number is a fixed cutoff in game seconds for
+        evaluation; replays whose horizon ends before it are excluded (see
+        ``n_excluded``), by default None.
+    min_crop_s : float
+        Shortest random cutoff in game seconds, by default 180.0.
 
     Raises
     ------
     ValueError
-        If ``slice_ticks < 1`` or ``drop_tail_frac`` is outside ``[0, 1)``.
+        If ``slice_ticks < 1``, ``drop_tail_frac`` is outside ``[0, 1)``,
+        ``crop`` is neither None, ``"random"`` nor a positive number, or
+        ``min_crop_s < 0``.
     """
 
     def __init__(
@@ -411,6 +448,8 @@ class EventSequenceDataset(Dataset):
         split: EventSplit,
         slice_ticks: int = 1,
         drop_tail_frac: float = 0.1,
+        crop: None | str | float = None,
+        min_crop_s: float = 180.0,
     ) -> None:
         if slice_ticks < 1:
             raise ValueError(f"slice_ticks must be >= 1, got {slice_ticks}")
@@ -418,20 +457,38 @@ class EventSequenceDataset(Dataset):
             raise ValueError(
                 f"drop_tail_frac must be in [0.0, 1.0), got {drop_tail_frac}"
             )
+        fixed_crop = isinstance(crop, (int, float)) and not isinstance(crop, bool)
+        if not (crop is None or crop == "random" or (fixed_crop and crop > 0)):
+            raise ValueError(
+                f"crop must be None, 'random' or a positive number, got {crop!r}"
+            )
+        if min_crop_s < 0:
+            raise ValueError(f"min_crop_s must be >= 0, got {min_crop_s}")
 
         self.split = split
         self.slice_ticks = slice_ticks
         self.drop_tail_frac = drop_tail_frac
+        self.crop = crop
+        self.min_crop_s = min_crop_s
 
-    def __len__(self) -> int:
-        return len(self.split.labels)
+        n_replays = len(split.labels)
+        self.keep_slices = torch.empty(n_replays, dtype=torch.long)
+        self.horizon_loops = torch.empty(n_replays, dtype=torch.long)
+        for replay in range(n_replays):
+            keep, horizon = self._pair_tail(replay)
+            self.keep_slices[replay] = keep
+            self.horizon_loops[replay] = horizon
 
-    def _stream(self, stream_index: int) -> dict[str, torch.Tensor]:
+        replays = torch.arange(n_replays)
+        if fixed_crop:
+            cutoff = round(float(crop) * GAME_LOOPS_PER_SECOND)
+            replays = replays[self.horizon_loops >= cutoff]
+        self.replay_indices = replays
+        self.n_excluded = n_replays - len(replays)
+
+    def _stat_rows(self, stream_index: int) -> tuple[int, int]:
         """
-        Slice one player stream out of the split and apply the tail drop.
-
-        The stat stream alone defines the horizon: it always reaches the final
-        slice, so a player who is event-silent late does not shorten it.
+        Return the ``[start, end)`` rows of one stream in the stat arrays.
 
         Parameters
         ----------
@@ -440,42 +497,137 @@ class EventSequenceDataset(Dataset):
 
         Returns
         -------
+        tuple[int, int]
+            Start and end row.
+        """
+        offsets = self.split.stat_offsets
+        return int(offsets[stream_index]), int(offsets[stream_index + 1])
+
+    def _pair_tail(self, replay: int) -> tuple[int, int]:
+        """
+        Compute a replay's shared tail cut and the horizon it leaves.
+
+        Parameters
+        ----------
+        replay : int
+            Replay index within the split.
+
+        Returns
+        -------
+        tuple[int, int]
+            Slices kept (slices ``< keep``) and the horizon loop: the last kept
+            tick's loop, the earlier of the two players' (0 if nothing is kept).
+        """
+        split = self.split
+        n_slices = []
+        for stream_index in (2 * replay, 2 * replay + 1):
+            start, end = self._stat_rows(stream_index)
+            # The stat stream reaches the final slice, so it defines the count;
+            # a player can be event-silent late without the game being over.
+            if end > start:
+                n_slices.append(int(split.stat_tick[end - 1]) // self.slice_ticks + 1)
+            else:
+                n_slices.append(0)
+        keep = math.ceil(min(n_slices) * (1.0 - self.drop_tail_frac))
+
+        horizons = []
+        for stream_index in (2 * replay, 2 * replay + 1):
+            start, end = self._stat_rows(stream_index)
+            kept = split.stat_tick[start:end] // self.slice_ticks < keep
+            loops = split.stat_loops[start:end][kept]
+            horizons.append(int(loops.max()) if loops.numel() else 0)
+        return keep, min(horizons)
+
+    def _cutoff(self, replay: int) -> int:
+        """
+        Return the cutoff loop for one access to a replay.
+
+        Parameters
+        ----------
+        replay : int
+            Replay index within the split.
+
+        Returns
+        -------
+        int
+            The horizon for ``crop=None``, a fresh uniform draw for
+            ``"random"``, or the fixed cutoff.
+        """
+        horizon = int(self.horizon_loops[replay])
+        if self.crop is None:
+            return horizon
+        if self.crop == "random":
+            low = self.min_crop_s * GAME_LOOPS_PER_SECOND
+            if horizon <= low:
+                return horizon
+            return int(low + float(torch.rand(())) * (horizon - low))
+        return round(float(self.crop) * GAME_LOOPS_PER_SECOND)
+
+    def __len__(self) -> int:
+        return len(self.replay_indices)
+
+    def _stream(
+        self, stream_index: int, keep_slices: int, cutoff_loop: int
+    ) -> dict[str, torch.Tensor]:
+        """
+        Slice one player stream out of the split, cut to the pair's tail and crop.
+
+        Parameters
+        ----------
+        stream_index : int
+            Stream number ``replay_index * 2 + player_index``.
+        keep_slices : int
+            Slices ``< keep_slices`` survive the pair's tail drop.
+        cutoff_loop : int
+            Last game loop that may reach the model.
+
+        Returns
+        -------
         dict[str, torch.Tensor]
             ``stat_values``, ``stat_loops``, ``stat_slice``, ``evt_type``,
-            ``evt_unit``, ``evt_loops`` and ``evt_slice`` for the kept slices.
+            ``evt_unit``, ``evt_loops`` and ``evt_slice`` for the kept part.
         """
         split = self.split
 
-        stat_start = int(split.stat_offsets[stream_index])
-        stat_end = int(split.stat_offsets[stream_index + 1])
+        stat_start, stat_end = self._stat_rows(stream_index)
         evt_start = int(split.evt_offsets[stream_index])
         evt_end = int(split.evt_offsets[stream_index + 1])
 
-        stat_slice = split.stat_tick[stat_start:stat_end] // self.slice_ticks
-        evt_slice = split.evt_tick[evt_start:evt_end] // self.slice_ticks
+        stat_tick = split.stat_tick[stat_start:stat_end]
+        stat_loops = split.stat_loops[stat_start:stat_end]
+        evt_tick = split.evt_tick[evt_start:evt_end]
+        evt_loops = split.evt_loops[evt_start:evt_end]
 
-        # Slices are numbered from 0, so the count is the last index + 1. The
-        # stat stream always reaches the final slice, so it alone defines the
-        # horizon -- a player can be event-silent late without shortening it.
-        n_slices = int(stat_slice[-1]) + 1 if stat_slice.numel() else 0
-        keep = math.ceil(n_slices * (1.0 - self.drop_tail_frac))
+        stat_slice = stat_tick // self.slice_ticks
+        evt_slice = evt_tick // self.slice_ticks
 
-        stat_keep = stat_slice < keep
-        evt_keep = evt_slice < keep
+        stat_keep = (stat_slice < keep_slices) & (stat_loops <= cutoff_loop)
+        # An event belongs to the tick at or after it, so it is kept only with
+        # its tick; the loop test is the literal "nothing after the cutoff".
+        last_tick = int(stat_tick[stat_keep].max()) if bool(stat_keep.any()) else -1
+        evt_keep = (
+            (evt_slice < keep_slices)
+            & (evt_tick <= last_tick)
+            & (evt_loops <= cutoff_loop)
+        )
 
         return {
             "stat_values": split.stat_values[stat_start:stat_end][stat_keep],
-            "stat_loops": split.stat_loops[stat_start:stat_end][stat_keep],
+            "stat_loops": stat_loops[stat_keep],
             "stat_slice": stat_slice[stat_keep],
             "evt_type": split.evt_type[evt_start:evt_end][evt_keep],
             "evt_unit": split.evt_unit[evt_start:evt_end][evt_keep],
-            "evt_loops": split.evt_loops[evt_start:evt_end][evt_keep],
+            "evt_loops": evt_loops[evt_keep],
             "evt_slice": evt_slice[evt_keep],
         }
 
     def __getitem__(self, idx: int) -> dict:
         """
-        Return both players' streams and the label of one replay.
+        Return both players' streams, races and label of one replay.
+
+        ``idx`` indexes this dataset; it maps to replay ``r =
+        replay_indices[idx]`` of the split, which is ``idx`` itself unless a
+        fixed crop excluded short replays.
 
         Why the layout: every player stream has its own length (72-266 stat
         ticks, up to ~13.5k events), so a dense ``[N, 2, T, ...]`` tensor would be
@@ -487,17 +639,18 @@ class EventSequenceDataset(Dataset):
         The unit is the *player* stream, not the replay, because each player's
         stream has its own boundaries.
 
-        Why ``2 * idx`` and ``2 * idx + 1``: ``_flatten_split`` in
+        Why ``2 * r`` and ``2 * r + 1``: ``_flatten_split`` in
         ``preprocess_events.py`` loops over replays in order and, inside, over
         that replay's players, appending one offset per stream and one label per
         replay. ``event_transform`` emits a replay only when both players
         (``PLAYER_IDS = (1, 2)``, in that order) have streams, otherwise the
         replay is skipped and never cached. So every replay contributes exactly
-        two streams, replays ``0 .. idx-1`` occupy streams ``0 .. 2*idx-1``, and
-        replay ``idx`` owns stream ``2 * idx`` (player 1) and ``2 * idx + 1``
+        two streams, replays ``0 .. r-1`` occupy streams ``0 .. 2*r-1``, and
+        replay ``r`` owns stream ``2 * r`` (player 1) and ``2 * r + 1``
         (player 2). ``offsets`` starts at 0 and gains one entry per stream, so it
-        has ``2N + 1`` entries and ``offsets[2 * idx + 2]`` always exists.
-        Labels get one entry per replay, so they are indexed by ``idx`` directly.
+        has ``2N + 1`` entries and ``offsets[2 * r + 2]`` always exists. Labels
+        get one entry per replay, so they are indexed by ``r`` directly; races
+        one per stream, like the offsets. ``load_event_cache`` checks all of this.
 
         Example with two replays of 3 and 5 ticks per player::
 
@@ -506,22 +659,32 @@ class EventSequenceDataset(Dataset):
             offsets       [0,    3,     6,      11,     16]
             rows          0:3    3:6    6:11    11:16
 
-        ``dataset[1]`` reads streams 2 and 3, rows ``6:11`` and ``11:16``.
+        Replay 1 reads streams 2 and 3, rows ``6:11`` and ``11:16``.
 
         The player order must not change: the label means "player 1 won".
 
         Parameters
         ----------
         idx : int
-            Replay index within the split.
+            Index into this dataset.
 
         Returns
         -------
         dict
             ``players``: ``[player 1, player 2]`` stream dicts from
-            :meth:`_stream`; ``label``: 1 if player 1 won, else 0.
+            :meth:`_stream`; ``label``: 1 if player 1 won, else 0; ``race``:
+            ``[2]`` race ids in player order; ``crop_loop``: the cutoff loop
+            applied to both players.
         """
+        replay = int(self.replay_indices[idx])
+        keep = int(self.keep_slices[replay])
+        cutoff = self._cutoff(replay)
         return {
-            "players": [self._stream(idx * 2), self._stream(idx * 2 + 1)],
-            "label": self.split.labels[idx],
+            "players": [
+                self._stream(2 * replay, keep, cutoff),
+                self._stream(2 * replay + 1, keep, cutoff),
+            ],
+            "label": self.split.labels[replay],
+            "race": self.split.race[2 * replay : 2 * replay + 2].long(),
+            "crop_loop": torch.tensor(cutoff, dtype=torch.long),
         }

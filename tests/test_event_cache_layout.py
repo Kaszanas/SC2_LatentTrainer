@@ -7,18 +7,22 @@ import torch
 from latent_trainer.features.data_utils import load_event_cache
 from latent_trainer.features.event_transform import (
     EVENT_TYPE_NAMES,
+    N_STAT_CHANNELS,
+    RACE_NAMES,
+    STAT_CHANNEL_NAMES,
     PlayerEventStreams,
     ReplayEventSample,
 )
 from latent_trainer.features.preprocess_events import _flatten_split
-from latent_trainer.features.rich_transform import SORTED_PLAYERSTATS_KEYS
 from latent_trainer.features.type import EventSequenceDataset
 
-N_CHANNELS = len(SORTED_PLAYERSTATS_KEYS)
+N_CHANNELS = N_STAT_CHANNELS
 UNIT_VOCAB = ["<PAD>", "<UNK>", "Marine"]
 
 
-def _player(n_ticks: int, n_events: int, value: float) -> PlayerEventStreams:
+def _player(
+    n_ticks: int, n_events: int, value: float, race: int = 0
+) -> PlayerEventStreams:
     """Return a stream whose stat rows are all ``value``."""
     ticks = np.arange(n_ticks, dtype=np.int32)
     return PlayerEventStreams(
@@ -29,19 +33,20 @@ def _player(n_ticks: int, n_events: int, value: float) -> PlayerEventStreams:
         evt_unit_local=np.zeros(n_events, dtype=np.int32),
         evt_loops=np.zeros(n_events, dtype=np.int32),
         evt_tick=np.zeros(n_events, dtype=np.int32),
+        race=race,
     )
 
 
 def _samples() -> list[ReplayEventSample]:
-    """Two replays with distinct per-player lengths and values."""
+    """Two replays with distinct per-player lengths, values and races."""
     return [
         ReplayEventSample(
-            players=(_player(3, 2, 10.0), _player(4, 1, 20.0)),
+            players=(_player(3, 2, 10.0, race=0), _player(4, 1, 20.0, race=1)),
             local_vocab=["Marine"],
             label=1,
         ),
         ReplayEventSample(
-            players=(_player(5, 0, 30.0), _player(2, 3, 40.0)),
+            players=(_player(5, 0, 30.0, race=2), _player(2, 3, 40.0, race=1)),
             local_vocab=["Marine"],
             label=0,
         ),
@@ -56,7 +61,8 @@ def _cache() -> dict:
             cache[f"{split}_{key}"] = value
         cache[f"{split}_ids"] = ["t/a.json", "t/b.json"]
     cache.update(
-        stat_channel_names=list(SORTED_PLAYERSTATS_KEYS),
+        stat_channel_names=list(STAT_CHANNEL_NAMES),
+        race_names=list(RACE_NAMES),
         unit_vocab=UNIT_VOCAB,
         event_type_names=list(EVENT_TYPE_NAMES),
         tick_interval_loops=160,
@@ -80,7 +86,9 @@ def test_valid_cache_loads_and_pairs_streams_with_their_replay(tmp_path):
     second = dataset[1]
     p1, p2 = second["players"]
     assert int(second["label"]) == 0
-    assert p1["stat_values"].shape[0] == 5 and p2["stat_values"].shape[0] == 2
+    assert second["race"].tolist() == [2, 1]
+    # 5 and 2 ticks: the pair is cut to the shorter player's horizon.
+    assert p1["stat_values"].shape[0] == 2 and p2["stat_values"].shape[0] == 2
     assert torch.allclose(p1["stat_values"][:, 0] * std + mean, torch.tensor(30.0))
     assert torch.allclose(p2["stat_values"][:, 0] * std + mean, torch.tensor(40.0))
     assert p1["evt_type"].numel() == 0 and p2["evt_type"].numel() == 3
@@ -129,6 +137,23 @@ def test_replay_id_count_mismatch_is_rejected(tmp_path):
     cache = _cache()
     cache["val_ids"] = ["t/a.json"]
     with pytest.raises(ValueError, match="val has 1 replay ids for 2 labels"):
+        _load(tmp_path, cache)
+
+
+def test_race_count_mismatch_is_rejected(tmp_path):
+    """Race ids must be one per stream."""
+    cache = _cache()
+    cache["train_race"] = cache["train_race"][:-1]
+    with pytest.raises(ValueError, match="train has 3 race ids for 4 streams"):
+        _load(tmp_path, cache)
+
+
+def test_cache_without_race_is_rejected_with_rebuild_hint(tmp_path):
+    """Caches from before the race and PAC channels fail with a clear message."""
+    cache = _cache()
+    for split in ("train", "val", "test"):
+        del cache[f"{split}_race"]
+    with pytest.raises(ValueError, match="rebuild it with --transform events"):
         _load(tmp_path, cache)
 
 

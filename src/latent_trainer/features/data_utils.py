@@ -227,7 +227,70 @@ def _pad_stack(
     return padded.reshape(-1, n_players, max_len, *trailing)
 
 
-def collate_event_sequences(batch: list[dict]) -> dict[str, torch.Tensor]:
+def _group_events(
+    evt_slice: torch.Tensor,
+    stat_slice: torch.Tensor,
+    stat_loops: torch.Tensor,
+    max_events_per_slice: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Index one stream's events by slice, capped at ``K`` per slice.
+
+    Events arrive sorted by loop, so each slice's events are one contiguous run.
+    A slice with more than ``K`` events keeps ``K`` of them evenly spaced over
+    the run (deterministic, and spread over the whole interval rather than its
+    start); the true count is returned so the cap stays visible.
+
+    Parameters
+    ----------
+    evt_slice : torch.Tensor
+        Slice of each event, ``[E]``, non-decreasing.
+    stat_slice : torch.Tensor
+        Slice of each stat tick, ``[T]``, non-decreasing.
+    stat_loops : torch.Tensor
+        Loop of each stat tick, ``[T]``.
+    max_events_per_slice : int
+        The cap ``K``.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        ``group`` ``[S, K]`` event positions (0 where masked), ``mask``
+        ``[S, K]``, ``count`` ``[S]`` true events per slice, and ``slice_loops``
+        ``[S]`` the loop of each slice's last stat tick, with
+        ``S = last stat slice + 1``.
+
+    Raises
+    ------
+    ValueError
+        If an event lies in a slice after the last stat slice.
+    """
+    k = max_events_per_slice
+    n_slices = int(stat_slice[-1]) + 1 if stat_slice.numel() else 0
+    evt_slice = evt_slice.long()
+    if evt_slice.numel() and int(evt_slice[-1]) >= n_slices:
+        raise ValueError(
+            f"event in slice {int(evt_slice[-1])} after the last stat slice "
+            f"{n_slices - 1}"
+        )
+
+    count = torch.bincount(evt_slice, minlength=n_slices)
+    start = torch.cumsum(count, dim=0) - count
+    take = count.clamp(max=k)
+    position = torch.arange(k).unsqueeze(0)
+    offset = position * count.unsqueeze(1) // take.clamp(min=1).unsqueeze(1)
+    mask = position < take.unsqueeze(1)
+    group = torch.where(mask, start.unsqueeze(1) + offset, 0)
+
+    slice_loops = torch.zeros(n_slices, dtype=torch.long).scatter_reduce(
+        0, stat_slice.long(), stat_loops.long(), reduce="amax", include_self=False
+    )
+    return group, mask, count, slice_loops
+
+
+def collate_event_sequences(
+    batch: list[dict], max_events_per_slice: int = 64
+) -> dict[str, torch.Tensor]:
     """
     Pad a batch of ragged event samples to that batch's maximum lengths.
 
@@ -235,11 +298,14 @@ def collate_event_sequences(batch: list[dict]) -> dict[str, torch.Tensor]:
     streams vary by over an order of magnitude between games. Both players are
     padded together; masks mark real positions with True. Padded ids are 0
     (``<PAD>``), but padded loops/slices also read 0, so always use the masks.
+    Use ``functools.partial`` to pass ``max_events_per_slice`` to a DataLoader.
 
     Parameters
     ----------
     batch : list[dict]
         Samples from :class:`EventSequenceDataset`.
+    max_events_per_slice : int
+        Cap ``K`` on events per slice in ``evt_group``, by default 64.
 
     Returns
     -------
@@ -247,8 +313,21 @@ def collate_event_sequences(batch: list[dict]) -> dict[str, torch.Tensor]:
         ``stat_values`` ``[B, 2, Ls, C]``; ``stat_loops``/``stat_slice``
         ``[B, 2, Ls]``; ``evt_type``/``evt_unit``/``evt_loops``/``evt_slice``
         ``[B, 2, Le]``; ``stat_mask``/``evt_mask`` (bool); ``n_slices``
-        ``[B, 2]``; ``label`` ``[B]``.
+        ``[B, 2]``; ``slice_loops`` ``[B, 2, S]`` (loop of each slice's last
+        tick) with ``slice_mask``; ``evt_group`` ``[B, 2, S, K]`` positions into
+        the event dimension with ``evt_group_mask``; ``evt_count`` ``[B, 2, S]``
+        true events per slice before the cap; ``race`` ``[B, 2]``;
+        ``crop_loop`` ``[B]``; ``label`` ``[B]``.
+
+    Raises
+    ------
+    ValueError
+        If ``max_events_per_slice < 1``.
     """
+    if max_events_per_slice < 1:
+        raise ValueError(
+            f"max_events_per_slice must be >= 1, got {max_events_per_slice}"
+        )
     n_players = len(batch[0]["players"])
     streams = [player for sample in batch for player in sample["players"]]
 
@@ -282,7 +361,25 @@ def collate_event_sequences(batch: list[dict]) -> dict[str, torch.Tensor]:
             [stream["evt_slice"].long() for stream in streams], n_players
         ),
         "label": torch.stack([sample["label"] for sample in batch]),
+        "race": torch.stack([sample["race"] for sample in batch]),
+        "crop_loop": torch.stack([sample["crop_loop"] for sample in batch]),
     }
+
+    grouped = [
+        _group_events(
+            stream["evt_slice"],
+            stream["stat_slice"],
+            stream["stat_loops"],
+            max_events_per_slice,
+        )
+        for stream in streams
+    ]
+    collated["evt_group"] = _pad_stack([g[0] for g in grouped], n_players)
+    collated["evt_group_mask"] = _pad_stack(
+        [g[1] for g in grouped], n_players, pad_value=False
+    )
+    collated["evt_count"] = _pad_stack([g[2] for g in grouped], n_players)
+    collated["slice_loops"] = _pad_stack([g[3] for g in grouped], n_players)
 
     stat_max = collated["stat_values"].shape[2]
     evt_max = collated["evt_type"].shape[2]
@@ -306,13 +403,17 @@ def collate_event_sequences(batch: list[dict]) -> dict[str, torch.Tensor]:
         dtype=torch.long,
     )
     collated["n_slices"] = n_slices.reshape(-1, n_players)
+    slice_max = collated["slice_loops"].shape[2]
+    collated["slice_mask"] = (
+        torch.arange(slice_max).unsqueeze(0) < n_slices.unsqueeze(1)
+    ).reshape(-1, n_players, slice_max)
 
     return collated
 
 
 def _split_from_spec(spec: EventCacheFileSpec, prefix: str) -> EventSplit:
     """
-    Pull one split's ten ragged tensors off the cache spec.
+    Pull one split's eleven tensors off the cache spec.
 
     Parameters
     ----------
@@ -337,6 +438,7 @@ def _split_from_spec(spec: EventCacheFileSpec, prefix: str) -> EventSplit:
         evt_tick=getattr(spec, f"{prefix}_evt_tick"),
         evt_offsets=getattr(spec, f"{prefix}_evt_offsets"),
         labels=getattr(spec, f"{prefix}_labels"),
+        race=getattr(spec, f"{prefix}_race"),
     )
 
 
@@ -362,8 +464,9 @@ def _check_split_layout(split: EventSplit, name: str, ids: list[str]) -> None:
     ------
     ValueError
         If either offsets array does not have ``2N + 1`` entries, does not start
-        at 0, decreases, or does not end at the length of its value arrays, or if
-        ``ids`` is non-empty and not one per replay.
+        at 0, decreases, or does not end at the length of its value arrays, if
+        ``race`` is not one per stream, or if ``ids`` is non-empty and not one
+        per replay.
     """
     n_replays = int(split.labels.numel())
     layouts = {
@@ -393,6 +496,10 @@ def _check_split_layout(split: EventSplit, name: str, ids: list[str]) -> None:
                     f"{where} ends at {int(offsets[-1])}, but a {stream} array "
                     f"has {array.shape[0]} rows"
                 )
+    if split.race.numel() != 2 * n_replays:
+        raise ValueError(
+            f"{name} has {split.race.numel()} race ids for {2 * n_replays} streams"
+        )
     if ids and len(ids) != n_replays:
         raise ValueError(f"{name} has {len(ids)} replay ids for {n_replays} labels")
 
@@ -418,10 +525,16 @@ def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
     Raises
     ------
     ValueError
-        If a split's stream layout is malformed (see ``_check_split_layout``).
+        If the cache predates race and PAC channels, or a split's stream layout
+        is malformed (see ``_check_split_layout``).
     """
     logger.info(f"Loading event data from {cached_dataset_filepath}")
     cached = torch.load(f=str(cached_dataset_filepath), weights_only=False)
+    if "train_race" not in cached:
+        raise ValueError(
+            f"{cached_dataset_filepath} predates the race and PAC channels; "
+            "rebuild it with --transform events"
+        )
     spec = EventCacheFileSpec(**cached)
 
     train = _split_from_spec(spec, "train")
@@ -455,6 +568,7 @@ def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
         mean=mean,
         std=std,
         stat_channel_names=spec.stat_channel_names,
+        race_names=spec.race_names,
         unit_vocab=spec.unit_vocab,
         event_type_names=spec.event_type_names,
         tick_interval_loops=spec.tick_interval_loops,

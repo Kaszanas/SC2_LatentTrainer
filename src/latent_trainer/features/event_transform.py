@@ -36,9 +36,15 @@ from typing import Iterable
 import numpy as np
 from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData
 
+from latent_trainer.features.perception_action_cycle import (
+    PAC_CHANNEL_NAMES,
+    extract_timed_pac_facts,
+    per_tick_pac_channels,
+)
 from latent_trainer.features.rich_transform import (
     SORTED_PLAYERSTATS_KEYS,
     _get_outcome,
+    _get_player_info,
     _get_stats_values,
 )
 
@@ -65,6 +71,11 @@ UNK_UNIT_TOKEN = "<UNK>"
 RESERVED_UNIT_TOKENS: tuple[str, ...] = (PAD_UNIT_TOKEN, UNK_UNIT_TOKEN)
 
 PLAYER_IDS: tuple[int, int] = (1, 2)
+
+# Race actually played (``ToonPlayerInfo.race``), never ``selectedRace``: a
+# Random pick resolves to the race the player ended up with. Index is the id.
+RACE_NAMES: tuple[str, ...] = ("Terr", "Prot", "Zerg")
+RACE_IDS = {name: idx for idx, name in enumerate(RACE_NAMES)}
 
 # Non-gameplay entities:
 #
@@ -167,7 +178,9 @@ def is_gameplay_entity(type_name: str) -> bool:
 # Same minimum-duration guard as rich_transform: 4032 loops = 3 minutes.
 MIN_GAME_LOOPS = 4032
 
-N_STAT_CHANNELS = len(SORTED_PLAYERSTATS_KEYS)
+# Stat channels per tick: the PlayerStats counters, then the per-tick PAC channels.
+STAT_CHANNEL_NAMES: tuple[str, ...] = (*SORTED_PLAYERSTATS_KEYS, *PAC_CHANNEL_NAMES)
+N_STAT_CHANNELS = len(STAT_CHANNEL_NAMES)
 
 
 @dataclass
@@ -178,7 +191,8 @@ class PlayerEventStreams:
     Parameters
     ----------
     stat_values : np.ndarray
-        PlayerStats channels per cleaned tick, ``[T, C]`` float32.
+        Stat channels per cleaned tick (:data:`STAT_CHANNEL_NAMES`: PlayerStats
+        counters, then PAC), ``[T, C]`` float32.
     stat_loops : np.ndarray
         Game loop of each tick, ``[T]`` int32.
     stat_tick : np.ndarray
@@ -191,15 +205,18 @@ class PlayerEventStreams:
         Game loop of each event, ``[E]`` int32.
     evt_tick : np.ndarray
         Slice index of each event (:func:`event_tick_index`), ``[E]`` int32.
+    race : int
+        Race actually played, an id into :data:`RACE_NAMES`.
     """
 
-    stat_values: np.ndarray  # [T_stat, 39] float32
+    stat_values: np.ndarray  # [T_stat, C] float32
     stat_loops: np.ndarray  # [T_stat]     int32
     stat_tick: np.ndarray  # [T_stat]     int32 — canonical grid index
     evt_type: np.ndarray  # [T_evt]      int8
     evt_unit_local: np.ndarray  # [T_evt]      int32 — index into local_vocab
     evt_loops: np.ndarray  # [T_evt]      int32
     evt_tick: np.ndarray  # [T_evt]      int32 — slice this event belongs to
+    race: int
 
 
 @dataclass
@@ -402,6 +419,9 @@ def _extract_streams(
 def _build_player_streams(
     stat_events: list,
     raw_events: Iterable[tuple[int, int, str]],
+    game_events: list,
+    user_id: int,
+    race: int,
     vocab_index: dict[str, int],
     local_vocab: list[str],
 ) -> PlayerEventStreams | None:
@@ -409,7 +429,10 @@ def _build_player_streams(
     Turn one player's raw events into arrays, interning type names locally.
 
     Stat ticks are cleaned with :func:`_clean_stat_events`; events after the
-    last kept tick are past the observation horizon and dropped.
+    last kept tick are past the observation horizon and dropped. The PAC
+    channels are appended to each tick's PlayerStats counters; each PAC fact is
+    counted at the first tick at or after the loop where it became certain
+    (:func:`per_tick_pac_channels`), so no tick reflects anything later.
 
     Parameters
     ----------
@@ -417,6 +440,12 @@ def _build_player_streams(
         The player's PlayerStats events.
     raw_events : Iterable[tuple[int, int, str]]
         The player's ``(loop, type_id, type_name)`` events.
+    game_events : list
+        The replay's game events, for the PAC channels.
+    user_id : int
+        The player's ``userID`` in the game events (differs from ``playerID``).
+    race : int
+        Race id of the player, see :data:`RACE_NAMES`.
     vocab_index : dict[str, int]
         Replay-local name-to-id map, extended in place.
     local_vocab : list[str]
@@ -431,11 +460,19 @@ def _build_player_streams(
     if not cleaned:
         return None
 
+    loops = [int(event.loop) for event in cleaned]
+    pac = per_tick_pac_channels(
+        extract_timed_pac_facts(game_events=game_events, user_id=user_id),
+        stat_loops=loops,
+    )
     stat_values = np.asarray(
-        [_get_stats_values(stats_obj=event.stats) for event in cleaned],
+        [
+            [*_get_stats_values(stats_obj=event.stats), *pac_row]
+            for event, pac_row in zip(cleaned, pac, strict=True)
+        ],
         dtype=np.float32,
     )
-    stat_loops = np.asarray([event.loop for event in cleaned], dtype=np.int32)
+    stat_loops = np.asarray(loops, dtype=np.int32)
     stat_tick = np.asarray(
         [stat_tick_index(event.loop) for event in cleaned], dtype=np.int32
     )
@@ -473,6 +510,7 @@ def _build_player_streams(
         evt_unit_local=np.asarray(evt_unit_local, dtype=np.int32),
         evt_loops=np.asarray(evt_loops, dtype=np.int32),
         evt_tick=np.asarray(evt_tick, dtype=np.int32),
+        race=race,
     )
 
 
@@ -481,7 +519,10 @@ def event_transform(sc2_replay: SC2ReplayData) -> ReplayEventSample | None:
     Extract both event streams for both players, or None to skip the replay.
 
     Mirrors the ``rich_transform`` skip rules (undecided outcome, missing stats,
-    game shorter than 4032 loops) but returns a ragged structured sample.
+    game shorter than 4032 loops) but returns a ragged structured sample. Also
+    skipped: replays whose game events failed to parse (the PAC channels would
+    be computed from a partial stream) and players without a known ``userID``
+    or played race.
 
     Parameters
     ----------
@@ -504,6 +545,9 @@ def event_transform(sc2_replay: SC2ReplayData) -> ReplayEventSample | None:
     except (AttributeError, ValueError, TypeError):
         return None
 
+    if sc2_replay.gameEventsErr:
+        return None
+
     extracted = _extract_streams(sc2_replay=sc2_replay)
     if extracted is None:
         return None
@@ -514,9 +558,15 @@ def event_transform(sc2_replay: SC2ReplayData) -> ReplayEventSample | None:
 
     players: list[PlayerEventStreams] = []
     for player_id in PLAYER_IDS:
+        info = _get_player_info(sc2_replay=sc2_replay, player_id=player_id)
+        if info is None or info.race not in RACE_IDS:
+            return None
         streams = _build_player_streams(
             stat_events=stats_by_player[player_id],
             raw_events=events_by_player[player_id],
+            game_events=sc2_replay.gameEvents,
+            user_id=info.userID,
+            race=RACE_IDS[info.race],
             vocab_index=vocab_index,
             local_vocab=local_vocab,
         )
