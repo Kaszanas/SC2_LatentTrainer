@@ -119,7 +119,9 @@ ENV/
 # mkdocs build dir
 site/
 
-data/
+# Data is regenerable, except the split manifest that fixes the reported splits:
+data/*
+!data/splits.json
 
 # Model outputs (regenerable)
 output/
