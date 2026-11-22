@@ -1,4 +1,5 @@
-"""Ordered, manifest-driven replay extraction shared by every cache builder.
+"""
+Ordered, manifest-driven replay extraction shared by every cache builder.
 
 Replays are extracted in index order (``executor.map`` keeps submission order),
 identified by stable id, and placed strictly by ``splits.json``: a listed replay
@@ -35,7 +36,19 @@ TransformFn = Callable[[Any], Any]
 
 
 def load_source_dataset(single_json_dataset_path: Path | str) -> Any:
-    """The full single-JSON dataset, indexed exactly as recorded in ``splits.json``."""
+    """
+    Load the full single-JSON dataset, indexed as recorded in ``splits.json``.
+
+    Parameters
+    ----------
+    single_json_dataset_path : Path | str
+        Path to the single-JSON SC2EGSet file.
+
+    Returns
+    -------
+    SC2DatasetSingleJSON
+        Dataset returning ``SC2ReplayData`` by source index.
+    """
     datamodule = SC2EGSetDataModuleSingleJSON(
         json_path=single_json_dataset_path,
         download=False,
@@ -46,7 +59,22 @@ def load_source_dataset(single_json_dataset_path: Path | str) -> Any:
 
 @dataclass
 class ExtractionRecord:
-    """One replay's outcome: an output, a skip, or an error."""
+    """
+    Outcome of one replay: an output, a skip, or an error.
+
+    Parameters
+    ----------
+    index : int
+        Index of the replay in the source dataset.
+    replay_id : str | None
+        Stable replay id, or None if the replay could not be read.
+    output : Any
+        Transform output for a kept replay, by default None.
+    skipped : bool
+        Whether the transform returned None, by default False.
+    error : str | None
+        Exception type and message if extraction failed, by default None.
+    """
 
     index: int
     replay_id: str | None
@@ -56,12 +84,33 @@ class ExtractionRecord:
 
     @property
     def kept(self) -> bool:
+        """
+        Whether the replay produced an output.
+
+        Returns
+        -------
+        bool
+            True if the replay neither errored nor was skipped.
+        """
         return self.error is None and not self.skipped
 
 
 @dataclass
 class ExtractionResult:
-    """Per-split outputs in manifest (index) order."""
+    """
+    Per-split transform outputs, in manifest (index) order.
+
+    Parameters
+    ----------
+    outputs : dict[str, list[Any]]
+        Transform outputs per split name.
+    manifest : SplitManifest
+        Manifest used to place the outputs (subsampled if ``n_samples`` was set).
+    n_skipped : int
+        Number of extracted replays the transform skipped.
+    n_errors : int
+        Number of extracted replays that raised.
+    """
 
     outputs: dict[str, list[Any]]
     manifest: SplitManifest
@@ -74,6 +123,23 @@ def _extract_chunk(
     indices: list[int],
     transform_fn: TransformFn,
 ) -> list[ExtractionRecord]:
+    """
+    Extract one chunk of replays inside a single worker call.
+
+    Parameters
+    ----------
+    dataset_object : Any
+        Indexable dataset returning ``SC2ReplayData``.
+    indices : list[int]
+        Source indices of the chunk.
+    transform_fn : TransformFn
+        Transform returning an output, or None to skip the replay.
+
+    Returns
+    -------
+    list[ExtractionRecord]
+        One record per index, in input order.
+    """
     records: list[ExtractionRecord] = []
     for index in indices:
         replay_id: str | None = None
@@ -110,7 +176,32 @@ def extract_ordered(
     chunk_size: int = 64,
     desc: str = "extract",
 ) -> list[ExtractionRecord]:
-    """Run ``transform_fn`` over ``indices``; records come back in input order."""
+    """
+    Run a transform over replays in parallel, keeping input order.
+
+    ``executor.map`` returns chunk results in submission order whatever order
+    the workers finish in.
+
+    Parameters
+    ----------
+    dataset_object : Any
+        Indexable dataset returning ``SC2ReplayData``.
+    indices : list[int]
+        Source indices to extract.
+    transform_fn : TransformFn
+        Transform returning an output, or None to skip the replay.
+    n_workers : int
+        Worker processes; 1 uses a single thread, by default 8.
+    chunk_size : int
+        Replays per worker task, by default 64.
+    desc : str
+        Progress bar label, by default "extract".
+
+    Returns
+    -------
+    list[ExtractionRecord]
+        One record per index, in the order of ``indices``.
+    """
     chunks = [
         indices[start : start + chunk_size]
         for start in range(0, len(indices), chunk_size)
@@ -133,6 +224,14 @@ def extract_ordered(
 
 
 def _log_errors(records: list[ExtractionRecord]) -> None:
+    """
+    Log the number of failed replays and their most common causes.
+
+    Parameters
+    ----------
+    records : list[ExtractionRecord]
+        Extraction records to summarise.
+    """
     errors = [record.error for record in records if record.error is not None]
     if errors:
         logger.warning(f"  {len(errors)} replays failed; top causes:")
@@ -144,10 +243,26 @@ def place_by_manifest(
     records: list[ExtractionRecord],
     manifest: SplitManifest,
 ) -> dict[str, list[Any]]:
-    """Put each manifest replay's output into its split, or raise.
+    """
+    Put each manifest replay's output into its split, strictly.
 
-    Fails if a listed replay is missing, skipped, errored, or its id differs
-    from the manifest (i.e. the source JSON changed under it).
+    Parameters
+    ----------
+    records : list[ExtractionRecord]
+        Extraction records covering every manifest replay.
+    manifest : SplitManifest
+        Manifest defining split membership.
+
+    Returns
+    -------
+    dict[str, list[Any]]
+        Outputs per split name, in manifest (index) order.
+
+    Raises
+    ------
+    SplitManifestError
+        If a listed replay is missing, skipped, errored, or its id differs from
+        the manifest (the source JSON changed under it).
     """
     by_index = {record.index: record for record in records}
 
@@ -195,11 +310,48 @@ def extract_with_manifest(
     n_workers: int = 8,
     chunk_size: int = 64,
 ) -> ExtractionResult:
-    """Extract replays and place them into train/val/test via ``splits.json``.
+    """
+    Extract replays and place them into train/val/test via ``splits.json``.
 
-    ``create_splits`` builds a new manifest from the replays this run keeps
-    (never overwriting). Otherwise the manifest must exist and is enforced.
-    ``n_samples > 0`` limits the run to a seeded subset.
+    Parameters
+    ----------
+    dataset_object : Any
+        Indexable dataset returning ``SC2ReplayData``.
+    transform_fn : TransformFn
+        Transform returning an output, or None to skip the replay.
+    transform_name : str
+        Transform name, recorded in a newly created manifest.
+    dataset_file : str
+        File name of the source dataset, checked against the manifest.
+    splits_path : Path
+        Location of ``splits.json``.
+    create_splits : bool
+        Create a new manifest from the replays this run keeps (never
+        overwriting); otherwise the existing manifest is loaded and enforced.
+    n_samples : int
+        If > 0, restrict the run to a seeded subset: of all replays when
+        creating, proportionally per split when reusing, by default 0.
+    seed : int
+        Seed for the split assignment and subsampling, by default 42.
+    n_workers : int
+        Worker processes, by default 8.
+    chunk_size : int
+        Replays per worker task, by default 64.
+
+    Returns
+    -------
+    ExtractionResult
+        Outputs per split, the manifest used, and skip/error counts.
+
+    Raises
+    ------
+    FileExistsError
+        If ``create_splits`` is set and ``splits_path`` already exists.
+    FileNotFoundError
+        If ``create_splits`` is not set and there is no manifest.
+    SplitManifestError
+        If the manifest does not match the dataset or a listed replay cannot
+        be placed.
     """
     n_source = len(dataset_object)
 

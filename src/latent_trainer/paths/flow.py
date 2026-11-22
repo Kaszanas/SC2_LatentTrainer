@@ -1,4 +1,5 @@
-"""OT-Flow Matching model for losing→winning latent transport.
+"""
+OT-Flow Matching model for losing→winning latent transport.
 
 Implements Conditional Flow Matching with Optimal Transport mini-batch pairing
 (Lipman et al. 2022 / Tong et al. 2023).  For each mini-batch the EMD transport
@@ -17,7 +18,16 @@ from lightning import LightningModule
 
 
 class VelocityMLP(nn.Module):
-    """Time-conditioned velocity field v_θ(z, t) → dz/dt."""
+    """
+    Time-conditioned velocity field ``v(z, t) -> dz/dt``.
+
+    Parameters
+    ----------
+    latent_dim : int
+        Latent dimensionality.
+    hidden_dim : int
+        Hidden layer width, by default 256.
+    """
 
     def __init__(self, latent_dim: int, hidden_dim: int = 256) -> None:
         super().__init__()
@@ -32,15 +42,40 @@ class VelocityMLP(nn.Module):
         )
 
     def forward(self, z: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Evaluate the velocity field.
+
+        Parameters
+        ----------
+        z : torch.Tensor
+            Latents, ``[N, latent_dim]``.
+        t : torch.Tensor
+            Times in ``[0, 1]``, ``[N, 1]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Velocities, ``[N, latent_dim]``.
+        """
         return self.net(torch.cat([z, t], dim=-1))
 
 
 class LitOTFlowMatching(LightningModule):
-    """Lightning module for OT-paired Flow Matching.
+    """
+    Lightning module for OT-paired flow matching from losing to winning latents.
 
-    During training, each mini-batch is re-paired using the exact EMD transport
-    plan so that the learned velocity field follows the shortest possible
-    trajectories between the two distributions.
+    Each training mini-batch is re-paired with the exact EMD transport plan, so
+    the velocity field follows the shortest trajectories between the two
+    distributions.
+
+    Parameters
+    ----------
+    latent_dim : int
+        Latent dimensionality.
+    hidden_dim : int
+        Hidden width of the velocity network, by default 256.
+    learning_rate : float
+        Adam learning rate, by default 1e-3.
     """
 
     def __init__(
@@ -55,11 +90,41 @@ class LitOTFlowMatching(LightningModule):
         self.net = VelocityMLP(latent_dim=latent_dim, hidden_dim=hidden_dim)
 
     def forward(self, z: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Evaluate the velocity field.
+
+        Parameters
+        ----------
+        z : torch.Tensor
+            Latents, ``[N, latent_dim]``.
+        t : torch.Tensor
+            Times in ``[0, 1]``, ``[N, 1]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Velocities, ``[N, latent_dim]``.
+        """
         return self.net(z, t)
 
     def training_step(
         self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
     ) -> torch.Tensor:
+        """
+        Re-pair the batch by exact OT and regress the straight-line velocity.
+
+        Parameters
+        ----------
+        batch : tuple[torch.Tensor, torch.Tensor]
+            ``(z_losing, z_winning)``, each ``[B, latent_dim]``.
+        batch_idx : int
+            Index of the batch.
+
+        Returns
+        -------
+        torch.Tensor
+            MSE between predicted and target velocities.
+        """
         z0, z1 = batch
         batch_size = z0.shape[0]
 
@@ -83,6 +148,16 @@ class LitOTFlowMatching(LightningModule):
     def validation_step(
         self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
     ) -> None:
+        """
+        Log the flow-matching MSE on the batch as given (no OT re-pairing).
+
+        Parameters
+        ----------
+        batch : tuple[torch.Tensor, torch.Tensor]
+            ``(z_losing, z_winning)``, each ``[B, latent_dim]``.
+        batch_idx : int
+            Index of the batch.
+        """
         z0, z1 = batch
         batch_size = z0.shape[0]
         t = torch.rand((batch_size, 1), device=self.device)
@@ -93,6 +168,14 @@ class LitOTFlowMatching(LightningModule):
         self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
 
     def configure_optimizers(self):
+        """
+        Create the Adam optimizer.
+
+        Returns
+        -------
+        torch.optim.Adam
+            Optimizer over all parameters.
+        """
         return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
     @torch.no_grad()
@@ -102,7 +185,8 @@ class LitOTFlowMatching(LightningModule):
         steps: int = 20,
         t_max: float = 1.0,
     ) -> np.ndarray:
-        """Euler integration from z_start through the learned velocity field.
+        """
+        Euler integration from z_start through the learned velocity field.
 
         Parameters
         ----------
@@ -143,7 +227,8 @@ class LitOTFlowMatching(LightningModule):
         steps: int = 20,
         t_max: float = 1.0,
     ) -> np.ndarray:
-        """Euler integration with classifier guidance.
+        """
+        Euler integration with classifier guidance.
 
         At each step the velocity field is augmented by the gradient of the
         score function (P(win)) with respect to the current latent.  This

@@ -1,4 +1,5 @@
-"""Unified training entrypoint for the SC2 Latent Trainer.
+"""
+Unified training entrypoint for the SC2 Latent Trainer.
 
 Supports both sweep (Ray Tune + Optuna HPO) and best (retrain with best
 Optuna trial params) modes for two pipelines, with MLFlow experiment tracking.
@@ -156,7 +157,43 @@ def main(
     run_name: str | None,
     max_input_dim: int | None,
 ) -> None:
-    """SC2 Latent Trainer — unified training & HPO entrypoint."""
+    """
+    Train the guided VAE or run its hyperparameter sweep.
+
+    Parameters
+    ----------
+    pipeline : str
+        Training pipeline (``guided_vae``).
+    dataset_filename : str
+        Cached dataset file name inside ``DATA_DIR``.
+    sweep : bool
+        Run the Ray + Optuna sweep; otherwise retrain from the best trial.
+    n_trials : int
+        Optuna trials in sweep mode.
+    experiment_name : str
+        MLflow experiment name.
+    mlflow_uri : str
+        MLflow tracking URI; None uses the local SQLite database.
+    gpus_per_trial : float
+        Fractional GPU per Ray trial.
+    cpus_per_trial : int
+        CPUs per Ray trial.
+    optuna_db : str
+        Optuna storage URL.
+    source_experiment : str | None
+        Experiment to load best parameters from; None uses ``experiment_name``.
+    source_run : str | None
+        Run to load parameters from; None uses the latest best-trial summary.
+    run_name : str | None
+        MLflow run name for retraining; None auto-generates one.
+    max_input_dim : int | None
+        Keep only the first N feature columns (best mode only).
+
+    Raises
+    ------
+    click.BadParameter
+        If the pipeline is unknown.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format=LOGGING_FORMAT,
@@ -196,7 +233,14 @@ def main(
 
 
 def _train_guided_vae(config: ExperimentConfig) -> None:
-    """Dispatch between sweep and best for the Guided-VAE pipeline."""
+    """
+    Dispatch the guided VAE pipeline to sweep or best-trial retraining.
+
+    Parameters
+    ----------
+    config : ExperimentConfig
+        Run configuration; ``config.sweep`` selects the mode.
+    """
     if config.sweep:
         logger.info(f"Starting Guided-VAE Optuna sweep ({config.n_trials} trials)...")
         study = run_guided_vae_hyperparameter_search(config=config)

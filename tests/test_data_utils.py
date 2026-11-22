@@ -66,13 +66,16 @@ class FakeEncoder:
         self._is_eval = False
 
     def eval(self) -> "FakeEncoder":
+        """Mark the fake as in eval mode and return it."""
         self._is_eval = True
         return self
 
     def to(self, device: torch.device) -> "FakeEncoder":
+        """No-op stand-in for ``nn.Module.to``."""
         return self
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return fake ``(mu, logvar)`` for the input batch."""
         B = x.shape[0]
         mu = torch.randn(B, self.latent_dim)
         logvar = torch.zeros(B, self.latent_dim)
@@ -83,9 +86,12 @@ class FakeEncoder:
 # normalize()
 # ---------------------------------------------------------------------------
 class TestNormalize:
+    """Tests for :func:`normalize`."""
+
     def test_shapes_preserved(
         self, dummy_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
     ) -> None:
+        """Normalisation keeps every split's shape."""
         train_X, val_X, test_X = dummy_tensors
         normalized_data = normalize(train_X, val_X, test_X)
         assert normalized_data.train_X.shape == train_X.shape
@@ -95,6 +101,7 @@ class TestNormalize:
     def test_mean_std_shapes(
         self, dummy_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
     ) -> None:
+        """Mean and std have one value per feature."""
         train_X, val_X, test_X = dummy_tensors
         normalized_data = normalize(train_X, val_X, test_X)
         F = train_X.shape[-1]
@@ -104,6 +111,7 @@ class TestNormalize:
     def test_train_is_roughly_standardised(
         self, dummy_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
     ) -> None:
+        """Train is centred, and scaled to unit std above the 1.0 std floor."""
         train_X, val_X, test_X = dummy_tensors
         normalized_data = normalize(train_X, val_X, test_X)
         flat = normalized_data.train_X.reshape(-1, train_X.shape[-1])
@@ -118,6 +126,7 @@ class TestNormalize:
     def test_no_nan_or_inf(
         self, dummy_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
     ) -> None:
+        """Normalised splits contain only finite values."""
         train_X, val_X, test_X = dummy_tensors
         normalized_data = normalize(train_X, val_X, test_X)
         assert torch.isfinite(normalized_data.train_X).all()
@@ -139,7 +148,10 @@ class TestNormalize:
 # load_and_normalize()
 # ---------------------------------------------------------------------------
 class TestLoadAndNormalize:
+    """Tests for :func:`load_and_normalize`."""
+
     def test_returns_expected_fields(self, dummy_cache: str) -> None:
+        """The result exposes every split, label and statistic."""
         result = load_and_normalize(dummy_cache)
         expected_fields = {
             "train_X",
@@ -154,6 +166,7 @@ class TestLoadAndNormalize:
         assert set(result.__dict__.keys()) == expected_fields
 
     def test_shapes(self, dummy_cache: str) -> None:
+        """Loaded splits keep the cached shapes."""
         normalized_data = load_and_normalize(dummy_cache)
         assert normalized_data.train_X.shape[0] == normalized_data.train_y.shape[0]
         assert normalized_data.val_X.shape[0] == normalized_data.val_y.shape[0]
@@ -162,6 +175,7 @@ class TestLoadAndNormalize:
         assert normalized_data.train_y.ndim == 1
 
     def test_dtype_is_float(self, dummy_cache: str) -> None:
+        """Features and labels are returned as floats."""
         normalized_data = load_and_normalize(dummy_cache)
         assert normalized_data.train_X.dtype == torch.float32
         assert normalized_data.train_y.dtype == torch.float32
@@ -171,7 +185,10 @@ class TestLoadAndNormalize:
 # load_cached_dataloaders()
 # ---------------------------------------------------------------------------
 class TestLoadCachedDataloaders:
+    """Tests for :func:`load_cached_dataloaders`."""
+
     def test_returns_loaders_and_dim(self, dummy_cache: str) -> None:
+        """Loaders yield batches whose width matches ``input_dim``."""
         loaders = load_cached_dataloaders(dummy_cache, batch_size=4)
         input_dim = loaders.input_dim
         assert input_dim == 10
@@ -184,11 +201,15 @@ class TestLoadCachedDataloaders:
 # CachedSC2Dataset
 # ---------------------------------------------------------------------------
 class TestCachedSC2Dataset:
+    """Tests for :class:`CachedSC2Dataset`."""
+
     def test_len(self) -> None:
+        """Length equals the number of samples."""
         ds = CachedSC2Dataset(torch.randn(10, 5), torch.randn(10))
         assert len(ds) == 10
 
     def test_getitem(self) -> None:
+        """Indexing returns the matching feature and label."""
         ds = CachedSC2Dataset(torch.randn(10, 5), torch.randn(10))
         feat, label = ds[3]
         assert feat.shape == (5,)
@@ -199,7 +220,10 @@ class TestCachedSC2Dataset:
 # extract_latents()
 # ---------------------------------------------------------------------------
 class TestExtractLatents:
+    """Tests for :func:`extract_latents`."""
+
     def test_output_shape(self) -> None:
+        """Both players' latents are concatenated into one row per sample."""
         latent_dim = 4
         enc = FakeEncoder(latent_dim=latent_dim)
         data = torch.randn(16, 2, 10)

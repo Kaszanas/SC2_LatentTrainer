@@ -1,14 +1,9 @@
-"""CLI for the single-replay hosting pipeline.
+"""
+CLI for the single-replay hosting pipeline.
 
-    python -m latent_trainer_serve build-reference-pack \\
-        --model output/checkpoints/.../best.ckpt \\
-        --dataset cached_dataset_granular.pt \\
-        --output reference_pack.pt
-
-    python -m latent_trainer_serve predict \\
-        --replay game.SC2Replay \\
-        --model output/checkpoints/.../best.ckpt \\
-        --reference-pack reference_pack.pt
+Build the reference pack once per checkpoint, then analyse replays:
+``python -m latent_trainer_serve build-reference-pack --model output/checkpoints/<exp>/best.ckpt --dataset cached_dataset_granular.pt --output reference_pack.pt``
+and ``python -m latent_trainer_serve predict --replay game.SC2Replay --model output/checkpoints/<exp>/best.ckpt --reference-pack reference_pack.pt``.
 """
 
 from __future__ import annotations
@@ -57,7 +52,19 @@ def cli() -> None:
     help="Where to save the reference pack.",
 )
 def cmd_build_reference_pack(model_path: Path, dataset_path: Path, output_path: Path) -> None:
-    """One-time offline step: precompute the win/loss latent pool for a checkpoint."""
+    """
+    Precompute the reference latent pool for a checkpoint (one-time, offline).
+
+    Parameters
+    ----------
+    model_path : Path
+        Trained guided VAE checkpoint.
+    dataset_path : Path
+        Cache the checkpoint was trained on; its test split becomes the
+        reference pool.
+    output_path : Path
+        Where to save the reference pack.
+    """
     pack = build_reference_pack(model_path=model_path, dataset_path=dataset_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     save_reference_pack(pack, output_path)
@@ -147,7 +154,36 @@ def cmd_predict(
     extractor_binary: Path | None,
     cache_dir: Path,
 ) -> None:
-    """Analyze one replay and generate a counterfactual improvement-path report."""
+    """
+    Analyse one replay and write a counterfactual improvement-path report.
+
+    Parameters
+    ----------
+    replay_path : Path
+        The ``.SC2Replay`` file.
+    model_path : Path
+        Trained guided VAE checkpoint.
+    reference_pack_path : Path
+        Reference pack built for this checkpoint.
+    player : int | None
+        Player index (0 or 1); None analyses the loser.
+    strategy : str
+        Path strategy; ``neural_flow`` is not available for this feature set.
+    method : str
+        Linear target: ``centroid`` or ``nearest``.
+    k_neighbours : int
+        Neighbours for ``nearest``.
+    n_steps : int
+        Waypoints along the path.
+    top_k : int
+        Features per feedback table.
+    docker_image : str
+        SC2InfoExtractorGo image (ignored with ``extractor_binary``).
+    extractor_binary : Path | None
+        Local SC2InfoExtractorGo binary to run instead of Docker.
+    cache_dir : Path
+        Per-replay feature cache (keyed by content hash).
+    """
     predict_replay(
         replay_path=replay_path,
         model_path=model_path,

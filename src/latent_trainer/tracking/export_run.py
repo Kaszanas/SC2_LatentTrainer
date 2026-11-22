@@ -1,14 +1,7 @@
-"""Export training curves and artifacts from an MLflow run as publication PDFs.
+"""
+Export training curves and artifacts from an MLflow run as publication PDFs.
 
-For each logged metric a clean line-plot PDF is written to --output_dir.
-Artifact images/PDFs stored in the run can optionally be downloaded too.
-
-Usage::
-
-    uv run python -m latent_trainer.tracking.export_run \\
-        --experiment_name guided_vae_experiment \\
-        --run_name guided_vae_best \\
-        --output_dir output/paper_plots/
+Usage: ``uv run --extra cuda python -m latent_trainer.tracking.export_run --experiment_name guided_vae_experiment --run_name guided_vae_best --output_dir output/paper_plots/``
 """
 
 from __future__ import annotations
@@ -45,7 +38,28 @@ _OVERLAY_PAIRS = [
 
 
 def _resolve_run(client, experiment_name: str, run_name: str):
-    """Return the MLflow Run object matching experiment + run name."""
+    """
+    Return the most recent MLflow run with the given name in an experiment.
+
+    Parameters
+    ----------
+    client : MlflowClient
+        MLflow client.
+    experiment_name : str
+        Experiment name.
+    run_name : str
+        Run name.
+
+    Returns
+    -------
+    mlflow.entities.Run
+        The newest matching run.
+
+    Raises
+    ------
+    click.ClickException
+        If the experiment or run does not exist.
+    """
     experiment = client.get_experiment_by_name(experiment_name)
     if experiment is None:
         raise click.ClickException(f"Experiment '{experiment_name}' not found.")
@@ -65,7 +79,23 @@ def _resolve_run(client, experiment_name: str, run_name: str):
 
 
 def _get_history(client, run_id: str, key: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return (steps, values) arrays for a metric key."""
+    """
+    Return the logged history of one metric.
+
+    Parameters
+    ----------
+    client : MlflowClient
+        MLflow client.
+    run_id : str
+        Run id.
+    key : str
+        Metric key.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        ``(steps, values)``.
+    """
     history = client.get_metric_history(run_id, key)
     steps = np.array([m.step for m in history])
     values = np.array([m.value for m in history])
@@ -79,6 +109,22 @@ def _plot_metric(
     output_dir: Path,
     color: str = _PALETTE[0],
 ) -> None:
+    """
+    Plot one metric curve and save it as ``<key>.pdf``.
+
+    Parameters
+    ----------
+    steps : np.ndarray
+        Step of each value.
+    values : np.ndarray
+        Metric values.
+    key : str
+        Metric key, used as label and file name.
+    output_dir : Path
+        Output directory.
+    color : str
+        Line colour, by default the first palette colour.
+    """
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.plot(steps, values, color=color, lw=1.5)
     ax.set_xlabel("Step")
@@ -98,7 +144,27 @@ def _plot_overlay(
     key_b: str,
     output_dir: Path,
 ) -> bool:
-    """Plot two metrics on the same axes. Returns False if either key is missing."""
+    """
+    Plot two metrics (e.g. train and val) on the same axes and save as PDF.
+
+    Parameters
+    ----------
+    client : MlflowClient
+        MLflow client.
+    run_id : str
+        Run id.
+    key_a : str
+        First metric key (solid line).
+    key_b : str
+        Second metric key (dashed line).
+    output_dir : Path
+        Output directory.
+
+    Returns
+    -------
+    bool
+        False if either metric is missing or empty, True if plotted.
+    """
     try:
         steps_a, vals_a = _get_history(client, run_id, key_a)
         steps_b, vals_b = _get_history(client, run_id, key_b)
@@ -125,6 +191,16 @@ def _plot_overlay(
 
 
 def _print_summary(run, metrics_subset: list[str] | None) -> None:
+    """
+    Print the run's final metric values.
+
+    Parameters
+    ----------
+    run : mlflow.entities.Run
+        The run.
+    metrics_subset : list[str] | None
+        Metric keys to print; None prints all.
+    """
     data = run.data.metrics
     keys = metrics_subset if metrics_subset else sorted(data.keys())
     print("\n" + "=" * 50)
@@ -169,7 +245,24 @@ def main(
     mlflow_uri: str,
     no_artifacts: bool,
 ) -> None:
-    """Export training curves and artifacts from an MLflow run as PDFs."""
+    """
+    Export training curves and artifacts from an MLflow run as PDFs.
+
+    Parameters
+    ----------
+    experiment_name : str
+        MLflow experiment name.
+    run_name : str
+        MLflow run name.
+    metrics : str | None
+        Comma-separated metric keys to export; None exports all.
+    output_dir : Path
+        Output directory for the PDFs.
+    mlflow_uri : str
+        MLflow tracking URI.
+    no_artifacts : bool
+        Skip downloading run artifacts.
+    """
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     output_dir.mkdir(parents=True, exist_ok=True)
 

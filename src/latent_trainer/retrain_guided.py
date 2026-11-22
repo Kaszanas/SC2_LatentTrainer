@@ -1,4 +1,5 @@
-"""Standalone entry point for retraining the Guided VAE with fixed best-known hyperparameters.
+"""
+Standalone entry point for retraining the Guided VAE with fixed best-known hyperparameters.
 
 Run as:
     python src/latent_trainer/retrain_guided.py --experiment_name my_run --help

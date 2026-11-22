@@ -1,4 +1,5 @@
-"""Phase 0 data study for the event-sequence Transformer pipeline.
+"""
+Phase 0 data study for the event-sequence Transformer pipeline.
 
 Answers the questions that set the hyperparameters of the event-stream
 representation *before* any model code is written.  Nothing here trains or
@@ -61,10 +62,23 @@ PLAYER_IDS = (1, 2)
 
 
 def _analyze_replay(replay) -> dict | None:
-    """Collect the Phase 0 measurements for one replay.
+    """
+    Collect the Phase 0 measurements for one replay.
 
     Returns ``None`` for replays the real transform would also skip, so the
     statistics describe the population the model will actually train on.
+
+    Parameters
+    ----------
+    replay : SC2ReplayData
+        Parsed replay.
+
+    Returns
+    -------
+    dict | None
+        Per-replay measurements (tick loops per player, event counts, death
+        attribution, unit types, version), or None if the transform would skip
+        the replay.
     """
     label = _get_outcome(sc2_replay=replay)
     if label is None:
@@ -175,12 +189,25 @@ def _analyze_replay(replay) -> dict | None:
 
 
 def _analyze_chunk(dataset_object, indices: list[int]) -> tuple[list[dict], Counter]:
-    """Worker entry point: analyze a contiguous chunk of replay indices.
+    """
+    Worker entry point: analyze a contiguous chunk of replay indices.
 
     A single malformed replay must not abort a multi-hour study, but it must
     not vanish silently either -- failures are counted by exception type and
     reported, so a systematic parsing problem is visible rather than quietly
     shrinking the sample.
+
+    Parameters
+    ----------
+    dataset_object : SC2DatasetSingleJSON
+        Indexable dataset returning ``SC2ReplayData``.
+    indices : list[int]
+        Indices of the chunk.
+
+    Returns
+    -------
+    tuple[list[dict], Counter]
+        Measurements of the kept replays and failure counts by exception type.
     """
     records = []
     errors: Counter = Counter()
@@ -196,6 +223,21 @@ def _analyze_chunk(dataset_object, indices: list[int]) -> tuple[list[dict], Coun
 
 
 def _percentiles(values, points=(1, 5, 25, 50, 75, 95, 99)) -> dict[str, float]:
+    """
+    Return named percentiles of a list of values.
+
+    Parameters
+    ----------
+    values : Sequence[float]
+        Values; empty gives NaN for every percentile.
+    points : Sequence[int]
+        Percentiles to compute, by default ``(1, 5, 25, 50, 75, 95, 99)``.
+
+    Returns
+    -------
+    dict[str, float]
+        ``{"p1": ..., "p5": ..., ...}``.
+    """
     if len(values) == 0:
         return {f"p{p}": float("nan") for p in points}
     array = np.asarray(values, dtype=np.float64)
@@ -203,11 +245,22 @@ def _percentiles(values, points=(1, 5, 25, 50, 75, 95, 99)) -> dict[str, float]:
 
 
 def _analyze_tick_grid(records: list[dict]) -> dict:
-    """Is tick k at the same loop in every replay?
+    """
+    Check whether tick k sits at the same loop in every replay.
 
     Two complementary readings: the spread of the absolute loop value at each
     tick index, and the distribution of consecutive deltas.  A fixed grid
     shows a near-zero spread at every k and a single dominant delta.
+
+    Parameters
+    ----------
+    records : list[dict]
+        Per-replay measurements.
+
+    Returns
+    -------
+    dict
+        Grid conformance, modal delta, per-index loop spread and delta counts.
     """
     per_index: dict[int, list[int]] = {}
     deltas: list[int] = []
@@ -301,7 +354,20 @@ def _analyze_tick_grid(records: list[dict]) -> dict:
 
 
 def _analyze_cutoffs(records: list[dict]) -> dict:
-    """For each candidate K: survival rate and irregular-event density."""
+    """
+    For each candidate K: survival rate and irregular-event density.
+
+    Parameters
+    ----------
+    records : list[dict]
+        Per-replay measurements.
+
+    Returns
+    -------
+    list[dict]
+        One row per candidate K: surviving replays, survival rate and
+        tokens-per-player percentiles.
+    """
     out = {}
     for cutoff in CANDIDATE_TICK_CUTOFFS:
         surviving = [
@@ -344,7 +410,19 @@ def _analyze_cutoffs(records: list[dict]) -> dict:
 
 
 def _render_report(summary: dict) -> str:
-    """Render the machine-readable summary as a readable Markdown document."""
+    """
+    Render the machine-readable summary as a readable Markdown document.
+
+    Parameters
+    ----------
+    summary : dict
+        Machine-readable study summary.
+
+    Returns
+    -------
+    str
+        Markdown report.
+    """
     grid = summary["tick_grid"]
     lines = [
         "# Event-stream data study (Phase 0)",
@@ -535,6 +613,29 @@ def main(
     seed: int,
     output: Path,
 ) -> None:
+    """
+    Run the Phase 0 event-stream data study and write the report.
+
+    Parameters
+    ----------
+    single_json_dataset_path : Path
+        Single-JSON SC2EGSet file.
+    n_samples : int
+        Replays to sample; 0 uses all (slow).
+    n_workers : int
+        Worker processes.
+    chunk_size : int
+        Replays per worker task.
+    seed : int
+        Sampling seed.
+    output : Path
+        Markdown report path; a ``.json`` sibling is written too.
+
+    Raises
+    ------
+    click.ClickException
+        If no replay survives the skip rules.
+    """
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
 
     # The datamodule's 80/10/10 split is drawn from the global RNG, so without

@@ -1,4 +1,5 @@
-"""Persisted train/val/test split manifest (``splits.json``) shared by every cache.
+"""
+Persisted train/val/test split manifest (``splits.json``) shared by every cache.
 
 The manifest is created once from the replays an extraction run keeps (seeded
 random 80/10/10 cut), then every cache places replays by stable id against it.
@@ -27,18 +28,47 @@ class SplitManifestError(RuntimeError):
 
 @dataclass(frozen=True)
 class ReplayRef:
-    """A replay's index in the source JSON and its stable id."""
+    """
+    A replay's position in the source JSON and its stable identity.
+
+    Parameters
+    ----------
+    index : int
+        Index of the replay in the single-JSON source dataset.
+    replay_id : str
+        Stable id ``<replaypack>/<file>``, see :func:`replay_id_from_filepath`.
+    """
 
     index: int
     replay_id: str
 
 
 def replay_id_from_filepath(filepath: str | PurePath) -> str:
-    """``<replaypack>/<file>`` with forward slashes on every OS."""
+    """
+    Normalise ``SC2ReplayData.filepath`` to a platform-independent replay id.
+
+    Parameters
+    ----------
+    filepath : str | PurePath
+        Filepath as built by ``sc2_datasets`` (backslashes on Windows).
+
+    Returns
+    -------
+    str
+        The id ``<replaypack>/<file>`` with forward slashes on every OS.
+    """
     return str(filepath).replace("\\", "/")
 
 
 def sc2_datasets_version() -> str:
+    """
+    Return the installed ``sc2_datasets`` version.
+
+    Returns
+    -------
+    str
+        Package version, or ``"unknown"`` if it is not installed as a distribution.
+    """
     try:
         return importlib.metadata.version("sc2_datasets")
     except importlib.metadata.PackageNotFoundError:
@@ -47,6 +77,31 @@ def sc2_datasets_version() -> str:
 
 @dataclass(frozen=True)
 class SplitManifest:
+    """
+    Train/val/test membership of every replay, persisted as ``splits.json``.
+
+    Validated on construction, see :meth:`validate`.
+
+    Parameters
+    ----------
+    seed : int
+        Seed of the random 80/10/10 assignment.
+    dataset_file : str
+        File name of the single-JSON source dataset the indices refer to.
+    n_source_replays : int
+        Number of replays in the source dataset.
+    sc2_datasets_version : str
+        ``sc2_datasets`` version used to read the source dataset.
+    created_by_transform : str
+        Transform whose kept replays defined the manifest.
+    subsampled : bool
+        Whether this manifest is a ``--n_samples`` subset rather than the full split.
+    splits : dict[str, list[ReplayRef]]
+        Replays per split name (``train``, ``val``, ``test``), each sorted by index.
+    version : int
+        Manifest file format version.
+    """
+
     seed: int
     dataset_file: str
     n_source_replays: int
@@ -60,7 +115,15 @@ class SplitManifest:
         self.validate()
 
     def validate(self) -> None:
-        """Exact split names, no replay twice, indices in range and sorted."""
+        """
+        Check split names, disjointness, index range and ordering.
+
+        Raises
+        ------
+        SplitManifestError
+            If a split is missing or extra, a replay appears twice, an index is out
+            of range, or a split is not sorted by index.
+        """
         if set(self.splits) != set(SPLIT_NAMES):
             raise SplitManifestError(
                 f"Manifest must contain exactly {SPLIT_NAMES}, got {sorted(self.splits)}"
@@ -90,19 +153,69 @@ class SplitManifest:
 
     # Accessors:
     def refs(self, split: str) -> list[ReplayRef]:
+        """
+        Return the replays of one split.
+
+        Parameters
+        ----------
+        split : str
+            Split name: ``train``, ``val`` or ``test``.
+
+        Returns
+        -------
+        list[ReplayRef]
+            Replays of the split, sorted by index.
+        """
         return self.splits[split]
 
     def ids(self, split: str) -> list[str]:
+        """
+        Return the replay ids of one split.
+
+        Parameters
+        ----------
+        split : str
+            Split name: ``train``, ``val`` or ``test``.
+
+        Returns
+        -------
+        list[str]
+            Replay ids of the split, in index order.
+        """
         return [ref.replay_id for ref in self.splits[split]]
 
     def all_indices(self) -> list[int]:
+        """
+        Return the source indices of every replay in the manifest.
+
+        Returns
+        -------
+        list[int]
+            Indices across all splits, sorted.
+        """
         return sorted(ref.index for split in SPLIT_NAMES for ref in self.splits[split])
 
     def sizes(self) -> dict[str, int]:
+        """
+        Return the number of replays per split.
+
+        Returns
+        -------
+        dict[str, int]
+            Split name to replay count.
+        """
         return {split: len(self.splits[split]) for split in SPLIT_NAMES}
 
     # Persistence:
     def to_dict(self) -> dict:
+        """
+        Serialise the manifest to a JSON-compatible dictionary.
+
+        Returns
+        -------
+        dict
+            Manifest metadata and splits as lists of ``{"index", "replay_id"}``.
+        """
         return {
             "version": self.version,
             "seed": self.seed,
@@ -119,6 +232,24 @@ class SplitManifest:
 
     @classmethod
     def from_dict(cls, data: dict) -> SplitManifest:
+        """
+        Build a manifest from its dictionary form.
+
+        Parameters
+        ----------
+        data : dict
+            Dictionary as produced by :meth:`to_dict`.
+
+        Returns
+        -------
+        SplitManifest
+            The validated manifest.
+
+        Raises
+        ------
+        SplitManifestError
+            If the format version is unsupported or the manifest is invalid.
+        """
         if data.get("version") != MANIFEST_VERSION:
             raise SplitManifestError(
                 f"Unsupported manifest version {data.get('version')!r}; "
@@ -139,11 +270,34 @@ class SplitManifest:
         )
 
     def sha256(self) -> str:
-        """Content hash of the canonical JSON (membership + metadata)."""
+        """
+        Return a content hash of the manifest.
+
+        Returns
+        -------
+        str
+            SHA-256 hex digest of the canonical JSON; equal membership and metadata
+            give an equal hash.
+        """
         canonical = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def save(self, path: Path | str, overwrite: bool = False) -> None:
+        """
+        Write the manifest as JSON.
+
+        Parameters
+        ----------
+        path : Path | str
+            Destination file.
+        overwrite : bool
+            Allow replacing an existing file, by default False.
+
+        Raises
+        ------
+        FileExistsError
+            If ``path`` exists and ``overwrite`` is False.
+        """
         path = Path(path)
         if path.exists() and not overwrite:
             raise FileExistsError(
@@ -155,6 +309,24 @@ class SplitManifest:
 
     @classmethod
     def load(cls, path: Path | str) -> SplitManifest:
+        """
+        Read a manifest from JSON.
+
+        Parameters
+        ----------
+        path : Path | str
+            Manifest file.
+
+        Returns
+        -------
+        SplitManifest
+            The validated manifest.
+
+        Raises
+        ------
+        FileNotFoundError
+            If ``path`` does not exist.
+        """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(
@@ -164,6 +336,21 @@ class SplitManifest:
 
     # Operations:
     def check_matches_dataset(self, dataset_file: str, n_source_replays: int) -> None:
+        """
+        Check that the manifest was built for the given source dataset.
+
+        Parameters
+        ----------
+        dataset_file : str
+            File name of the source dataset in use.
+        n_source_replays : int
+            Number of replays in the source dataset in use.
+
+        Raises
+        ------
+        SplitManifestError
+            If the file name or replay count differs from the manifest.
+        """
         if (
             dataset_file != self.dataset_file
             or n_source_replays != self.n_source_replays
@@ -175,7 +362,25 @@ class SplitManifest:
             )
 
     def subsample(self, n_samples: int, seed: int) -> SplitManifest:
-        """Seeded subset drawn proportionally per split; assignment is unchanged."""
+        """
+        Return a seeded subset drawn proportionally from each split.
+
+        Split assignment is inherited unchanged, so a smoke-test cache uses the same
+        membership as the full one.
+
+        Parameters
+        ----------
+        n_samples : int
+            Total number of replays to keep. Values ``<= 0`` or ``>=`` the manifest
+            size return the manifest unchanged.
+        seed : int
+            Seed for the per-split random selection.
+
+        Returns
+        -------
+        SplitManifest
+            The subset, marked ``subsampled=True``.
+        """
         total = sum(self.sizes().values())
         if n_samples <= 0 or n_samples >= total:
             return self
@@ -203,9 +408,23 @@ class SplitManifest:
 
 
 def assign_splits(kept: list[ReplayRef], seed: int) -> dict[str, list[ReplayRef]]:
-    """Seeded random cut of the kept replays into exact 80/10/10.
+    """
+    Randomly cut the kept replays into exact 80/10/10 splits.
 
-    Depends only on which replays were kept and on ``seed``, not on extraction order.
+    The input is sorted by index before permuting, so the result depends only on
+    which replays were kept and on ``seed``, never on extraction order.
+
+    Parameters
+    ----------
+    kept : list[ReplayRef]
+        Replays kept by the transform that creates the manifest.
+    seed : int
+        Seed of the permutation.
+
+    Returns
+    -------
+    dict[str, list[ReplayRef]]
+        Replays per split name, each sorted by index.
     """
     ordered = sorted(kept, key=lambda ref: ref.index)
     n_total = len(ordered)

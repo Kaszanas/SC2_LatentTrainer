@@ -23,6 +23,21 @@ _METRIC_ATTR: dict[str, str] = {
 
 
 def _suggest_params(trial: optuna.Trial, spec: MethodSpec) -> dict:
+    """
+    Sample the hyperparameters of one method.
+
+    Parameters
+    ----------
+    trial : optuna.Trial
+        Active trial.
+    spec : MethodSpec
+        Method whose strategy defines the search space.
+
+    Returns
+    -------
+    dict
+        Strategy keyword arguments for this trial.
+    """
     match spec.strategy:
         case "linear":
             return {
@@ -69,14 +84,38 @@ def tune_method(
     seed: int,
     flow_checkpoint: Path | None,
 ) -> tuple[dict, float]:
-    """Run Optuna to find best hyperparameters for a single method.
+    """
+    Run Optuna to find the best hyperparameters of one method.
+
+    Parameters
+    ----------
+    spec : MethodSpec
+        Method to tune.
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_path : Path
+        Dense cache.
+    n_trials : int
+        Optuna trials per method.
+    n_samples : int
+        Samples per trial; 0 uses all.
+    n_steps : int
+        Waypoints per path.
+    top_k : int
+        Features per feedback table.
+    metric : str
+        Aggregate metric to maximise, e.g. ``"auc"``.
+    seed : int
+        Random seed.
+    flow_checkpoint : Path | None
+        Flow checkpoint for ``neural_flow``.
 
     Returns
     -------
     best_params : dict
-        Best hyperparameter values found.
+        Best hyperparameter values.
     best_value : float
-        Best metric value achieved.
+        Best metric value.
     """
     metric_attr = _METRIC_ATTR.get(metric, "auc_mean")
 
@@ -126,7 +165,37 @@ def tune_all_methods(
     seed: int,
     flow_checkpoint: Path | None,
 ) -> dict[str, dict]:
-    """Tune all methods and return a dict of {method_name: best_params}."""
+    """
+    Tune every method and collect the best parameters.
+
+    Parameters
+    ----------
+    method_specs : Sequence[MethodSpec]
+        Methods to tune.
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_path : Path
+        Dense cache.
+    n_trials : int
+        Optuna trials per method.
+    n_samples : int
+        Samples per trial; 0 uses all.
+    n_steps : int
+        Waypoints per path.
+    top_k : int
+        Features per feedback table.
+    metric : str
+        Aggregate metric to maximise, e.g. ``"auc"``.
+    seed : int
+        Random seed.
+    flow_checkpoint : Path | None
+        Flow checkpoint for ``neural_flow``.
+
+    Returns
+    -------
+    dict[str, dict]
+        Best parameters per method name.
+    """
     best: dict[str, dict] = {}
     for spec in method_specs:
         print(
@@ -153,7 +222,16 @@ def tune_all_methods(
 
 
 def save_config(best: dict[str, dict], output_path: Path) -> None:
-    """Save best hyperparameters as a JSON config file."""
+    """
+    Save the best hyperparameters as a JSON config.
+
+    Parameters
+    ----------
+    best : dict[str, dict]
+        Best parameters per method name.
+    output_path : Path
+        Destination JSON file.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(best, f, indent=2)
@@ -161,7 +239,19 @@ def save_config(best: dict[str, dict], output_path: Path) -> None:
 
 
 def load_config(config_path: Path) -> dict[str, dict]:
-    """Load hyperparameter config from a JSON file."""
+    """
+    Load a hyperparameter config from JSON.
+
+    Parameters
+    ----------
+    config_path : Path
+        JSON file written by :func:`save_config`.
+
+    Returns
+    -------
+    dict[str, dict]
+        Parameters per method name.
+    """
     with open(config_path, encoding="utf-8") as f:
         return json.load(f)
 
@@ -169,7 +259,21 @@ def load_config(config_path: Path) -> dict[str, dict]:
 def apply_config(
     specs: Sequence[MethodSpec], config: dict[str, dict]
 ) -> list[MethodSpec]:
-    """Override MethodSpec params with values from a loaded config."""
+    """
+    Override method parameters with values from a loaded config.
+
+    Parameters
+    ----------
+    specs : Sequence[MethodSpec]
+        Methods to update.
+    config : dict[str, dict]
+        Parameters per method name.
+
+    Returns
+    -------
+    list[MethodSpec]
+        Updated copies; methods absent from the config are unchanged.
+    """
     result = []
     for spec in specs:
         if spec.name in config:

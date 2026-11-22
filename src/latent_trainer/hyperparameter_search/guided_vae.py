@@ -1,4 +1,5 @@
-"""Guided-VAE pipeline HPO and best-trial retraining.
+"""
+Guided-VAE pipeline HPO and best-trial retraining.
 
 Provides two entry-points for the supervised Guided-VAE pipeline:
 
@@ -34,16 +35,23 @@ logger = logging.getLogger(__name__)
 
 
 def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Study:
-    """Run a Ray Tune + Optuna parallel HPO sweep for the Guided-VAE pipeline.
+    """
+    Run a parallel Ray Tune + Optuna sweep for the guided VAE.
 
-    Raw tensors are pre-placed in the Ray object store so that each worker
-    can build its own DataLoaders with the trial-specific batch size.
-    All trial runs are nested under a parent MLFlow run.
+    Tensors are placed in the Ray object store so each trial builds its own
+    dataloaders with its sampled batch size. Trials are nested under a parent
+    MLflow run; the objective is the weighted sum of validation metrics in
+    ``config.hpo_objective_weights``.
+
+    Parameters
+    ----------
+    config : ExperimentConfig
+        Sweep configuration.
 
     Returns
     -------
     optuna.Study
-        Completed study for further analysis / logging.
+        The completed study.
     """
     data = load_and_normalize(DATA_DIR / config.dataset_filename)
     input_dim = data.train_X.shape[-1]
@@ -152,15 +160,16 @@ def run_guided_vae_hyperparameter_search(config: ExperimentConfig) -> optuna.Stu
 
 
 def run_guided_vae_best(config: ExperimentConfig) -> None:
-    """Load params from MLflow and run a full Guided-VAE training.
+    """
+    Load parameters from MLflow and run a full guided VAE training.
 
-    Source priority:
-    - ``config.mlflow_source_run`` set → reads from that named run.
-    - not set → reads from the most recent ``best_trial_summary`` run
-      (tagged ``source=optuna_best_trial``) in the source experiment.
+    Parameters come from ``config.mlflow_source_run`` if set, otherwise from
+    the most recent ``best_trial_summary`` run (tag ``source=optuna_best_trial``).
 
-    Uses all training epochs (``config.guided_vae_epochs``) and writes
-    checkpoints + MLFlow artifacts via :func:`train_guided_pipeline`.
+    Parameters
+    ----------
+    config : ExperimentConfig
+        Run configuration, including the MLflow source and epochs.
     """
     pl.seed_everything(SEED)
 

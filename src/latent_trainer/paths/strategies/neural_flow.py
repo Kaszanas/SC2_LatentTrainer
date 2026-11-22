@@ -12,7 +12,8 @@ def path_neural_flow(
     flow_model: LitOTFlowMatching,
     n_waypoints: int = 20,
 ) -> np.ndarray:
-    """Generate a counterfactual path via Euler integration of the learned velocity field.
+    """
+    Generate a counterfactual path via Euler integration of the learned velocity field.
 
     Parameters
     ----------

@@ -1,4 +1,5 @@
-"""Dense feature caches (rich / granular / averaged_economy) for the guided VAE.
+"""
+Dense feature caches (rich / granular / averaged_economy) for the guided VAE.
 
 Split membership comes from ``splits.json`` (see ``features/splits.py``); run via
 ``python -m latent_trainer.features``.
@@ -48,7 +49,23 @@ def _transform_single_object(
     index: int,
     transform_fn: Callable,
 ) -> tuple[torch.Tensor, torch.Tensor] | None | Exception:
+    """
+    Load one replay and run it through :func:`process_replay`, capturing errors.
 
+    Parameters
+    ----------
+    dataset_object : DataLoader
+        Indexable dataset returning ``SC2ReplayData``.
+    index : int
+        Index into ``dataset_object``.
+    transform_fn : Callable
+        Dense transform returning ``(features, label)`` or None.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor] | None | Exception
+        ``(features, label)``, None if skipped, or the raised exception.
+    """
     try:
         replay = dataset_object[index]
 
@@ -69,7 +86,22 @@ def process_replay(
     replay: SC2ReplayData,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, int]],
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
-    """Apply transform and return (features, label) or None."""
+    """
+    Apply a dense transform, skipping replays without a decided outcome.
+
+    Parameters
+    ----------
+    replay : SC2ReplayData
+        Replay to transform.
+    transform_fn : Callable[[SC2ReplayData], tuple[torch.Tensor, int]]
+        Transform returning ``(features, label)`` or None.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor] | None
+        ``(features, label)``, or None if the transform skipped the replay or the
+        label is -1 (draw/tie/undecided).
+    """
     # Rich transform takes the raw replay directly
     result = transform_fn(replay)
 
@@ -98,6 +130,28 @@ class TransformEnumFunction(click.Choice):
     }
 
     def convert(self, value, param, ctx):
+        """
+        Map a ``--transform`` choice to its transform function.
+
+        Parameters
+        ----------
+        value : str
+            Choice name.
+        param : click.Parameter | None
+            The option being converted.
+        ctx : click.Context | None
+            Current click context.
+
+        Returns
+        -------
+        Callable
+            The transform function.
+
+        Raises
+        ------
+        click.BadParameter
+            If ``value`` is not a known transform.
+        """
         match value:
             case "rich":
                 return rich_transform
@@ -117,8 +171,23 @@ def _transform_index_chunk(
     indices: list[int],
     transform_fn: Callable,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
-    """Process a contiguous chunk of replay indices in one worker call."""
+    """
+    Process a contiguous chunk of replay indices in one worker call.
 
+    Parameters
+    ----------
+    dataset_object : DataLoader
+        Indexable dataset returning ``SC2ReplayData``.
+    indices : list[int]
+        Indices of the chunk.
+    transform_fn : Callable
+        Dense transform returning ``(features, label)`` or None.
+
+    Returns
+    -------
+    tuple[list[torch.Tensor], list[torch.Tensor], int, int]
+        Features, labels, number skipped and number of errors.
+    """
     set_features: list[torch.Tensor] = []
     set_labels: list[torch.Tensor] = []
     skipped = 0
@@ -157,11 +226,33 @@ def process_set_chunked_single_pool(
     max_inflight_tasks: int | None = None,
     set_name: str = "train",
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
-    """Alternative fast path: chunked index tasks with one persistent process pool.
+    """
+    Transform one split with chunked tasks on a single persistent process pool.
 
-    This function is meant for profiling/benchmarking against ``process_set``.
-    It avoids recreating process pools and reduces scheduling overhead by
-    submitting chunks of indices as single tasks.
+    Results are collected in completion order, so row order is not
+    reproducible; only the ``--test_only`` path uses this.
+
+    Parameters
+    ----------
+    dataset_object : DataLoader
+        Indexable dataset returning ``SC2ReplayData``.
+    executor : ProcessPoolExecutor | ThreadPoolExecutor
+        Executor class to instantiate.
+    transform_fn : Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]]
+        Dense transform, by default None.
+    n_workers : int
+        Worker processes, by default 8.
+    chunk_size : int
+        Indices per task, by default 256.
+    max_inflight_tasks : int | None
+        Cap on submitted-but-unfinished tasks; None uses ``1.1 * n_workers``.
+    set_name : str
+        Progress bar label, by default "train".
+
+    Returns
+    -------
+    tuple[list[torch.Tensor], list[torch.Tensor], int, int]
+        Features, labels, number skipped and number of errors.
     """
     if max_inflight_tasks is None:
         max_inflight_tasks = max(2, int(n_workers * 1.1))
@@ -234,16 +325,34 @@ def preprocess_dataset_test_only(
     n_samples: int = 0,
     seed: int = 42,
 ) -> None:
-    """Extract a test-only cached dataset from any SC2EGSet JSON file.
+    """
+    Extract a test-only cache from any SC2EGSet JSON file.
 
-    Pools all available indices (train + val + test splits), optionally
-    subsamples *n_samples* of them, processes every selected replay through
-    the transform, and stores the result exclusively in the ``test_features``
-    / ``test_labels`` fields.  ``train_*`` and ``val_*`` tensors are left
-    empty.
+    Pools all indices (train + val + test of the library split), optionally
+    subsamples ``n_samples``, and stores the result only in ``test_*``; train and
+    val are empty. Intended for evaluating on an independent dataset; do not use
+    it on the training JSON, since it includes training replays.
 
-    Use this when you already have a trained model and want to evaluate
-    path-charting on an independent dataset without re-splitting it 80/10/10.
+    Parameters
+    ----------
+    transform_name : str
+        Transform name used in the output file name.
+    transform_fn : Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]]
+        Dense transform returning ``(features, label)`` or None.
+    single_json_dataset_path : Path | str
+        Path to the single-JSON file.
+    output_directory : Path | str
+        Directory for the cache file, by default ``DATA_DIR``.
+    n_workers : int
+        Worker processes, by default 8.
+    chunk_size : int
+        Indices per task, by default 64.
+    max_inflight_tasks : int | None
+        Cap on in-flight tasks, by default None.
+    n_samples : int
+        Number of valid replays to collect; 0 uses all, by default 0.
+    seed : int
+        Seed for the sampling order, by default 42.
     """
     logging.info(
         "SC2EGSet Dataset Pre-processing (test-only): "
@@ -373,7 +482,37 @@ def preprocess_dataset(
     n_samples: int = 0,
     seed: int = 42,
 ) -> None:
-    """Build ``cached_dataset_<transform>[_<n>].pt`` with splits from ``splits.json``."""
+    """
+    Build ``cached_dataset_<transform>[_<n>].pt`` with splits from ``splits.json``.
+
+    Parameters
+    ----------
+    transform_name : str
+        Transform name used in the output file name.
+    transform_fn : Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]]
+        Dense transform returning ``(features, label)`` or None.
+    single_json_dataset_path : Path | str
+        Path to the single-JSON SC2EGSet file.
+    splits_path : Path | str
+        Location of ``splits.json``.
+    create_splits : bool
+        Create the manifest from the replays this run keeps, by default False.
+    output_directory : Path | str
+        Directory for the cache file, by default ``DATA_DIR``.
+    n_workers : int
+        Worker processes, by default 8.
+    chunk_size : int
+        Replays per worker task, by default 64.
+    n_samples : int
+        If > 0, extract a seeded subset, by default 0.
+    seed : int
+        Seed for split creation and sampling, by default 42.
+
+    Raises
+    ------
+    ValueError
+        If a split ends up empty.
+    """
     logging.info(
         f"SC2EGSet dense pre-processing: transform={transform_name}, "
         f"n_workers={n_workers}, chunk_size={chunk_size}, n_samples={n_samples}"

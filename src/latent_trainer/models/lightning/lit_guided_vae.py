@@ -1,3 +1,5 @@
+"""Lightning module training the guided VAE with adversarial disentanglement."""
+
 from __future__ import annotations
 
 import lightning as pl
@@ -10,7 +12,38 @@ from latent_trainer.models.losses import loss_supervised
 
 
 class LitGuidedVAE(pl.LightningModule):
-    """Lightning module for supervised Guided VAE training with adversarial disentanglement."""
+    """
+    Lightning module for supervised guided VAE training.
+
+    Uses manual optimisation with three optimizers per step: (1) the VAE on
+    reconstruction + KL + weighted outcome BCE, (2) the adversary on the detached
+    free dims, (3) the VAE to push the adversary towards 0.5.
+
+    Parameters
+    ----------
+    input_dim : int
+        Input features per player.
+    encoder_hidden_dims : list[int]
+        Encoder hidden widths; the decoder mirrors them.
+    supervised_dim : int
+        Latent dims per player used by the outcome classifier.
+    latent_dim : int
+        Size of the latent distribution per player.
+    learning_rate : float
+        Learning rate of the VAE and adversarial optimizers, by default 1e-4.
+    weight_decay : float
+        Weight decay of the VAE and adversarial optimizers, by default 1e-5.
+    learning_rate_cls : float
+        Learning rate of the adversary's optimizer, by default 1e-4.
+    weight_decay_cls : float
+        Weight decay of the adversary's optimizer, by default 1e-4.
+    classification_weight : float
+        Weight of the outcome and adversarial BCE terms, by default 50.0.
+    mean : torch.Tensor | None
+        Training feature mean, stored as a buffer for inference, by default None.
+    std : torch.Tensor | None
+        Training feature std, stored as a buffer for inference, by default None.
+    """
 
     def __init__(
         self,
@@ -26,36 +59,6 @@ class LitGuidedVAE(pl.LightningModule):
         mean: torch.Tensor | None = None,
         std: torch.Tensor | None = None,
     ) -> None:
-        """Initialise the LitGuidedVAE module.
-
-        Parameters
-        ----------
-        input_dim:
-            Input feature dimension (depends on the transform used).
-        encoder_hidden_dims:
-            Hidden layer widths for the encoder.  The decoder mirrors these in
-            reverse order.  Defaults to ``[64, 128, 256, 512]``.
-        supervised_dim:
-            Number of latent dims (per player) reserved for supervised
-            classification.  The remaining ``latent_dim - supervised_dim`` dims are
-            adversarially disentangled.
-        latent_dim:
-            Size of the VAE latent distribution.
-        learning_rate:
-            Learning rate for the VAE and adversarial optimizers.
-        weight_decay:
-            Weight decay for the VAE optimizer.
-        learning_rate_cls:
-            Learning rate for the classifier optimizer.
-        weight_decay_cls:
-            Weight decay for the classifier optimizer.
-        classification_weight:
-            Weight for the classification loss.
-        mean:
-            Optional pre-computed training data mean for input normalisation.
-        std:
-            Optional pre-computed training data std for input normalisation.
-        """
         super().__init__()
         self.save_hyperparameters()
 
@@ -99,10 +102,24 @@ class LitGuidedVAE(pl.LightningModule):
     # Helpers
     @staticmethod
     def _prepare_label(label: torch.Tensor) -> torch.Tensor:
-        """Coerce label dtype/shape and assert all values are valid (0 or 1).
+        """
+        Coerce labels to ``[B, 1]`` float32 and check they are 0 or 1.
 
-        Returns ``[batch, 1]`` float32 tensor.  Raises ``ValueError`` if any
-        label is outside {0, 1} — invalid samples must be filtered upstream.
+        Parameters
+        ----------
+        label : torch.Tensor
+            Labels ``[B]`` or ``[B, 1]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Labels as ``[B, 1]`` float32.
+
+        Raises
+        ------
+        ValueError
+            If any label is outside ``[0, 1]``; invalid samples must be filtered
+            upstream.
         """
         if label.dtype != torch.float32:
             label = label.float()
@@ -117,13 +134,18 @@ class LitGuidedVAE(pl.LightningModule):
         return label
 
     def _slice_free_dims(self, z: torch.Tensor) -> torch.Tensor:
-        """Slice the free (non-supervised) latent dimensions from ``z``.
+        """
+        Slice the free (non-supervised) latent dims passed to the adversary.
 
-        The latent space is partitioned as:
-          ``z[:supervised_dim]``  — supervised dims, used by the internal VAE classifier
-          ``z[supervised_dim:]``  — free dims, passed to the adversarial classifier
+        Parameters
+        ----------
+        z : torch.Tensor
+            Latents ``[B, latent_dim]`` or ``[B, 2, latent_dim]``.
 
-        Handles both 2-D ``[batch, latent]`` and 3-D ``[batch, players, latent]`` inputs.
+        Returns
+        -------
+        torch.Tensor
+            ``z[..., supervised_dim:]``.
         """
         # 3-D: per-player latents [batch, players, latent] → slice last dim
         # 2-D: flat latents [batch, latent] → slice last dim
@@ -135,9 +157,37 @@ class LitGuidedVAE(pl.LightningModule):
 
     # Forward / training / validation
     def forward(self, x: torch.Tensor):  # noqa: D401
+        """
+        Run the underlying :class:`suGuidedVAE`.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Features ``[B, 2, F]``.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+            ``(reconstruction, mu, logvar, win_probability)``.
+        """
         return self.model(x)
 
     def training_step(self, batch, batch_idx: int):
+        """
+        Run the three optimisation steps on one batch.
+
+        Parameters
+        ----------
+        batch : tuple[torch.Tensor, torch.Tensor]
+            ``(features [B, 2, F], labels [B])``.
+        batch_idx : int
+            Index of the batch in the epoch.
+
+        Returns
+        -------
+        torch.Tensor
+            Sum of the three losses (for logging; optimisation is manual).
+        """
         data, label = batch[0], batch[1]
         valid_data = data
         valid_label = self._prepare_label(label=label)
@@ -221,12 +271,28 @@ class LitGuidedVAE(pl.LightningModule):
         return vae_total + adversarial_classification_loss + adv_loss
 
     def on_train_epoch_end(self) -> None:
+        """Step the three cosine LR schedulers."""
         sch1, sch2, sch3 = self.lr_schedulers()
         sch1.step()
         sch2.step()
         sch3.step()
 
     def validation_step(self, batch, batch_idx):
+        """
+        Compute and log ``val_loss``, ``val_vae_loss``, ``val_cls_loss`` and ``val_acc``.
+
+        Parameters
+        ----------
+        batch : tuple[torch.Tensor, torch.Tensor]
+            ``(features [B, 2, F], labels [B])``.
+        batch_idx : int
+            Index of the batch in the epoch.
+
+        Returns
+        -------
+        torch.Tensor
+            VAE loss plus weighted classification loss.
+        """
         data, label = batch[0], batch[1]
         valid_data = data
         valid_label = self._prepare_label(label)
@@ -248,9 +314,37 @@ class LitGuidedVAE(pl.LightningModule):
         return total_loss
 
     def test_step(self, batch, batch_idx):
+        """
+        Evaluate a test batch exactly like a validation batch.
+
+        Parameters
+        ----------
+        batch : tuple[torch.Tensor, torch.Tensor]
+            ``(features [B, 2, F], labels [B])``.
+        batch_idx : int
+            Index of the batch.
+
+        Returns
+        -------
+        torch.Tensor
+            VAE loss plus weighted classification loss.
+        """
         return self.validation_step(batch, batch_idx)
 
     def configure_optimizers(self):
+        """
+        Create the VAE, adversary and adversarial optimizers with cosine schedulers.
+
+        Returns
+        -------
+        tuple[list[torch.optim.Optimizer], list[torch.optim.lr_scheduler.LRScheduler]]
+            Three AdamW optimizers and their ``CosineAnnealingLR`` schedulers.
+
+        Raises
+        ------
+        ValueError
+            If the trainer has no ``max_epochs`` (needed for ``T_max``).
+        """
         if not self.trainer.max_epochs:
             raise ValueError(
                 "Trainer max_epochs must be set for LR scheduler configuration."

@@ -1,4 +1,5 @@
-"""APA 7th edition LaTeX table generation for comparison results.
+"""
+APA 7th edition LaTeX table generation for comparison results.
 
 Uses raw f-string templates with booktabs for precise formatting control.
 """
@@ -15,13 +16,44 @@ from latent_trainer.paths.compare.aggregate import MethodStats
 
 
 def _fmt(value: float, decimals: int = 3) -> str:
+    """
+    Format a number to fixed decimals, or an em dash for NaN.
+
+    Parameters
+    ----------
+    value : float
+        Value to format.
+    decimals : int
+        Decimal places, by default 3.
+
+    Returns
+    -------
+    str
+        Formatted value.
+    """
     if math.isnan(value):
         return "—"
     return f"{value:.{decimals}f}"
 
 
 def format_mean_sd(mean: float, sd: float, decimals: int = 3) -> str:
-    """Format mean ± SD, e.g. '0.732 ± 0.041'."""
+    """
+    Format a mean and SD for LaTeX, e.g. ``0.732 ± 0.041`` using the LaTeX ``pm`` sign.
+
+    Parameters
+    ----------
+    mean : float
+        Mean; NaN gives an em dash.
+    sd : float
+        Standard deviation; NaN prints the mean alone.
+    decimals : int
+        Decimal places, by default 3.
+
+    Returns
+    -------
+    str
+        Formatted string.
+    """
     if math.isnan(mean):
         return "—"
     if math.isnan(sd):
@@ -38,9 +70,32 @@ def write_summary_table(
     caption: str = "Comparison of Latent-Space Path-Charting Strategies",
     note: str | None = None,
 ) -> Path:
-    """Write an APA 7 summary table to a .tex file.
+    """
+    Write the APA 7 method summary table to a ``.tex`` file.
 
-    Columns: Method | Success rate | Crossover α | ΔP(win) | AUC | Monotonicity | Nearest-win dist. (end) | Feature path len. | Features changed | Path KDE | Time (s)
+    Columns: method, success rate, crossover alpha, delta P(win), AUC,
+    monotonicity, nearest-win distance (end), feature path length, features
+    changed, path KDE and time.
+
+    Parameters
+    ----------
+    stats : Sequence[MethodStats]
+        Per-method statistics.
+    output_path : Path
+        Destination ``.tex`` file.
+    n_samples : int | None
+        Sample count stated in the table note, by default None.
+    label : str
+        LaTeX label, by default ``"tab:path-comparison"``.
+    caption : str
+        Table caption.
+    note : str | None
+        Extra table note, by default None.
+
+    Returns
+    -------
+    Path
+        ``output_path``.
     """
     # n_note = f"$N = {n_samples}$ samples." if n_samples is not None else ""
     # default_note = (
@@ -131,7 +186,28 @@ def write_jaccard_table(
     label: str = "tab:jaccard",
     caption: str = "Feature Agreement Across Path-Charting Methods (Jaccard Similarity)",
 ) -> Path:
-    """Write a Jaccard similarity matrix as an APA 7 table."""
+    """
+    Write a Jaccard similarity matrix as an APA 7 table.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Matrix from :func:`jaccard_between_methods`.
+    output_path : Path
+        Destination ``.tex`` file.
+    signal : str
+        Feedback signal the matrix was computed on (``raw``, ``mv`` or
+        ``weighted``), by default "raw".
+    label : str
+        LaTeX label, by default ``"tab:jaccard"``.
+    caption : str
+        Table caption.
+
+    Returns
+    -------
+    Path
+        ``output_path``.
+    """
     n = len(df)
     col_spec = "l" + "c" * n
     col_header = " & ".join([""] + [f"\\textbf{{{c}}}" for c in df.columns]) + r" \\"

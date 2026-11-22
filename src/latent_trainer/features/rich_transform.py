@@ -1,4 +1,5 @@
-"""Rich feature transform for SC2 replays.
+"""
+Rich feature transform for SC2 replays.
 
 Extracts a comprehensive feature vector per player including:
 - Temporal economy snapshots (early/mid/late game, by event-index fraction of
@@ -48,8 +49,19 @@ DEFAULT_FEATURE_BLOCKS: tuple[str, ...] = ALL_FEATURE_BLOCKS
 
 
 def _get_stats_values(stats_obj) -> list:
-    """Extract float values from a Stats object."""
+    """
+    Extract the PlayerStats values in canonical channel order.
 
+    Parameters
+    ----------
+    stats_obj : Stats
+        ``PlayerStats.stats`` object of a tracker event.
+
+    Returns
+    -------
+    list
+        Float values ordered by ``SORTED_PLAYERSTATS_KEYS``.
+    """
     stats_dict = stats_obj.__dict__
     return_value = []
     for key in SORTED_PLAYERSTATS_KEYS:
@@ -108,7 +120,6 @@ def _temporal_snapshot(
     np.ndarray
         Averaged stats values over the specified time window, or zeros if no events in window.
     """
-
     n = len(events)
     start_idx = int(start_frac * n)
     end_idx = max(int(end_frac * n), start_idx + 1)
@@ -121,21 +132,20 @@ def _temporal_snapshot(
 
 def _count_units_born(sc2_replay: SC2ReplayData, player_id: int) -> int:
     """
-    Counts the UnitBorn events for a given player.
+    Count the UnitBorn events for a given player.
 
     Parameters
     ----------
     sc2_replay : SC2ReplayData
-        Parsed SC2 replay data containing tracker events.
+        Parsed replay containing tracker events.
     player_id : int
-        ID of the player to count units for.
+        Player to count units for.
 
     Returns
     -------
     int
-        Number of units born for the specified player.
+        Number of units born under the player's control.
     """
-
     count = 0
     for event in sc2_replay.trackerEvents:
         if type(event).__name__ == "UnitBorn":
@@ -146,19 +156,19 @@ def _count_units_born(sc2_replay: SC2ReplayData, player_id: int) -> int:
 
 def _count_units_died_by_opponent(sc2_replay: SC2ReplayData, player_id: int) -> int:
     """
-    Counts the UnitDied events where the opponent killed this player's units.
+    Count the UnitDied events whose killer is the given player.
 
     Parameters
     ----------
     sc2_replay : SC2ReplayData
-        Parsed SC2 replay data containing tracker events.
+        Parsed replay containing tracker events.
     player_id : int
-        ID of the player to count units for.
+        Player credited with the kills.
 
     Returns
     -------
     int
-        Number of units killed by the opponent for the specified player.
+        Number of enemy units killed by the player.
     """
     count = 0
     for event in sc2_replay.trackerEvents:
@@ -172,21 +182,20 @@ def _count_units_died_by_opponent(sc2_replay: SC2ReplayData, player_id: int) -> 
 
 def _count_upgrades(sc2_replay: SC2ReplayData, player_id: int) -> int:
     """
-    Counts the Upgrade events for a given player.
+    Count the Upgrade events for a given player.
 
     Parameters
     ----------
     sc2_replay : SC2ReplayData
-        Parsed SC2 replay data containing tracker events.
+        Parsed replay containing tracker events.
     player_id : int
-        ID of the player to count upgrades for.
+        Player to count upgrades for.
 
     Returns
     -------
     int
-        Number of upgrades for the specified player.
+        Number of upgrade events of the player.
     """
-
     count = 0
     for event in sc2_replay.trackerEvents:
         if isinstance(event, Upgrade) and event.playerId == player_id:
@@ -214,7 +223,6 @@ def _get_player_info(
     ToonPlayerDesc | None
         ToonPlayerDesc object containing player information, or None if not found.
     """
-
     for toon_desc in sc2_replay.toonPlayerDescMap:
         if toon_desc.toon_player_info.playerID == player_id:
             return toon_desc.toon_player_info
@@ -235,7 +243,6 @@ def _get_outcome(sc2_replay: SC2ReplayData) -> int | None:
     Optional[int]
         Game outcome for player 1 (0=loss, 1=win), or None to skip if undecided/draw.
     """
-
     result_map = {"Loss": 0, "Win": 1, "Victory": 1, "Defeat": 0}
     skip_results = {"Undecided", "Draw", "Tie"}
 
@@ -259,7 +266,31 @@ def prepare_player_features(
     game_duration: float,
     feature_blocks: tuple[str, ...] = DEFAULT_FEATURE_BLOCKS,
 ) -> Optional[np.ndarray]:
+    """
+    Build one player's ``rich`` feature vector.
 
+    Blocks, concatenated in canonical order: ``early``/``mid``/``late`` (mean
+    stats over the 0-33%, 33-67% and 67-100% index ranges of the player's own
+    tick stream, 39 each), ``final`` (last tick, 39), ``econDelta`` (late - early,
+    39) and ``meta`` (supply-capped percent, 1).
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed replay.
+    player_id : int
+        Player to build features for (1 or 2).
+    game_duration : float
+        Game length in loops; currently not part of the output.
+    feature_blocks : tuple[str, ...]
+        Blocks to include, by default all of ``ALL_FEATURE_BLOCKS``.
+
+    Returns
+    -------
+    Optional[np.ndarray]
+        Feature vector (196 values with all blocks), or None if the player has
+        no stats or player info.
+    """
     # 1. Temporal economy snapshots
     events = _get_player_stats_timeseries(
         sc2_replay=sc2_replay,
@@ -360,18 +391,23 @@ def rich_transform(
     sc2_replay: SC2ReplayData,
     feature_blocks: tuple[str, ...] = DEFAULT_FEATURE_BLOCKS,
 ) -> Tuple[torch.Tensor, int] | None:
-    """Extract rich features from an SC2 replay.
+    """
+    Extract ``rich`` features for both players of a replay.
 
     Parameters
     ----------
+    sc2_replay : SC2ReplayData
+        Parsed replay.
     feature_blocks : tuple[str, ...]
-        Which of ``ALL_FEATURE_BLOCKS`` to include in the output vector.
-        Defaults to all blocks (196 features/player). Pass a reduced set,
-        e.g. ``("early", "mid", "meta")``, to exclude the leakage-prone
+        Blocks of ``ALL_FEATURE_BLOCKS`` to include, by default all (196 per
+        player). E.g. ``("early", "mid", "meta")`` excludes the leakage-prone
         ``final``/``late``/``econDelta`` blocks.
 
-    Returns:
-        Tuple of (features_tensor [2, N_features], label) or None to skip.
+    Returns
+    -------
+    Tuple[torch.Tensor, int] | None
+        ``(features [2, F], label)`` with label 1 if player 1 won, or None to
+        skip (undecided, shorter than 4032 loops, or missing stats).
     """
     # Get outcome
     label = _get_outcome(sc2_replay=sc2_replay)
@@ -427,8 +463,24 @@ def prepare_player_features_granular(
     player_id: int,
     n_bins: int = N_GRANULAR_BINS,
 ) -> Optional[np.ndarray]:
-    """Build a [meta(1), bin0(39), ..., bin{n_bins-1}(39)] vector for one player."""
+    """
+    Build one player's ``[meta(1), bin0(39), ..., bin{n_bins-1}(39)]`` vector.
 
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed replay.
+    player_id : int
+        Player to build features for (1 or 2).
+    n_bins : int
+        Equal-width bins over the player's tick stream, by default 20.
+
+    Returns
+    -------
+    Optional[np.ndarray]
+        Feature vector of length ``1 + 39 * n_bins``, or None if stats or player
+        info are missing.
+    """
     events = _get_player_stats_timeseries(sc2_replay=sc2_replay, player_id=player_id)
     if not events:
         return None
@@ -458,14 +510,23 @@ def rich_transform_granular(
     sc2_replay: SC2ReplayData,
     n_bins: int = N_GRANULAR_BINS,
 ) -> Tuple[torch.Tensor, int] | None:
-    """Extract the fine-grained 5%-bin feature vector from an SC2 replay.
+    """
+    Extract the fine-grained binned feature vector for both players.
 
-    Output shape: [2, 1 + n_bins * 39] per replay (meta + n_bins temporal
-    bins). Use the contiguous prefix ``X[..., : 1 + k * 39]`` at training
-    time to select "the first k bins of the game" without reprocessing.
+    Use the prefix ``X[..., : 1 + k * 39]`` at training time to select the first
+    ``k`` bins of the game without reprocessing.
 
-    Returns:
-        Tuple of (features_tensor [2, N_features], label) or None to skip.
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed replay.
+    n_bins : int
+        Number of bins, by default 20 (5% of the game each).
+
+    Returns
+    -------
+    Tuple[torch.Tensor, int] | None
+        ``(features [2, 1 + n_bins * 39], label)``, or None to skip.
     """
     label = _get_outcome(sc2_replay=sc2_replay)
     if label is None:

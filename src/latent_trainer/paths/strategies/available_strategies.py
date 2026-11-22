@@ -1,4 +1,5 @@
-"""Latent-space path generation strategies.
+"""
+Latent-space path generation strategies.
 
 Path-generation strategies for counterfactual improvement paths through a
 model's latent space.  All strategies return numpy arrays of shape

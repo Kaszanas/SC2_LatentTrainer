@@ -1,4 +1,5 @@
-"""Three-signal feedback analysis for latent-space paths.
+"""
+Three-signal feedback analysis for latent-space paths.
 
 Given a path through latent space (from any strategy) and a decoder +
 score function, computes three complementary feedback signals:
@@ -32,35 +33,36 @@ def compute_feedback(
     method_name: str = "",
     device: torch.device | None = None,
 ) -> dict:
-    """Compute three-signal feedback along a latent-space path.
+    """
+    Compute three-signal feedback along a latent-space path.
 
     Parameters
     ----------
-    path_z:
-        Path waypoints, shape ``(n_waypoints, latent_dim)``.
-    decode_fn:
-        ``z (N, D) → x_hat (N, F)`` — decodes latent codes to normalised
-        feature space.  Called inside ``torch.no_grad()``.
-    score_fn:
-        ``z (N, D) → P(win) (N,)`` or ``(N, 1)`` — win probability.
-        Called inside ``torch.no_grad()``.
-    norm_mean:
-        Per-feature mean used during normalisation, shape ``(1, F)`` or ``(F,)``.
-    norm_std:
-        Per-feature std used during normalisation, shape ``(1, F)`` or ``(F,)``.
-    feature_names:
-        Human-readable feature names, length ``F``.
-    top_k:
-        Number of top features to include in the ranked tables.
-    method_name:
-        Label for this path method (e.g. ``"OT"``, ``"GA"``).
+    path_z : np.ndarray
+        Path waypoints, ``[n_waypoints, latent_dim]``.
+    decode_fn : Callable[[torch.Tensor], torch.Tensor]
+        ``z [N, D] -> x_hat [N, F]`` in normalised feature space; called under
+        ``torch.no_grad()``.
+    score_fn : Callable[[torch.Tensor], torch.Tensor]
+        ``z [N, D] -> P(win)`` of shape ``[N]`` or ``[N, 1]``.
+    norm_mean : np.ndarray | torch.Tensor
+        Training feature mean, ``[1, F]`` or ``[F]``.
+    norm_std : np.ndarray | torch.Tensor
+        Training feature std, ``[1, F]`` or ``[F]``.
+    feature_names : list[str]
+        Feature names, length ``F``.
+    top_k : int
+        Features in each ranked table, by default 10.
+    method_name : str
+        Label of the path method, e.g. ``"OT"``, by default "".
+    device : torch.device | None
+        Device the path is moved to before decoding, by default None.
 
     Returns
     -------
     dict
-        Keys include ``raw``, ``minimum_viable``, ``gain_weighted``
-        (ranked tables), raw arrays (``_raw_delta``, etc.), and
-        P(win) values (``_p_vals``).
+        Ranked tables ``raw``, ``minimum_viable`` and ``gain_weighted`` with
+        their labels, plus raw arrays (``_raw_delta`` etc.) and ``_p_vals``.
     """
     if isinstance(norm_mean, torch.Tensor):
         norm_mean = norm_mean.cpu().numpy()
@@ -147,7 +149,16 @@ def compute_feedback(
 
 
 def print_feedback_report(feedback: dict, *, top_k: int = 10) -> None:
-    """Pretty-print the three-signal feedback table to stdout."""
+    """
+    Print the three ranked feedback tables to stdout.
+
+    Parameters
+    ----------
+    feedback : dict
+        Output of :func:`compute_feedback`.
+    top_k : int
+        Rows printed per table, by default 10.
+    """
     method = feedback.get("method", "")
     header = f"  {'Feature':<22}  {'Current':>9}  {'Target':>9}  {'Delta':>9}"
     sep = "  " + "-" * 54

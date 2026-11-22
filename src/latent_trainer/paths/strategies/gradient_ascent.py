@@ -1,3 +1,5 @@
+"""Gradient ascent on P(win) regularised by latent density."""
+
 from __future__ import annotations
 
 from typing import Callable
@@ -11,7 +13,23 @@ def _kde_log_density(
     Z_ref: torch.Tensor,
     bandwidth: float,
 ) -> torch.Tensor:
-    """Differentiable Gaussian KDE log-density, fully on-device."""
+    """
+    Differentiable Gaussian KDE log-density (up to a constant), on device.
+
+    Parameters
+    ----------
+    z : torch.Tensor
+        Query point, ``[D]``.
+    Z_ref : torch.Tensor
+        Reference points, ``[N, D]``.
+    bandwidth : float
+        Gaussian kernel bandwidth.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar log-density.
+    """
     diffs = z.unsqueeze(0) - Z_ref  # (N, D)
     return torch.logsumexp(-0.5 * (diffs / bandwidth).pow(2).sum(-1), dim=0)
 
@@ -31,10 +49,49 @@ def path_gradient_ascent(
     convergence_threshold: float = 0.95,
     device: torch.device | None = None,
 ) -> np.ndarray:
-    """Gradient ascent on P(win) regularised by a differentiable KDE density.
+    """
+    Climb P(win) with momentum, regularised by a differentiable KDE density.
 
-    Uses autograd for both the classifier and KDE gradients — no numerical
-    finite differences. Runs on GPU if available.
+    Gradients of the classifier and of the KDE come from autograd; runs on GPU if
+    available. Stops early once P(win) exceeds ``convergence_threshold``.
+
+    Parameters
+    ----------
+    z_start : np.ndarray
+        Starting latent, ``[D]``.
+    score_fn : Callable[[torch.Tensor], torch.Tensor] | None
+        P(win) of a latent; used for gradients if ``logit_fn`` is None and for
+        the stopping check.
+    logit_fn : Callable[[torch.Tensor], torch.Tensor] | None
+        Win logit, preferred for gradients (no sigmoid saturation).
+    Z_all : np.ndarray
+        Reference latents for the density term, ``[N, D]``.
+    steps : int
+        Maximum iterations, by default 500.
+    lr : float
+        Step size, by default 0.02.
+    momentum : float
+        Momentum coefficient, by default 0.9.
+    density_weight : float
+        Weight of the KDE gradient, by default 0.3.
+    kde_bandwidth : float
+        KDE bandwidth, by default 0.5.
+    n_waypoints : int
+        Evenly spaced waypoints returned from the trajectory, by default 10.
+    convergence_threshold : float
+        P(win) at which to stop, by default 0.95.
+    device : torch.device | None
+        Device; None picks CUDA if available.
+
+    Returns
+    -------
+    np.ndarray
+        Waypoints ``[n_waypoints, D]`` from start to end.
+
+    Raises
+    ------
+    ValueError
+        If neither ``score_fn`` nor ``logit_fn`` is given.
     """
     if score_fn is None and logit_fn is None:
         raise ValueError("Provide at least one of score_fn or logit_fn.")

@@ -1,3 +1,5 @@
+"""Shared post-path steps: P(win) curve, feedback tables and plots."""
+
 # ---------------------------------------------------------------------------
 # Shared pipeline
 # ---------------------------------------------------------------------------
@@ -32,6 +34,23 @@ _TSNE_MAX = 3000
 
 
 def _slice_proj(coords: np.ndarray, n_win: int, n_loss: int) -> tuple:
+    """
+    Split stacked projection coordinates back into winners, losers and path.
+
+    Parameters
+    ----------
+    coords : np.ndarray
+        Projected points stacked as ``[winners, losers, path]``.
+    n_win : int
+        Number of winner rows.
+    n_loss : int
+        Number of loser rows.
+
+    Returns
+    -------
+    tuple
+        ``(win_coords, loss_coords, path_coords)``.
+    """
     win_c = coords[:n_win]
     loss_c = coords[n_win : n_win + n_loss]
     path_c = coords[n_win + n_loss :]
@@ -49,20 +68,34 @@ def run_path_charting_pipeline(
     output_dir: "Path | None" = None,
     plots_dir: "Path | None" = None,
 ) -> dict:
-    """Common post-path logic: P(win) curve, feedback, plots.
+    """
+    Run the steps shared by every strategy: P(win) curve, feedback and plots.
 
-    feature_names defaults to FEATURE_NAMES (the bulk rich_transform's
-    196-dim layout) -- pass the matching names explicitly for a model
-    trained on a different feature layout (e.g. the granular transform).
+    Parameters
+    ----------
+    path_context : PathContext
+        Context of the analysed game.
+    n_steps : int
+        Number of path waypoints.
+    top_k : int
+        Features in each feedback table.
+    strategy : str
+        Strategy name, used in labels and file names.
+    path_z_np : np.ndarray
+        Path in full latent space, ``[n_steps, D]``.
+    feature_names : list[str] | None
+        Names matching the model's feature layout; None uses the 196-dim
+        ``rich`` names, so pass them for other layouts (e.g. granular).
+    output_dir : Path | None
+        Report directory; None uses ``OUTPUT_DIR``. Concurrent callers must pass
+        request-scoped directories.
+    plots_dir : Path | None
+        Plot directory; None uses ``PLOTS_DIR``.
 
-    output_dir/plots_dir default to the process-wide OUTPUT_DIR/PLOTS_DIR
-    (today's CLI behavior) -- pass request-scoped directories when calling
-    this from a server handling concurrent requests, so plots from different
-    calls don't overwrite each other.
-
-    Returns {"feedback": feedback_dict, "saved_files": {plot_key: {"pdf":
-    Path, "png": Path}}} so callers (e.g. an API) can serialize the report
-    instead of only relying on the printed output / files on disk.
+    Returns
+    -------
+    dict
+        ``{"feedback": feedback, "saved_files": {plot_key: {"pdf": Path, "png": Path}}}``.
     """
     if feature_names is None:
         feature_names = FEATURE_NAMES

@@ -12,7 +12,23 @@ import numpy as np
 
 @dataclass(frozen=True)
 class MethodSpec:
-    """Specification for a single path-charting method variant."""
+    """
+    Specification of one path-charting method variant.
+
+    Parameters
+    ----------
+    name : str
+        Method identifier, e.g. ``"linear_centroid"``.
+    display_name : str
+        Name shown in plots and tables.
+    strategy : str
+        Underlying strategy (``linear``, ``gradient_ascent``,
+        ``optimal_transport`` or ``neural_flow``).
+    params : Mapping[str, Any]
+        Strategy keyword arguments.
+    requires_flow_checkpoint : bool
+        Whether a trained flow checkpoint is needed, by default False.
+    """
 
     name: str
     display_name: str
@@ -65,7 +81,76 @@ DEFAULT_METHOD_SPECS: tuple[MethodSpec, ...] = (
 
 @dataclass
 class PathRunResult:
-    """All metrics captured for a single (sample, method) run."""
+    """
+    All metrics of a single (sample, method) run.
+
+    Parameters
+    ----------
+    sample_idx : int
+        Analysed game index.
+    method_name : str
+        Method identifier.
+    player_idx : int
+        Index of the losing player analysed (0 or 1).
+    path_z : np.ndarray
+        Path, ``[n_waypoints, latent_dim]``.
+    p_win_curve : np.ndarray
+        P(win) per waypoint.
+    alphas : np.ndarray
+        Normalised path positions in ``[0, 1]``.
+    crossover_alpha : float | None
+        Position where P(win) first reaches 0.5, or None.
+    crossover_wp : int | None
+        Waypoint index of the crossover, or None.
+    success : bool
+        Whether a crossover happened.
+    p_win_start : float
+        P(win) at the start.
+    p_win_end : float
+        P(win) at the end.
+    p_win_gain : float
+        ``p_win_end - p_win_start``.
+    p_win_max : float
+        Maximum P(win) along the path.
+    auc_p_win : float
+        Trapezoidal area under the P(win) curve.
+    monotonicity : float
+        Fraction of non-decreasing consecutive steps.
+    dist_to_nearest_win_start : float
+        Distance from the start to the nearest winning latent.
+    dist_to_nearest_win_end : float
+        Distance from the end to the nearest winning latent.
+    dist_to_knn_win_start : float
+        Mean distance from the start to the 5 nearest winners.
+    dist_to_knn_win_end : float
+        Mean distance from the end to the 5 nearest winners.
+    kde_density_start : float
+        Winner-KDE density at the start.
+    kde_density_end : float
+        Winner-KDE density at the end.
+    path_length_l2 : float
+        Path length in latent space.
+    top_k_features_raw : tuple[str, ...]
+        Top-k features of the raw feedback signal.
+    top_k_features_mv : tuple[str, ...]
+        Top-k features of the minimum-viable signal.
+    top_k_features_weighted : tuple[str, ...]
+        Top-k features of the P(win)-gain-weighted signal.
+    wall_time_s : float
+        Wall-clock seconds of the run.
+    error : str | None
+        Error message if the run failed, by default None.
+    path_length_feature : float
+        Path length in decoded feature space (original scale), by default NaN.
+    n_features_changed : int
+        Features changed by more than 1 training SD, by default 0.
+    kde_density_path_mean : float
+        Mean winner-KDE log-density along the path, by default NaN.
+    recon_cycle_error_mean : float
+        Mean ``||z - encode(decode(z))||`` along the path, by default NaN.
+    recon_cycle_error_max : float
+        Maximum ``||z - encode(decode(z))||`` along the path, by default NaN.
+    """
 
     # Identity
     sample_idx: int
@@ -125,7 +210,26 @@ class PathRunResult:
 
 @dataclass
 class ComparisonReport:
-    """Full result of comparing all methods across N samples."""
+    """
+    Full result of comparing all methods across samples.
+
+    Parameters
+    ----------
+    n_samples_requested : int
+        Samples requested (0 = all).
+    n_samples_evaluated : int
+        Samples actually evaluated.
+    methods : tuple[MethodSpec, ...]
+        Compared methods.
+    results : tuple[PathRunResult, ...]
+        One result per (sample, method).
+    seed : int
+        Seed of the sample selection.
+    model_path : Path
+        Guided VAE checkpoint used.
+    dataset_path : Path
+        Dataset cache used.
+    """
 
     n_samples_requested: int
     n_samples_evaluated: int

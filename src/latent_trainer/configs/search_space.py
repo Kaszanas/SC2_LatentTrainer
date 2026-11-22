@@ -1,4 +1,5 @@
-"""Hyperparameter and architecture search-space definitions.
+"""
+Hyperparameter and architecture search-space definitions.
 
 Each ``get_*_search_space`` function receives an :class:`optuna.Trial` and
 returns a flat dictionary of suggested parameters.  Architecture choices
@@ -22,31 +23,30 @@ def build_hidden_layers(
     min_layers: int = 1,
     max_layers: int = 4,
 ) -> list[int]:
-    """Ask Optuna for a decreasing hidden-layer sequence from *width_choices*.
+    """
+    Ask Optuna for a strictly decreasing hidden-layer sequence.
 
-    Uses two parameters per prefix (``{prefix}_n_layers``, ``{prefix}_start_width``)
-    so MLflow/Optuna logs show real layer sizes instead of list indices.
-
-    Ordering remains encoded in the parameterisation itself (no post-hoc sorting):
-    the selected start width is converted to an index and then clamped to ensure
-    there are enough widths available to build ``n_layers`` strictly decreasing dims.
+    Samples ``{prefix}_n_layers`` and ``{prefix}_start_width`` so logs show real
+    layer sizes. The start index is clamped so ``n_layers`` strictly decreasing
+    widths are always available; no post-hoc sorting is needed.
 
     Parameters
     ----------
-    trial:
+    trial : optuna.Trial
         Active Optuna trial.
-    prefix:
-        Namespace prefix so VAE and classifier dims don't collide
-        (e.g. ``"enc"`` → ``"enc_n_layers"``, ``"enc_start_width"``).
-    width_choices:
-        Allowed layer widths in **ascending** order (e.g. ``[32, 64, 128, 256, 512]``).
-    min_layers / max_layers:
-        Bounds on the number of hidden layers.
+    prefix : str
+        Parameter name prefix, e.g. ``"enc"``.
+    width_choices : list[int]
+        Allowed widths in ascending order.
+    min_layers : int
+        Minimum number of hidden layers, by default 1.
+    max_layers : int
+        Maximum number of hidden layers, by default 4.
 
     Returns
     -------
     list[int]
-        Strictly decreasing hidden-layer widths, e.g. ``[256, 128, 64]``.
+        Strictly decreasing widths, e.g. ``[256, 128, 64]``.
     """
     n_layers = trial.suggest_int(f"{prefix}_n_layers", low=min_layers, high=max_layers)
     # start_width is sampled from a static categorical distribution.
@@ -58,20 +58,25 @@ def build_hidden_layers(
 
 
 def get_guided_vae_search_space(trial: optuna.Trial) -> dict:
-    """Return a params dict for the supervised Guided-VAE pipeline.
+    """
+    Sample one guided VAE configuration.
 
-    Encoder dims are always decreasing.  Latent dim (``nz``) is derived as a
-    fraction of the last (smallest) encoder layer so it never exceeds the
-    bottleneck width.
+    Searched: ``enc_n_layers``/``enc_start_width`` (decreasing encoder),
+    ``nz_fraction`` (latent dim as a fraction of the last encoder width, at
+    least 8), ``batch_size`` {64, 128}, ``cls`` (classification weight,
+    log 1-50), ``lr``/``lr_c`` (log 1e-5-1e-3), ``weight_decay``/
+    ``weight_decay_c`` (log 1e-6-1e-3) and ``supervised_dim`` {2, 4, 8}.
 
-    Searched parameters:
-    - ``enc_n_layers``, ``enc_start_width``: encoder architecture
-    - ``nz_fraction``: fraction of last encoder layer used as latent dim
-    - ``batch_size``: categorical {64, 128}
-    - ``cls`` (classification weight): log-uniform 1-50
-    - ``lr`` / ``lr_c``: log-uniform 1e-5 ... 1e-3
-    - ``weight_decay`` / ``weight_decay_c``: log-uniform 1e-6 ... 1e-3
-    - ``supervised_dim``: categorical {2, 4, 8}
+    Parameters
+    ----------
+    trial : optuna.Trial
+        Active Optuna trial.
+
+    Returns
+    -------
+    dict
+        Keyword arguments for :class:`LitGuidedVAE` plus ``batch_size`` and the
+        trial number.
     """
     encoder_hidden_dims = build_hidden_layers(
         trial,
@@ -122,7 +127,8 @@ def reconstruct_hidden_dims(
     prefix: str,
     width_choices: list[int],
 ) -> list[int]:
-    """Reconstruct a decreasing hidden-dims list from flat Optuna trial params.
+    """
+    Reconstruct a decreasing hidden-dims list from flat Optuna trial params.
 
     Mirrors the logic in :func:`build_hidden_layers` exactly.
 
@@ -154,5 +160,19 @@ def reconstruct_hidden_dims(
 
 
 def reconstruct_guided_vae_nz(params: dict, encoder_hidden_dims: list[int]) -> int:
-    """Derive ``nz`` from ``nz_fraction`` and the last encoder layer width."""
+    """
+    Derive the latent dim from ``nz_fraction`` and the last encoder width.
+
+    Parameters
+    ----------
+    params : dict
+        Flat Optuna parameters containing ``nz_fraction``.
+    encoder_hidden_dims : list[int]
+        Reconstructed encoder widths.
+
+    Returns
+    -------
+    int
+        ``max(8, int(encoder_hidden_dims[-1] * nz_fraction))``.
+    """
     return max(8, int(encoder_hidden_dims[-1] * params["nz_fraction"]))

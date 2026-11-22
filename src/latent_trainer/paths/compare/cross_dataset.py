@@ -27,6 +27,19 @@ _DS_PALETTE = ["#0072B2", "#D55E00", "#009E73", "#E69F00", "#CC79A7", "#56B4E9"]
 
 @dataclass
 class CrossDatasetComparison:
+    """
+    Several comparison reports of the same model on different datasets.
+
+    Parameters
+    ----------
+    reports : tuple[ComparisonReport, ...]
+        One report per dataset.
+    labels : tuple[str, ...]
+        Dataset labels, aligned with ``reports``.
+    model_path : Path
+        Checkpoint shared by all reports.
+    """
+
     reports: tuple[ComparisonReport, ...]
     labels: tuple[str, ...]
     model_path: Path
@@ -36,7 +49,26 @@ def build_cross_dataset(
     reports: Sequence[ComparisonReport],
     labels: Sequence[str],
 ) -> CrossDatasetComparison:
-    """Build a CrossDatasetComparison, validating that all reports share the same model."""
+    """
+    Build a :class:`CrossDatasetComparison`, warning if reports used different models.
+
+    Parameters
+    ----------
+    reports : Sequence[ComparisonReport]
+        One report per dataset.
+    labels : Sequence[str]
+        Dataset labels, same length as ``reports``.
+
+    Returns
+    -------
+    CrossDatasetComparison
+        The validated comparison.
+
+    Raises
+    ------
+    ValueError
+        If the numbers of reports and labels differ.
+    """
     reports = tuple(reports)
     labels = tuple(labels)
 
@@ -58,10 +90,36 @@ def build_cross_dataset(
 
 
 def _ds_palette(cdc: CrossDatasetComparison) -> dict[str, str]:
+    """
+    Return a colour per dataset label.
+
+    Parameters
+    ----------
+    cdc : CrossDatasetComparison
+        Reports to compare.
+
+    Returns
+    -------
+    dict[str, str]
+        Dataset label to hex colour.
+    """
     return {lbl: _DS_PALETTE[i % len(_DS_PALETTE)] for i, lbl in enumerate(cdc.labels)}
 
 
 def _method_display(cdc: CrossDatasetComparison) -> dict[str, str]:
+    """
+    Return method display names across all reports, in first-seen order.
+
+    Parameters
+    ----------
+    cdc : CrossDatasetComparison
+        Reports to compare.
+
+    Returns
+    -------
+    dict[str, str]
+        Method name to display name.
+    """
     seen: dict[str, str] = {}
     for r in cdc.reports:
         for s in r.methods:
@@ -70,6 +128,21 @@ def _method_display(cdc: CrossDatasetComparison) -> dict[str, str]:
 
 
 def plot_cross_success_rate(cdc: CrossDatasetComparison, *, output_dir: Path) -> Path:
+    """
+    Plot each method's success rate per dataset.
+
+    Parameters
+    ----------
+    cdc : CrossDatasetComparison
+        Reports to compare.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
+    """
     all_stats = [summarise(r) for r in cdc.reports]
     display = _method_display(cdc)
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
@@ -119,6 +192,21 @@ def plot_cross_success_rate(cdc: CrossDatasetComparison, *, output_dir: Path) ->
 
 
 def plot_cross_pwin_curves(cdc: CrossDatasetComparison, *, output_dir: Path) -> Path:
+    """
+    Plot each method's mean P(win) curve per dataset.
+
+    Parameters
+    ----------
+    cdc : CrossDatasetComparison
+        Reports to compare.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
+    """
     display = _method_display(cdc)
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
     palette = _ds_palette(cdc)
@@ -185,7 +273,21 @@ def plot_cross_pwin_curves(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
 def plot_cross_pwin_curves_per_method(
     cdc: CrossDatasetComparison, *, output_dir: Path
 ) -> list[Path]:
-    """Per-method P(win) curves with ±1 SD band, one PDF per method, hued by dataset."""
+    """
+    Per-method P(win) curves with ±1 SD band, one PDF per method, hued by dataset.
+
+    Parameters
+    ----------
+    cdc : CrossDatasetComparison
+        Reports to compare.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    list[Path]
+        Paths of the saved PDFs.
+    """
     display = _method_display(cdc)
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
     palette = _ds_palette(cdc)
@@ -238,6 +340,21 @@ def plot_cross_pwin_curves_per_method(
 
 
 def plot_cross_gain_violin(cdc: CrossDatasetComparison, *, output_dir: Path) -> Path:
+    """
+    Plot the distribution of P(win) gain per method and dataset.
+
+    Parameters
+    ----------
+    cdc : CrossDatasetComparison
+        Reports to compare.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
+    """
     display = _method_display(cdc)
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
     palette = _ds_palette(cdc)
@@ -288,6 +405,21 @@ def plot_cross_gain_violin(cdc: CrossDatasetComparison, *, output_dir: Path) -> 
 def plot_cross_crossover_violin(
     cdc: CrossDatasetComparison, *, output_dir: Path
 ) -> Path:
+    """
+    Plot the distribution of crossover alpha per method and dataset.
+
+    Parameters
+    ----------
+    cdc : CrossDatasetComparison
+        Reports to compare.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
+    """
     display = _method_display(cdc)
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
     palette = _ds_palette(cdc)
@@ -343,7 +475,25 @@ def write_cross_dataset_table(
     label: str = "tab:cross-dataset",
     caption: str = "Cross-Dataset Comparison of Path-Charting Strategies",
 ) -> Path:
-    """Write a cross-dataset comparison table with Δ columns."""
+    """
+    Write a cross-dataset comparison table with Δ columns.
+
+    Parameters
+    ----------
+    cdc : CrossDatasetComparison
+        Reports to compare.
+    output_path : Path
+        Destination ``.tex`` file.
+    label : str
+        LaTeX label, by default ``"tab:cross-dataset"``.
+    caption : str
+        Table caption.
+
+    Returns
+    -------
+    Path
+        ``output_path``.
+    """
     all_stats = [summarise(r) for r in cdc.reports]
     method_names_list = [s.name for s in cdc.reports[0].methods] if cdc.reports else []
     display = _method_display(cdc)
@@ -469,6 +619,21 @@ def write_cross_dataset_table(
 
 
 def render_all_cross(cdc: CrossDatasetComparison, *, output_dir: Path) -> list[Path]:
+    """
+    Render every cross-dataset plot.
+
+    Parameters
+    ----------
+    cdc : CrossDatasetComparison
+        Reports to compare.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    list[Path]
+        Paths of the saved PDFs.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     print("  Saving cross-dataset plots...")

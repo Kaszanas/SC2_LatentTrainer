@@ -1,3 +1,5 @@
+"""Linear interpolation paths in latent space."""
+
 import numpy as np
 
 
@@ -7,7 +9,8 @@ def path_linear(
     *,
     n_waypoints: int = 20,
 ) -> np.ndarray:
-    """Straight-line interpolation from *z_start* to *z_target*.
+    """
+    Straight-line interpolation from *z_start* to *z_target*.
 
     Parameters
     ----------

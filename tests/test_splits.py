@@ -22,11 +22,15 @@ N_REPLAYS = 200
 
 @dataclass
 class FakeReplay:
+    """Minimal replay with a ``filepath`` and its source index."""
+
     filepath: str
     index: int
 
 
 class FakeDataset:
+    """Indexable fake source dataset; ``rename`` overrides file names by index."""
+
     def __init__(self, n: int = N_REPLAYS, rename: dict[int, str] | None = None):
         self.n = n
         self.rename = rename or {}
@@ -40,6 +44,7 @@ class FakeDataset:
 
 
 def keep_unless_multiple_of(k: int):
+    """Return a transform that skips replays whose index is a multiple of ``k``."""
     def transform(replay: FakeReplay):
         return None if replay.index % k == 0 else replay.index
 
@@ -78,6 +83,7 @@ def _extract(tmp_path, transform, create: bool, dataset=None, **kwargs):
 
 # Assignment:
 def test_assign_splits_exact_disjoint_and_complete():
+    """Assignment is exactly 80/10/10, disjoint and covers every replay."""
     splits = assign_splits(_refs(1000), seed=1)
     assert {s: len(v) for s, v in splits.items()} == {"train": 800, "val": 100, "test": 100}
     all_ids = [ref.replay_id for s in SPLIT_NAMES for ref in splits[s]]
@@ -85,6 +91,7 @@ def test_assign_splits_exact_disjoint_and_complete():
 
 
 def test_assign_splits_ignores_input_order_and_depends_on_seed():
+    """Assignment ignores input order and changes with the seed."""
     refs = _refs(300)
     shuffled = refs[:]
     random.Random(5).shuffle(shuffled)
@@ -94,6 +101,7 @@ def test_assign_splits_ignores_input_order_and_depends_on_seed():
 
 # Manifest:
 def test_manifest_round_trip_and_hash(tmp_path):
+    """Save/load preserves the manifest and its hash; another seed changes the hash."""
     manifest = _manifest()
     path = tmp_path / "splits.json"
     manifest.save(path)
@@ -104,6 +112,7 @@ def test_manifest_round_trip_and_hash(tmp_path):
 
 
 def test_manifest_refuses_overwrite(tmp_path):
+    """Saving over an existing manifest raises."""
     path = tmp_path / "splits.json"
     _manifest().save(path)
     with pytest.raises(FileExistsError):
@@ -111,6 +120,7 @@ def test_manifest_refuses_overwrite(tmp_path):
 
 
 def test_manifest_rejects_replay_in_two_splits():
+    """A replay listed in two splits is rejected."""
     refs = _refs(3)
     with pytest.raises(SplitManifestError):
         SplitManifest(
@@ -125,11 +135,13 @@ def test_manifest_rejects_replay_in_two_splits():
 
 
 def test_manifest_rejects_other_dataset():
+    """A manifest for another source dataset is rejected."""
     with pytest.raises(SplitManifestError):
         _manifest().check_matches_dataset("other.json", 100)
 
 
 def test_subsample_keeps_assignment():
+    """Subsampling is seeded and keeps each replay in its original split."""
     manifest = _manifest(n=1000)
     small = manifest.subsample(n_samples=100, seed=7)
     assert sum(small.sizes().values()) == 100
@@ -140,11 +152,13 @@ def test_subsample_keeps_assignment():
 
 
 def test_replay_id_is_platform_independent():
+    """Replay ids use forward slashes on every OS."""
     assert replay_id_from_filepath("Pack\\sub\\r.json") == "Pack/sub/r.json"
 
 
 # Extraction:
 def test_create_then_reuse_gives_identical_index_ordered_splits(tmp_path):
+    """Reusing a manifest reproduces the created splits, in index order."""
     created = _extract(tmp_path, keep_unless_multiple_of(10), create=True)
     kept = N_REPLAYS - N_REPLAYS // 10
     assert sum(created.manifest.sizes().values()) == kept
@@ -161,18 +175,21 @@ def test_create_then_reuse_gives_identical_index_ordered_splits(tmp_path):
 
 
 def test_create_refuses_existing_manifest(tmp_path):
+    """Creating splits over an existing manifest raises."""
     _extract(tmp_path, keep_unless_multiple_of(10), create=True)
     with pytest.raises(FileExistsError):
         _extract(tmp_path, keep_unless_multiple_of(10), create=True)
 
 
 def test_reuse_fails_when_transform_skips_a_manifest_replay(tmp_path):
+    """Reuse fails if the transform skips a listed replay."""
     _extract(tmp_path, keep_unless_multiple_of(10), create=True)
     with pytest.raises(SplitManifestError, match="skipped"):
         _extract(tmp_path, keep_unless_multiple_of(7), create=False)
 
 
 def test_reuse_fails_when_transform_errors(tmp_path):
+    """Reuse fails if the transform raises on a listed replay."""
     _extract(tmp_path, keep_unless_multiple_of(10), create=True)
 
     def broken(replay):
@@ -185,6 +202,7 @@ def test_reuse_fails_when_transform_errors(tmp_path):
 
 
 def test_reuse_fails_when_source_replay_changed(tmp_path):
+    """Reuse fails if a source replay's id no longer matches."""
     _extract(tmp_path, keep_unless_multiple_of(10), create=True)
     changed = FakeDataset(rename={11: "different.json"})
     with pytest.raises(SplitManifestError, match="manifest says"):
@@ -192,6 +210,7 @@ def test_reuse_fails_when_source_replay_changed(tmp_path):
 
 
 def test_reuse_with_n_samples_draws_from_manifest(tmp_path):
+    """``n_samples`` draws a subset of each manifest split."""
     full = _extract(tmp_path, keep_unless_multiple_of(10), create=True)
     small = _extract(tmp_path, lambda r: r.index, create=False, n_samples=40, seed=3)
     assert sum(small.manifest.sizes().values()) == 40
@@ -201,6 +220,7 @@ def test_reuse_with_n_samples_draws_from_manifest(tmp_path):
 
 # Dense cache:
 def test_dense_cache_records_ids_and_manifest_hash(tmp_path, monkeypatch):
+    """The dense cache stores row-aligned replay ids, labels and the manifest hash."""
     monkeypatch.setattr(dense_module, "load_source_dataset", lambda path: FakeDataset())
 
     def transform(replay: FakeReplay):

@@ -1,3 +1,5 @@
+"""Choice lists shared by the hyperparameter search spaces."""
+
 VAE_HIDDEN_DIM_CHOICES = [8, 16, 32, 64, 128]
 
 CLS_HIDDEN_DIM_CHOICES = [32, 64, 128]

@@ -1,20 +1,10 @@
-"""SHAP attribution analysis for the GuidedVAE.
+"""
+SHAP attribution of the guided VAE's win probability to input features.
 
-Explains two model outputs:
-  - **P(win)**: which player features drive the win-probability prediction.
-  - **Reconstruction**: which input features contribute to reconstruction error,
-    and how each input feature influences each reconstructed output feature.
+``main`` explains P(win) with ``shap.GradientExplainer``. Explainer wrappers
+for the reconstruction error also exist but are not run by ``main``.
 
-Usage::
-
-    uv run python -m latent_trainer.paths.shap_analysis \\
-        --model_path output/checkpoints/.../best.ckpt \\
-        --target both \\
-        --n_background 200 \\
-        --n_explain 500
-
-The per-feature reconstruction heatmap is expensive (shap for ~196 outputs).
-Skip it with ``--no_heatmap`` for a faster run.
+Usage: ``uv run --extra cuda python -m latent_trainer.paths.shap_analysis --model_path output/checkpoints/<exp>/best.ckpt --n_background 200 --n_explain 500``
 """
 
 from __future__ import annotations
@@ -47,6 +37,19 @@ _GROUP_COLORS = {
 
 
 def _feature_group(name: str) -> str:
+    """
+    Return the feature group (temporal block prefix) of a feature name.
+
+    Parameters
+    ----------
+    name : str
+        Feature name.
+
+    Returns
+    -------
+    str
+        The first matching prefix in ``_GROUPS``, else ``"meta"``.
+    """
     for g in _GROUPS:
         if name.startswith(g):
             return g
@@ -54,11 +57,17 @@ def _feature_group(name: str) -> str:
 
 
 def _disable_inplace_ops(module: nn.Module) -> None:
-    """Set inplace=False on all activation functions.
+    """
+    Set inplace=False on all activation functions.
 
     shap.DeepExplainer installs backward hooks that are incompatible with
     inplace operations (ReLU(inplace=True) etc.).  This must be called before
     creating the explainer.
+
+    Parameters
+    ----------
+    module : nn.Module
+        Model whose activations are modified in place.
     """
     for m in module.modules():
         if hasattr(m, "inplace") and m.inplace:
@@ -66,7 +75,14 @@ def _disable_inplace_ops(module: nn.Module) -> None:
 
 
 class PWinExplainer(nn.Module):
-    """[batch, 2*input_dim] → [batch, 1]  P(win)."""
+    """
+    Map flattened features ``[B, 2 * input_dim]`` to P(win) ``[B, 1]``.
+
+    Parameters
+    ----------
+    guided_vae : LitGuidedVAE
+        Trained model.
+    """
 
     def __init__(self, guided_vae: LitGuidedVAE) -> None:
         super().__init__()
@@ -76,6 +92,19 @@ class PWinExplainer(nn.Module):
         _disable_inplace_ops(self.vae)
 
     def forward(self, X_flat: torch.Tensor) -> torch.Tensor:
+        """
+        Encode both players and return P(player 1 wins).
+
+        Parameters
+        ----------
+        X_flat : torch.Tensor
+            Normalised features of both players, flattened to ``[B, 2 * input_dim]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Win probability, ``[B, 1]``.
+        """
         batch = X_flat.shape[0]
         X = X_flat.view(batch, 2, self.vae.model.input_dim)
         mu, _ = self.vae.model.encode(X)
@@ -83,7 +112,14 @@ class PWinExplainer(nn.Module):
 
 
 class ReconExplainer(nn.Module):
-    """[batch, 2*input_dim] → [batch, 1]  total MSE for player 0 (original scale)."""
+    """
+    Map flattened features to player 1's total reconstruction MSE ``[B, 1]``.
+
+    Parameters
+    ----------
+    guided_vae : LitGuidedVAE
+        Trained model.
+    """
 
     def __init__(self, guided_vae: LitGuidedVAE) -> None:
         super().__init__()
@@ -93,6 +129,19 @@ class ReconExplainer(nn.Module):
         _disable_inplace_ops(self.vae)
 
     def forward(self, X_flat: torch.Tensor) -> torch.Tensor:
+        """
+        Return player 1's mean squared reconstruction error.
+
+        Parameters
+        ----------
+        X_flat : torch.Tensor
+            Normalised features of both players, flattened to ``[B, 2 * input_dim]``.
+
+        Returns
+        -------
+        torch.Tensor
+            MSE, ``[B, 1]``.
+        """
         batch = X_flat.shape[0]
         input_dim = self.vae.model.input_dim
         X = X_flat.view(batch, 2, input_dim)
@@ -109,7 +158,14 @@ class ReconExplainer(nn.Module):
 
 
 class ReconPerFeatureExplainer(nn.Module):
-    """[batch, 2*input_dim] → [batch, input_dim]  per-feature squared error (player 0)."""
+    """
+    Map flattened features to player 1's per-feature squared error ``[B, input_dim]``.
+
+    Parameters
+    ----------
+    guided_vae : LitGuidedVAE
+        Trained model.
+    """
 
     def __init__(self, guided_vae: LitGuidedVAE) -> None:
         super().__init__()
@@ -119,6 +175,19 @@ class ReconPerFeatureExplainer(nn.Module):
         _disable_inplace_ops(self.vae)
 
     def forward(self, X_flat: torch.Tensor) -> torch.Tensor:
+        """
+        Return player 1's per-feature squared reconstruction error.
+
+        Parameters
+        ----------
+        X_flat : torch.Tensor
+            Normalised features of both players, flattened to ``[B, 2 * input_dim]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Squared errors, ``[B, input_dim]``.
+        """
         batch = X_flat.shape[0]
         input_dim = self.vae.model.input_dim
         X = X_flat.view(batch, 2, input_dim)
@@ -139,13 +208,33 @@ def _run_explainer(
     background: torch.Tensor,
     explain_set: torch.Tensor,
 ) -> np.ndarray:
-    """Compute SHAP values using GradientExplainer.
+    """
+    Compute SHAP values using GradientExplainer.
 
     GradientExplainer uses plain autograd (integrated gradients over
     interpolated inputs) and handles any differentiable architecture,
     including models with LayerNorm — which DeepExplainer does not support
     correctly (it lacks a custom backward rule for LayerNorm, causing the
     additivity check to fail with large errors).
+
+    Parameters
+    ----------
+    model : nn.Module
+        Differentiable model to explain.
+    background : torch.Tensor
+        Background (reference) inputs.
+    explain_set : torch.Tensor
+        Inputs to explain.
+
+    Returns
+    -------
+    np.ndarray
+        SHAP values per explained input and feature.
+
+    Raises
+    ------
+    ImportError
+        If ``shap`` is not installed.
     """
     try:
         import shap
@@ -171,6 +260,30 @@ def _bar_chart(
     first_label: str = "Player 0",
     second_label: str = "Player 1",
 ) -> None:
+    """
+    Plot the ``top_k`` features by importance as a horizontal bar chart.
+
+    Parameters
+    ----------
+    importances : np.ndarray
+        Importance per feature (e.g. mean |SHAP|).
+    feature_names : list[str]
+        Feature names.
+    top_k : int
+        Features shown.
+    title : str
+        Plot title.
+    xlabel : str
+        x-axis label.
+    save_path : Path
+        Output file.
+    second_importances : np.ndarray | None
+        Optional second series (e.g. player 2) drawn alongside, by default None.
+    first_label : str
+        Legend label of the first series, by default "Player 0".
+    second_label : str
+        Legend label of the second series, by default "Player 1".
+    """
     imp1d = np.asarray(importances).ravel()
     order = np.argsort(imp1d)[::-1][:top_k][::-1]
     def _strip_group(name: str) -> str:
@@ -236,6 +349,24 @@ def _beeswarm(
     top_k: int,
     save_path: Path,
 ) -> None:
+    """
+    Plot a SHAP beeswarm of the ``top_k`` features.
+
+    Parameters
+    ----------
+    shap_vals : np.ndarray
+        SHAP values, ``[N, 2 * input_dim]``.
+    X_flat : np.ndarray
+        Explained inputs, ``[N, 2 * input_dim]``.
+    feature_names : list[str]
+        Feature names of one player.
+    input_dim : int
+        Features per player.
+    top_k : int
+        Features shown.
+    save_path : Path
+        Output file.
+    """
     shap_p0 = shap_vals[:, :input_dim]
     X_p0 = X_flat[:, :input_dim]
     order = np.argsort(np.abs(shap_p0).mean(0))[::-1][:top_k]
@@ -277,6 +408,24 @@ def analyze_pwin(
     top_k: int,
     output_dir: Path,
 ) -> None:
+    """
+    Explain P(win) with SHAP and save bar and beeswarm plots.
+
+    Parameters
+    ----------
+    guided_vae : LitGuidedVAE
+        Trained model.
+    background : torch.Tensor
+        Background inputs, ``[N_bg, 2, F]``.
+    explain_set : torch.Tensor
+        Inputs to explain, ``[N, 2, F]``.
+    feature_names : list[str]
+        Feature names of one player.
+    top_k : int
+        Features shown in the plots.
+    output_dir : Path
+        Directory for the plots.
+    """
     input_dim = guided_vae.model.input_dim
     bg_flat = background.reshape(len(background), -1)
     ex_flat = explain_set.reshape(len(explain_set), -1)
@@ -393,7 +542,27 @@ def main(
     output_dir: Path,
     max_input_dim: int | None,
 ) -> None:
-    """SHAP attribution analysis for the GuidedVAE (P(win) and/or reconstruction)."""
+    """
+    Run the SHAP attribution of P(win) for a guided VAE checkpoint.
+
+    Parameters
+    ----------
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_filename : str
+        Dense cache file name inside ``DATA_DIR``.
+    n_background : int
+        Background samples (more is more accurate and slower).
+    n_explain : int
+        Test samples to explain.
+    top_k : int
+        Features shown in the plots.
+    output_dir : Path
+        Directory for the SHAP plots.
+    max_input_dim : int | None
+        Keep only the first N feature columns, for checkpoints trained on a
+        truncated cache.
+    """
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     output_dir.mkdir(parents=True, exist_ok=True)
 

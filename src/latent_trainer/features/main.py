@@ -1,3 +1,5 @@
+"""CLI entry point for building the feature caches."""
+
 import functools
 import logging
 from pathlib import Path
@@ -112,7 +114,37 @@ def main(
     test_only: bool,
     feature_blocks: str | None,
 ) -> None:
-    """Pre-process Single JSON SC2_Dataset and cache the transformed tensors to drive."""
+    """
+    Pre-process the single-JSON SC2EGSet dataset and cache the transformed tensors.
+
+    Parameters
+    ----------
+    transform : Callable
+        Transform selected by ``--transform``: ``rich``, ``averaged_economy``,
+        ``granular`` or ``events``.
+    single_json_dataset_path : Path
+        Path to the single-JSON dataset file.
+    n_workers : int
+        Parallel worker processes.
+    n_samples : int
+        Number of replays to sample; 0 uses all.
+    seed : int
+        Seed for split creation and sampling.
+    splits_path : Path
+        Split manifest shared by every cache.
+    create_splits : bool
+        Create the split manifest from the replays this run keeps.
+    test_only : bool
+        Build a test-only cache from all replays (not for ``events``).
+    feature_blocks : str | None
+        Comma-separated subset of ``rich`` feature blocks; None keeps all.
+
+    Raises
+    ------
+    click.BadParameter
+        If an option does not apply to the chosen transform or mode, or a feature
+        block is unknown.
+    """
     transform_name = TransformEnumFunction._TRANSFORM_NAMES[transform]
 
     if feature_blocks is not None:

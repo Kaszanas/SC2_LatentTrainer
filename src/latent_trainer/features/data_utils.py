@@ -1,4 +1,5 @@
-"""Shared data loading and normalisation utilities.
+"""
+Shared data loading and normalisation utilities.
 
 This module provides the **single canonical implementations** of dataset
 loading, normalisation, and latent extraction.  All training scripts,
@@ -34,19 +35,25 @@ def normalize(
     val_X: torch.Tensor,
     test_X: torch.Tensor,
 ) -> NormalizedData:
-    """Per-feature z-score normalisation.  Fit on *train*, apply to both.
+    """
+    Per-feature z-score normalisation, fitted on train and applied to all splits.
+
+    The std is floored at 1.0: a near-constant feature (true std ~1e-8) would
+    otherwise turn a single nonzero value into a ~1e10 z-score.
 
     Parameters
     ----------
-    train_X:
-        Training features, shape ``[N, ...]`` where the last dim is features.
-    val_X:
-        Validation features with the same trailing feature dimension.
+    train_X : torch.Tensor
+        Training features, ``[N, ...]`` with features in the last dimension.
+    val_X : torch.Tensor
+        Validation features with the same feature dimension.
+    test_X : torch.Tensor
+        Test features with the same feature dimension.
 
     Returns
     -------
     NormalizedData
-        Normalised tensors and normalisation parameters.
+        Normalised tensors and the normalisation parameters.
     """
     shape = train_X.shape
     train_flat = train_X.reshape(-1, shape[-1])
@@ -86,22 +93,17 @@ def load_and_normalize(
     cached_dataset_filepath: Path,
 ) -> NormalizedDataWithLabels:
     """
-    Load a cached ``.pt`` dataset and normalise features.
-
-    The cache is expected to contain at least::
-
-        {"train_features": ..., "train_labels": ...,
-         "val_features": ...,   "val_labels": ...}
+    Load a dense ``.pt`` cache and normalise its features.
 
     Parameters
     ----------
-    cache_path : Path
-        Path to the ``.pt`` file produced by ``preprocess_dataset.py``.
+    cached_dataset_filepath : Path
+        Cache produced by ``python -m latent_trainer.features``.
 
     Returns
     -------
     NormalizedDataWithLabels
-        Normalised tensors and normalisation parameters.
+        Normalised features, float labels and the normalisation parameters.
     """
     logger.info(f"Loading data from {cached_dataset_filepath}")
     cached: dict[str, torch.Tensor] = torch.load(
@@ -159,7 +161,6 @@ def load_cached_dataloaders(
     NormalizedData
         Contains the DataLoaders and normalisation parameters.
     """
-
     normalized_data = load_and_normalize(cached_dataset_filepath=cache_path)
     input_dim = normalized_data.train_X.shape[-1]
 
@@ -197,8 +198,23 @@ def _pad_stack(
     n_players: int,
     pad_value: float = 0.0,
 ) -> torch.Tensor:
-    """Pad a flat list of ``B * n_players`` streams and fold back to ``[B, P, L, ...]``."""
+    """
+    Pad a flat list of ``B * n_players`` streams and fold to ``[B, P, L, ...]``.
 
+    Parameters
+    ----------
+    streams : list[torch.Tensor]
+        Streams ordered sample-major, player-minor; each ``[L_i, ...]``.
+    n_players : int
+        Players per sample.
+    pad_value : float
+        Fill value for padded positions, by default 0.0.
+
+    Returns
+    -------
+    torch.Tensor
+        Padded tensor ``[B, n_players, max(L_i), ...]``.
+    """
     max_len = max((stream.shape[0] for stream in streams), default=0)
     trailing = streams[0].shape[1:] if streams else ()
 
@@ -214,16 +230,26 @@ def _pad_stack(
 
 
 def collate_event_sequences(batch: list[dict]) -> dict[str, torch.Tensor]:
-    """Pad a batch of ragged event samples to *that batch's* maximum lengths.
+    """
+    Pad a batch of ragged event samples to that batch's maximum lengths.
 
-    Padding per batch rather than to a global maximum matters here because the
-    event stream varies by well over an order of magnitude between a fast all-in
-    and a long macro game (Phase 0: p50 ~2 events/tick, p99 13.5k tokens per
-    player).  Padding everything to the global maximum would spend most of the
-    attention budget on masked-out positions.
+    Padding per batch rather than to a global maximum matters because event
+    streams vary by over an order of magnitude between games. Both players are
+    padded together; masks mark real positions with True. Padded ids are 0
+    (``<PAD>``), but padded loops/slices also read 0, so always use the masks.
 
-    Both players are padded together, so the returned tensors are
-    ``[B, 2, L, ...]`` and the masks mark real positions with ``True``.
+    Parameters
+    ----------
+    batch : list[dict]
+        Samples from :class:`EventSequenceDataset`.
+
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        ``stat_values`` ``[B, 2, Ls, C]``; ``stat_loops``/``stat_slice``
+        ``[B, 2, Ls]``; ``evt_type``/``evt_unit``/``evt_loops``/``evt_slice``
+        ``[B, 2, Le]``; ``stat_mask``/``evt_mask`` (bool); ``n_slices``
+        ``[B, 2]``; ``label`` ``[B]``.
     """
     n_players = len(batch[0]["players"])
     streams = [player for sample in batch for player in sample["players"]]
@@ -287,7 +313,21 @@ def collate_event_sequences(batch: list[dict]) -> dict[str, torch.Tensor]:
 
 
 def _split_from_spec(spec: EventCacheFileSpec, prefix: str) -> EventSplit:
-    """Pull one split's ten ragged tensors off the cache spec."""
+    """
+    Pull one split's ten ragged tensors off the cache spec.
+
+    Parameters
+    ----------
+    spec : EventCacheFileSpec
+        Loaded cache.
+    prefix : str
+        Split name: ``train``, ``val`` or ``test``.
+
+    Returns
+    -------
+    EventSplit
+        The split, with ``stat_values`` cast to float32.
+    """
     return EventSplit(
         stat_values=getattr(spec, f"{prefix}_stat_values").float(),
         stat_loops=getattr(spec, f"{prefix}_stat_loops"),
@@ -303,16 +343,22 @@ def _split_from_spec(spec: EventCacheFileSpec, prefix: str) -> EventSplit:
 
 
 def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
-    """Load an ``events`` cache and z-score the stat channels.
+    """
+    Load an ``events`` cache and z-score the stat channels.
 
-    Only ``stat_values`` is normalised, per channel, fitted on train.  The event
-    stream is categorical ids and game loops: those are embedded and positionally
-    encoded, never standardised.
+    Only ``stat_values`` is normalised, per channel, fitted on train. Event ids
+    and loops are categorical/positional and left raw. The flat stat array holds
+    no padding, so the statistics need no masking.
 
-    No masking is needed when fitting the statistics, which is the quiet payoff
-    of the ragged layout — the flat stat array contains only real ticks, so
-    ``mean``/``std`` over it are already exactly the masked statistics.  A padded
-    layout would have biased both toward zero in proportion to game length.
+    Parameters
+    ----------
+    cached_dataset_filepath : Path
+        Cache produced by ``--transform events``.
+
+    Returns
+    -------
+    EventDataBundle
+        Normalised splits, normalisation statistics and cache metadata.
     """
     logger.info(f"Loading event data from {cached_dataset_filepath}")
     cached = torch.load(f=str(cached_dataset_filepath), weights_only=False)
@@ -362,7 +408,8 @@ def extract_latents(
     device: torch.device,
     batch_size: int = 256,
 ) -> torch.Tensor:
-    """Extract deterministic latent representations using a frozen encoder.
+    """
+    Extract deterministic latent representations using a frozen encoder.
 
     Processes each player's features separately through the encoder and
     concatenates the resulting mu vectors.

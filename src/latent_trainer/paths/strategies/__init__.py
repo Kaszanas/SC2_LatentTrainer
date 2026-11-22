@@ -1,3 +1,5 @@
+"""Latent-space path strategies from a losing toward a winning profile."""
+
 from latent_trainer.paths.strategies.available_strategies import PathStrategy
 from latent_trainer.paths.strategies.gradient_ascent import path_gradient_ascent
 from latent_trainer.paths.strategies.linear import path_linear

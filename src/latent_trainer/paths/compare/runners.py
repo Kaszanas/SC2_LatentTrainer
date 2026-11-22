@@ -54,10 +54,37 @@ def run_method(
     all_latents: torch.Tensor,
     win_kde: KernelDensity,
 ) -> PathRunResult:
-    """Execute one path-charting method for one sample and collect all metrics.
+    """
+    Execute one path-charting method for one sample and collect all metrics.
 
     On exception, returns a PathRunResult with ``error`` set and NaN metrics
     so a single failure does not abort the whole comparison sweep.
+
+    Parameters
+    ----------
+    spec : MethodSpec
+        Method to run.
+    ctx : PathContext
+        Context of the analysed game.
+    n_steps : int
+        Waypoints per path.
+    top_k : int
+        Features per feedback table.
+    flow_model : LitOTFlowMatching | None
+        Trained flow, required for ``neural_flow``.
+    win_latents : torch.Tensor
+        Winner latents of the reference population.
+    loss_latents : torch.Tensor
+        Latent of the opponent each winner beat.
+    all_latents : torch.Tensor
+        All latents (density reference for gradient ascent).
+    win_kde : KernelDensity
+        KDE fitted to the winner latents.
+
+    Returns
+    -------
+    PathRunResult
+        All metrics of the run, or NaN metrics with ``error`` set.
     """
     try:
         return _run_method_inner(
@@ -117,6 +144,42 @@ def _run_method_inner(
     all_latents: torch.Tensor,
     win_kde: KernelDensity,
 ) -> PathRunResult:
+    """
+    Run one method for one game and compute all metrics, raising on failure.
+
+    Parameters
+    ----------
+    spec : MethodSpec
+        Method to run.
+    ctx : PathContext
+        Context of the analysed game.
+    n_steps : int
+        Waypoints per path.
+    top_k : int
+        Features per feedback table.
+    flow_model : LitOTFlowMatching | None
+        Trained flow, required for ``neural_flow``.
+    win_latents : torch.Tensor
+        Winner latents of the reference population.
+    loss_latents : torch.Tensor
+        Latent of the opponent each winner beat.
+    all_latents : torch.Tensor
+        All latents (density reference for gradient ascent).
+    win_kde : KernelDensity
+        KDE fitted to the winner latents.
+
+    Returns
+    -------
+    PathRunResult
+        All metrics of the run.
+
+    Raises
+    ------
+    RuntimeError
+        If ``neural_flow`` is run without a flow model.
+    ValueError
+        If the strategy is unknown.
+    """
     opponent_z = (
         ctx.latents_p1[ctx.chosen]
         if ctx.player_idx == 0
@@ -367,7 +430,21 @@ def _run_method_inner(
 
 
 def _ensure_waypoints(path: np.ndarray, n: int) -> np.ndarray:
-    """Resample path to exactly n waypoints via linear index interpolation."""
+    """
+    Resample path to exactly n waypoints via linear index interpolation.
+
+    Parameters
+    ----------
+    path : np.ndarray
+        Waypoints, ``[m, D]``.
+    n : int
+        Target number of waypoints.
+
+    Returns
+    -------
+    np.ndarray
+        ``path`` unchanged if it already has ``n`` rows, else ``[n, D]``.
+    """
     if len(path) == n:
         return path
     indices = np.linspace(0, len(path) - 1, n, dtype=int)

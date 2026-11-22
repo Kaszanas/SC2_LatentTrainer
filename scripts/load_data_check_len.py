@@ -1,3 +1,5 @@
+"""Print the sizes of the cached dense dataset's splits."""
+
 from pathlib import Path
 
 from sc2_datasets.lightning.sc2_egset_datamodule import (

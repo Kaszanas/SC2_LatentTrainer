@@ -1,3 +1,5 @@
+"""Plots of latent paths, P(win) curves and feature-level feedback."""
+
 from pathlib import Path
 
 import matplotlib
@@ -11,11 +13,21 @@ from scipy.stats import gaussian_kde
 
 
 def _save_dual(save_path) -> dict:
-    """Save the current figure as both PDF (vector, publication-quality) and
-    PNG (raster, for inline web display) at the same base path, then close it.
+    """
+    Save the current figure as PDF and PNG at the same base path, then close it.
 
     Returns {"pdf": Path, "png": Path} so callers can hand both back to an API
     response without re-rendering.
+
+    Parameters
+    ----------
+    save_path : str | Path
+        Base path; the suffix is replaced by ``.pdf`` and ``.png``.
+
+    Returns
+    -------
+    dict
+        ``{"pdf": Path, "png": Path}``.
     """
     save_path = Path(save_path)
     pdf_path = save_path.with_suffix(".pdf")
@@ -38,11 +50,36 @@ def plot_main_proj(
     proj_label: str,
     subtitle: str = "",
 ):
-    """Two-panel figure: projected latent space + P(win) curve.
+    """
+    Two-panel figure: projected latent space + P(win) curve.
 
     Works for any 2D projection (PCA, UMAP, t-SNE).  Pass *proj_label* for
     axis annotation (e.g. ``"PC"``, ``"UMAP"``, ``"t-SNE"``) and an optional
     *subtitle* appended to the first axis label (e.g. explained variance).
+
+    Parameters
+    ----------
+    win_c : np.ndarray
+        Projected winner latents, ``[N_win, 2]``.
+    loss_c : np.ndarray
+        Projected loser latents, ``[N_loss, 2]``.
+    path_c : np.ndarray
+        Projected path, ``[n_steps, 2]``.
+    alphas : np.ndarray
+        Path positions in ``[0, 1]``.
+    win_probs : np.ndarray
+        P(win) per waypoint.
+    save_path : str | Path
+        Base output path.
+    proj_label : str
+        Axis label prefix, e.g. ``"PC"``, ``"UMAP"``.
+    subtitle : str
+        Text appended to the first axis label, by default "".
+
+    Returns
+    -------
+    dict
+        Saved ``{"pdf": Path, "png": Path}``.
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
     fig.suptitle(
@@ -161,6 +198,25 @@ def plot_main_proj(
 
 
 def plot_feature_delta(delta, feature_names, top_k, save_path):
+    """
+    Plot the ``top_k`` largest feature changes as a horizontal bar chart.
+
+    Parameters
+    ----------
+    delta : np.ndarray
+        Feature change from path start to end, ``[F]``.
+    feature_names : list[str]
+        Feature names, length ``F``.
+    top_k : int
+        Number of features shown.
+    save_path : str | Path
+        Base output path.
+
+    Returns
+    -------
+    dict
+        Saved ``{"pdf": Path, "png": Path}``.
+    """
     order = np.argsort(np.abs(delta))[::-1][:top_k]
     names = [feature_names[i] for i in order]
     values = delta[order]
@@ -185,6 +241,29 @@ def plot_feature_delta(delta, feature_names, top_k, save_path):
 def plot_feature_evolution(
     path_features, delta, feature_names, n_top, alphas, save_path
 ):
+    """
+    Plot how the most-changed features evolve along the path.
+
+    Parameters
+    ----------
+    path_features : np.ndarray
+        Decoded features per waypoint, ``[n_steps, F]``.
+    delta : np.ndarray
+        Feature change from start to end, ``[F]``, used to pick features.
+    feature_names : list[str]
+        Feature names.
+    n_top : int
+        Number of features plotted.
+    alphas : np.ndarray
+        Path positions in ``[0, 1]``.
+    save_path : str | Path
+        Base output path.
+
+    Returns
+    -------
+    dict
+        Saved ``{"pdf": Path, "png": Path}``.
+    """
     order = np.argsort(np.abs(delta))[::-1][:n_top]
     fig, ax = plt.subplots(figsize=(10, 5.5))
     for idx in order:
@@ -201,6 +280,25 @@ def plot_feature_evolution(
 
 
 def plot_distance(path_z, win_centroid, alphas, save_path):
+    """
+    Plot the distance from each waypoint to the winners' centroid.
+
+    Parameters
+    ----------
+    path_z : torch.Tensor
+        Path, ``[n_steps, D]``.
+    win_centroid : torch.Tensor
+        Centroid of the winner latents, ``[D]``.
+    alphas : np.ndarray
+        Path positions in ``[0, 1]``.
+    save_path : str | Path
+        Base output path.
+
+    Returns
+    -------
+    dict
+        Saved ``{"pdf": Path, "png": Path}``.
+    """
     dists = torch.norm(path_z - win_centroid.unsqueeze(0), dim=1).cpu().numpy()
     fig, ax = plt.subplots(figsize=(8, 4.5))
     ax.plot(alphas, dists, color="#8e44ad", linewidth=2.5, marker="o", markersize=5)
@@ -219,7 +317,25 @@ def plot_three_signal_feedback(
     save_path: str,
     top_k: int = 10,
 ):
-    """Three-panel horizontal bar chart — one per signal."""
+    """
+    Plot the three feedback signals as horizontal bar charts, one panel each.
+
+    Parameters
+    ----------
+    feedback : dict
+        Output of ``compute_feedback``.
+    feature_names : list[str]
+        Feature names.
+    save_path : str
+        Base output path.
+    top_k : int
+        Features per panel, by default 10.
+
+    Returns
+    -------
+    dict
+        Saved ``{"pdf": Path, "png": Path}``.
+    """
     signals = [
         ("_raw_delta", "raw_label", "Full path delta"),
         ("_mv_delta", "mv_label", "Minimum-viable delta"),

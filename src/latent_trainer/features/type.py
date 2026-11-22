@@ -1,3 +1,5 @@
+"""Dataclasses, datasets and cache layouts shared by the feature and training code."""
+
 import math
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -8,6 +10,25 @@ from torch.utils.data import DataLoader, Dataset
 
 @dataclass
 class NormalizedDataloaders:
+    """
+    Train/val(/test) dataloaders over normalised dense features.
+
+    Parameters
+    ----------
+    train_loader : DataLoader
+        Training batches of ``(features, label)``.
+    val_loader : DataLoader
+        Validation batches of ``(features, label)``.
+    input_dim : int
+        Number of features per player.
+    mean : torch.Tensor
+        Per-feature training mean used for normalisation.
+    std : torch.Tensor
+        Per-feature training std (floored at 1.0) used for normalisation.
+    test_loader : DataLoader | None
+        Test batches, if requested, by default None.
+    """
+
     train_loader: DataLoader
     val_loader: DataLoader
 
@@ -20,7 +41,22 @@ class NormalizedDataloaders:
 
 @dataclass
 class NormalizedData:
-    """Return type of :func:`load_and_normalize`."""
+    """
+    Return type of :func:`normalize`: normalised splits plus their statistics.
+
+    Parameters
+    ----------
+    train_X : torch.Tensor
+        Normalised training features.
+    val_X : torch.Tensor
+        Normalised validation features.
+    test_X : torch.Tensor
+        Normalised test features.
+    mean : torch.Tensor
+        Per-feature training mean, shape ``[1, F]``.
+    std : torch.Tensor
+        Per-feature training std floored at 1.0, shape ``[1, F]``.
+    """
 
     train_X: torch.Tensor
     val_X: torch.Tensor
@@ -33,6 +69,29 @@ class NormalizedData:
 
 @dataclass
 class NormalizedDataWithLabels:
+    """
+    Return type of :func:`load_and_normalize`: normalised splits, labels and statistics.
+
+    Parameters
+    ----------
+    train_X : torch.Tensor
+        Normalised training features, ``[N, 2, F]``.
+    train_y : torch.Tensor
+        Training labels as float (1 = player 1 won).
+    val_X : torch.Tensor
+        Normalised validation features.
+    val_y : torch.Tensor
+        Validation labels as float.
+    test_X : torch.Tensor
+        Normalised test features.
+    test_y : torch.Tensor
+        Test labels as float.
+    mean : torch.Tensor
+        Per-feature training mean, shape ``[1, F]``.
+    std : torch.Tensor
+        Per-feature training std floored at 1.0, shape ``[1, F]``.
+    """
+
     train_X: torch.Tensor
     train_y: torch.Tensor
     val_X: torch.Tensor
@@ -49,7 +108,8 @@ class NormalizedDataWithLabels:
 # Protocol for any VAE-like encoder (LitVAE, SimpleVAE, suGuidedVAE…)
 # ------------------------------------------------------------------
 class Encoder(Protocol):
-    """Structural type for any model that exposes an ``encode`` method.
+    """
+    Structural type for any model that exposes an ``encode`` method.
 
     The ``encode`` method must return a tuple ``(mu, logvar)`` where:
 
@@ -57,14 +117,37 @@ class Encoder(Protocol):
     - **logvar** — latent log-variance, shape ``[batch, latent_dim]``
     """
 
-    def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]: ...
+    def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode features into the latent posterior.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Features, ``[N, F]``.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor]
+            Posterior ``(mu, logvar)``, each ``[N, latent_dim]``.
+        """
+        ...
 
 
 # ------------------------------------------------------------------
 # Dataset wrapper (used by train_model.py / GuidedVAE path)
 # ------------------------------------------------------------------
 class CachedSC2Dataset(Dataset):
-    """Wraps pre-processed feature and label tensors as a PyTorch Dataset."""
+    """
+    Wrap pre-processed feature and label tensors as a PyTorch Dataset.
+
+    Parameters
+    ----------
+    features : torch.Tensor
+        Features, indexed along the first dimension.
+    labels : torch.Tensor
+        Labels aligned with ``features``.
+    """
 
     def __init__(self, features: torch.Tensor, labels: torch.Tensor) -> None:
         self.features = features
@@ -79,6 +162,24 @@ class CachedSC2Dataset(Dataset):
 
 @dataclass
 class CachedDatasetFileSpec:
+    """
+    On-disk layout of a dense feature cache (``cached_dataset_<transform>.pt``).
+
+    Parameters
+    ----------
+    train_features, val_features, test_features : torch.Tensor
+        Features per split, ``[N, 2, F]`` (player 1, player 2).
+    train_labels, val_labels, test_labels : torch.Tensor
+        Labels per split, ``[N]`` int64; 1 = player 1 won.
+    transform : str
+        Name of the transform that produced the cache.
+    train_ids, val_ids, test_ids : list[str]
+        Replay ids aligned with the rows of each split; empty in caches built
+        before the split manifest.
+    splits_sha256 : str
+        Hash of the ``splits.json`` the cache was built from; empty in old caches.
+    """
+
     train_features: torch.Tensor
     train_labels: torch.Tensor
     val_features: torch.Tensor
@@ -98,26 +199,52 @@ class CachedDatasetFileSpec:
 # ------------------------------------------------------------------
 @dataclass
 class EventCacheFileSpec:
-    """Cache layout for the ``events`` transform.
+    """
+    On-disk layout of the ``events`` cache.
 
-    Unlike :class:`CachedDatasetFileSpec`, the streams here are **ragged**: a
-    replay contributes 72-266 stat ticks (p25-p99) and anywhere from a few
-    hundred to ~13.5k events per player, so there is no dense ``[N, 2, T, C]``
-    tensor to store.  Each split keeps its streams concatenated end to end with
-    an offsets array, exactly like a CSR row pointer: stream ``s`` occupies
-    ``values[offsets[s] : offsets[s + 1]]``.
+    Streams are ragged: a replay contributes 72-266 stat ticks (p25-p99) and up
+    to ~13.5k events per player, so there is no dense ``[N, 2, T, C]`` tensor.
+    Each split keeps its streams concatenated with CSR-style offsets: stream
+    ``s = replay_index * 2 + player_index`` occupies
+    ``values[offsets[s] : offsets[s + 1]]``, so ``offsets`` has ``2N + 1``
+    entries. Batches are padded per batch by ``collate_event_sequences``.
 
-    Streams are ordered ``s = replay_index * 2 + player_index``, so both of a
-    replay's players sit adjacent and ``offsets`` has ``2 * N + 1`` entries.
-
-    Storing ragged rather than padded is what makes "keep the whole game" cheap:
-    padding every stream to the dataset maximum would waste roughly 4x the space
-    on the event stream alone, and would force a percentile cap that discards
-    real events from long games.  Batches are padded by
-    ``collate_event_sequences`` to that batch's own maximum instead.
-
-    The name arrays are the point of this spec: feature identity lives in the
-    cache, never inferred from tensor width again.
+    Parameters
+    ----------
+    train_stat_values, val_stat_values, test_stat_values : torch.Tensor
+        PlayerStats channels per tick, ``[sum_t, C]`` float32, unnormalised.
+    train_stat_loops, val_stat_loops, test_stat_loops : torch.Tensor
+        Game loop of each tick, ``[sum_t]`` int32.
+    train_stat_tick, val_stat_tick, test_stat_tick : torch.Tensor
+        Tick index on the 160-loop grid, ``[sum_t]`` int32.
+    train_stat_offsets, val_stat_offsets, test_stat_offsets : torch.Tensor
+        CSR offsets into the stat arrays, ``[2N + 1]`` int64.
+    train_evt_type, val_evt_type, test_evt_type : torch.Tensor
+        Event type id into ``event_type_names``, ``[sum_e]`` int8.
+    train_evt_unit, val_evt_unit, test_evt_unit : torch.Tensor
+        Unit/upgrade id into ``unit_vocab``, ``[sum_e]`` int16.
+    train_evt_loops, val_evt_loops, test_evt_loops : torch.Tensor
+        Game loop of each event, ``[sum_e]`` int32.
+    train_evt_tick, val_evt_tick, test_evt_tick : torch.Tensor
+        Tick index each event belongs to, ``[sum_e]`` int32.
+    train_evt_offsets, val_evt_offsets, test_evt_offsets : torch.Tensor
+        CSR offsets into the event arrays, ``[2N + 1]`` int64.
+    train_labels, val_labels, test_labels : torch.Tensor
+        Labels per replay, ``[N]`` int64; 1 = player 1 won.
+    stat_channel_names : list[str]
+        Names of the ``C`` stat channels.
+    unit_vocab : list[str]
+        Unit/upgrade vocabulary; ids 0 and 1 are ``<PAD>`` and ``<UNK>``.
+    event_type_names : list[str]
+        Event type vocabulary; id 0 is ``<PAD>``.
+    tick_interval_loops : int
+        Game loops between PlayerStats ticks (160).
+    transform : str
+        Transform name (``events``).
+    train_ids, val_ids, test_ids : list[str]
+        Replay ids aligned with each split's replays; empty in old caches.
+    splits_sha256 : str
+        Hash of the ``splits.json`` the cache was built from; empty in old caches.
     """
 
     train_stat_values: torch.Tensor  # [sum_t, 39] float32
@@ -167,7 +294,35 @@ class EventCacheFileSpec:
 
 @dataclass
 class EventSplit:
-    """One split's ragged streams, as handed to :class:`EventSequenceDataset`."""
+    """
+    One split's ragged streams, as handed to :class:`EventSequenceDataset`.
+
+    Fields mirror the per-split fields of :class:`EventCacheFileSpec`.
+
+    Parameters
+    ----------
+    stat_values : torch.Tensor
+        PlayerStats channels per tick, ``[sum_t, C]`` float32 (normalised once
+        loaded by ``load_event_cache``).
+    stat_loops : torch.Tensor
+        Game loop of each tick, ``[sum_t]``.
+    stat_tick : torch.Tensor
+        Tick index of each tick, ``[sum_t]``.
+    stat_offsets : torch.Tensor
+        CSR offsets into the stat arrays, ``[2N + 1]``.
+    evt_type : torch.Tensor
+        Event type ids, ``[sum_e]``.
+    evt_unit : torch.Tensor
+        Unit/upgrade ids, ``[sum_e]``.
+    evt_loops : torch.Tensor
+        Game loop of each event, ``[sum_e]``.
+    evt_tick : torch.Tensor
+        Tick index of each event, ``[sum_e]``.
+    evt_offsets : torch.Tensor
+        CSR offsets into the event arrays, ``[2N + 1]``.
+    labels : torch.Tensor
+        Labels per replay, ``[N]``; 1 = player 1 won.
+    """
 
     stat_values: torch.Tensor
     stat_loops: torch.Tensor
@@ -183,10 +338,36 @@ class EventSplit:
 
 @dataclass
 class EventDataBundle:
-    """Return type of ``load_event_cache``: three splits plus their metadata.
+    """
+    Return type of ``load_event_cache``: three splits plus their metadata.
 
-    ``mean``/``std`` are per-stat-channel, fitted on the training split only,
-    and are persisted with the checkpoint so inference normalises identically.
+    ``mean``/``std`` are per stat channel, fitted on the training split only,
+    and must be persisted with the checkpoint so inference normalises identically.
+
+    Parameters
+    ----------
+    train : EventSplit
+        Training split, stat channels normalised.
+    val : EventSplit
+        Validation split, stat channels normalised.
+    test : EventSplit
+        Test split, stat channels normalised.
+    mean : torch.Tensor
+        Per-channel training mean, ``[1, C]``.
+    std : torch.Tensor
+        Per-channel training std floored at 1.0, ``[1, C]``.
+    stat_channel_names : list[str]
+        Names of the stat channels.
+    unit_vocab : list[str]
+        Unit/upgrade vocabulary.
+    event_type_names : list[str]
+        Event type vocabulary.
+    tick_interval_loops : int
+        Game loops between PlayerStats ticks.
+    split_ids : dict[str, list[str]]
+        Replay ids per split name; empty lists for old caches.
+    splits_sha256 : str
+        Hash of the source ``splits.json``; empty for old caches.
     """
 
     train: "EventSplit"
@@ -206,24 +387,29 @@ class EventDataBundle:
 
 
 class EventSequenceDataset(Dataset):
-    """Serves one replay (both players' ragged streams) per index.
+    """
+    Serve one replay (both players' ragged streams) per index.
 
     Two load-time policies are applied here rather than baked into the cache,
-    so both stay sweepable without re-extracting the dataset:
+    so both stay sweepable without re-extracting the dataset.
 
-    ``slice_ticks``
-        How many 7.1 s ``PlayerStats`` ticks form one level-1 slice.  The
-        cache stores a per-token tick index; the slice index is just
-        ``tick // slice_ticks``.  Default 1, so slice index, tick index and
-        decoder output row are the same index and therefore name the same
-        7.1 seconds.
+    Parameters
+    ----------
+    split : EventSplit
+        Split to serve.
+    slice_ticks : int
+        PlayerStats ticks (7.14 s each) per level-1 slice; the slice index is
+        ``tick // slice_ticks``. With the default 1, slice index and tick index
+        coincide, by default 1.
+    drop_tail_frac : float
+        Fraction of each game's slices to drop from the end. Endgame slices encode
+        the outcome through collapsed counters rather than actionable behaviour;
+        0.0 keeps everything, by default 0.1.
 
-    ``drop_tail_frac``
-        Fraction of each game's slices to drop from the end.  Endgame slices
-        encode the outcome through collapsed counters rather than through
-        actionable behaviour; 0.1 mirrors the published ``k18``-of-20-bins
-        decision for the same reason.  Set to 0.0 for the keep-everything
-        ablation arm.
+    Raises
+    ------
+    ValueError
+        If ``slice_ticks < 1`` or ``drop_tail_frac`` is outside ``[0, 1)``.
     """
 
     def __init__(
@@ -247,6 +433,23 @@ class EventSequenceDataset(Dataset):
         return len(self.split.labels)
 
     def _stream(self, stream_index: int) -> dict[str, torch.Tensor]:
+        """
+        Slice one player stream out of the split and apply the tail drop.
+
+        The stat stream alone defines the horizon: it always reaches the final
+        slice, so a player who is event-silent late does not shorten it.
+
+        Parameters
+        ----------
+        stream_index : int
+            Stream number ``replay_index * 2 + player_index``.
+
+        Returns
+        -------
+        dict[str, torch.Tensor]
+            ``stat_values``, ``stat_loops``, ``stat_slice``, ``evt_type``,
+            ``evt_unit``, ``evt_loops`` and ``evt_slice`` for the kept slices.
+        """
         split = self.split
 
         stat_start = int(split.stat_offsets[stream_index])

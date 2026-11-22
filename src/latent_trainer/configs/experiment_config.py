@@ -1,4 +1,5 @@
-"""Experiment configuration dataclass.
+"""
+Experiment configuration dataclass.
 
 Centralises all runtime parameters so they can be passed between modules
 without ad-hoc dictionaries.  The unified ``train.py`` CLI populates
@@ -16,48 +17,51 @@ from latent_trainer.settings import DEFAULT_MLFLOW_URI
 
 @dataclass
 class ExperimentConfig:
-    """Holds all runtime parameters for a training / HPO run.
+    """
+    All runtime parameters of a training or HPO run.
 
     Parameters
     ----------
-    pipeline:
-        Which training pipeline to use (``"guided_vae"``).
-    cache_path:
-        Path to the pre-processed ``.pt`` dataset cache.
-    mode:
-        ``"single"`` for a one-shot run or ``"sweep"`` for Ray+Optuna HPO.
-    experiment_name:
-        MLFlow experiment name.
-    mlflow_tracking_uri:
-        URI for the MLFlow tracking server.  Defaults to a local SQLite
-        database (``sqlite:///mlflow.db``) for robust, query-able storage.
-        Override via ``--mlflow-uri`` CLI flag or by editing this default.
-    n_trials:
-        Number of Optuna trials when running a sweep.
-    vae_epochs:
-        Max epochs for the VAE stage (two-stage pipeline).
-    cls_epochs:
-        Max epochs for the classifier stage (two-stage pipeline).
-    guided_vae_epochs:
-        Max epochs for the GuidedVAE pipeline.
-    batch_size:
-        Default batch size (overridden during sweep).
-    latent_dim:
-        Default latent dimensionality (overridden during sweep).
-    vae_lr:
-        Default VAE learning rate (overridden during sweep).
-    cls_lr:
-        Default classifier learning rate (overridden during sweep).
-    seed:
-        Random seed for reproducibility.
-    gpus_per_trial:
-        Fractional GPU allocation per Ray trial (e.g. 0.5 for 2 concurrent
-        trials on 1 GPU).
-    cpus_per_trial:
-        CPU allocation per Ray trial.
-    optuna_db:
-        Optuna storage URL.  SQLite by default for persistence across
-        restarts and for the Optuna dashboard.
+    sweep : bool
+        True for a Ray Tune + Optuna sweep, False for a single/best run.
+    pipeline : str
+        Training pipeline, by default ``"guided_vae"``.
+    dataset_filename : str
+        Cached dataset file name inside ``DATA_DIR``.
+    mlflow_tracking_uri : str
+        MLflow tracking URI, by default the local SQLite database.
+    experiment_name : str | None
+        MLflow experiment name, by default None.
+    n_trials : int
+        Optuna trials in a sweep, by default 20.
+    vae_epochs : int
+        Legacy two-stage VAE epochs (unused by the guided VAE), by default 200.
+    cls_epochs : int
+        Legacy two-stage classifier epochs (unused by the guided VAE), by default 100.
+    guided_vae_epochs : int
+        Maximum guided VAE epochs, for sweeps and final training, by default 100.
+    gpus_per_trial : float
+        Fractional GPU per Ray trial, by default 0.1.
+    cpus_per_trial : int
+        CPUs per Ray trial, by default 2.
+    optuna_db : str
+        Optuna storage URL, by default ``sqlite:///optuna_study.db``.
+    hpo_early_stopping_patience : int
+        Early-stopping patience of sweep trials, by default 15.
+    mlflow_source_experiment : str | None
+        Experiment to load "best" parameters from; None uses
+        ``experiment_name``.
+    mlflow_source_run : str | None
+        Run to load "best" parameters from; None uses the latest
+        best-trial summary run.
+    run_name : str | None
+        MLflow run name for retraining; None auto-generates one.
+    max_input_dim : int | None
+        Keep only the first N feature columns (e.g. the first k granular bins);
+        None keeps all.
+    hpo_objective_weights : dict[str, float]
+        Weights of the validation metrics summed into the HPO objective, by
+        default ``val_vae_loss`` and ``val_cls_loss`` at 0.5 each.
     """
 
     # Pipeline selection

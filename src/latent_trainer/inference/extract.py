@@ -1,4 +1,5 @@
-"""Extract one .SC2Replay file into an SC2ReplayData via dockerized SC2InfoExtractorGo.
+"""
+Extract one .SC2Replay file into an SC2ReplayData via dockerized SC2InfoExtractorGo.
 
 Usage (once the image is pulled):
 
@@ -41,10 +42,21 @@ DEFAULT_DEBUG_DIR = Path.home() / ".cache" / "latent_trainer_serve" / "last_extr
 
 
 def _read_failure_reasons(*search_dirs: Path) -> list[str]:
-    """Parse SC2InfoExtractorGo's processed_failed_*.log files for real reasons.
+    """
+    Collect failure reasons from SC2InfoExtractorGo's ``processed_failed_*.log`` files.
 
-    These land under the logs directory, not the output directory -- search
-    both since that placement isn't documented anywhere.
+    The logs land under the logs directory, not the output directory, so
+    several directories are searched.
+
+    Parameters
+    ----------
+    *search_dirs : Path
+        Directories to search recursively.
+
+    Returns
+    -------
+    list[str]
+        Reported failure reasons, deduplicated by log file.
     """
     reasons = []
     seen: set[Path] = set()
@@ -63,10 +75,20 @@ def _read_failure_reasons(*search_dirs: Path) -> list[str]:
 
 
 def _stream_subprocess(cmd: list[str], timeout: int) -> tuple[int, list[str]]:
-    """Run *cmd*, printing each line of its combined output live as it arrives.
+    """
+    Run a command, printing each line of its combined output as it arrives.
 
-    Returns (returncode, all_lines) -- nothing is hidden until the end the
-    way subprocess.run(capture_output=True) does.
+    Parameters
+    ----------
+    cmd : list[str]
+        Command and arguments.
+    timeout : int
+        Seconds before the process is killed.
+
+    Returns
+    -------
+    tuple[int, list[str]]
+        Return code and every output line.
     """
     lines: list[str] = []
     proc = subprocess.Popen(
@@ -106,53 +128,55 @@ def extract_replay(
     debug_dir: Path | None = None,
     keep_run_dir: bool = False,
 ) -> SC2ReplayData:
-    """Run SC2InfoExtractorGo on one replay and parse the result.
+    """
+    Run SC2InfoExtractorGo on one replay and parse the result.
 
-    Copies *replay_path* into a fresh temporary input directory, runs the
-    extractor against it with ``-single_json_output``, then loads the
-    resulting single-element JSON array into an :class:`SC2ReplayData`.
-
-    Two ways to run the extractor:
-
-    - ``extractor_binary`` set -- run that local binary directly (no Docker
-      involved at all). This is what a containerized server should use: bake
-      the extractor's binary into the same image at build time (multi-stage
-      ``COPY --from=kaszanas/sc2infoextractorgo:dev /app/SC2InfoExtractorGo``)
-      instead of needing Docker-out-of-Docker (a docker CLI + the host socket
-      mounted in) just to spin up a sibling container per replay.
-    - ``extractor_binary`` is ``None`` (default) -- fall back to ``docker
-      run <docker_image> ...``, for local/dev use without building a custom
-      image.
-
-    All container output is printed live (prefixed ``[SC2InfoExtractorGo]``)
-    as it happens -- this is not a black box. On any failure (or always, if
-    ``keep_run_dir=True``), the run's input/output/logs are copied to
-    *debug_dir* (default ``~/.cache/latent_trainer_serve/last_extraction_run``)
-    before the temp directory is cleaned up, so you can inspect exactly what
-    the container saw and wrote, including its own ``main_log.log``.
+    Copies the replay into a temporary input directory, runs the extractor with
+    ``-single_json_output`` and loads the single-element JSON array into an
+    :class:`SC2ReplayData`. Output is printed live with the prefix
+    ``[SC2InfoExtractorGo]``. On failure (or always, with ``keep_run_dir``), the
+    run's input, output and logs are copied to ``debug_dir`` before cleanup.
 
     Parameters
     ----------
-    dependency_cache_dir:
-        Persisted across calls (unlike input/output/logs, which are
-        per-call temp dirs) so repeated extractions don't re-download the
-        same map dependencies. Defaults to
+    replay_path : Path
+        The ``.SC2Replay`` file.
+    docker_image : str
+        Extractor image used when ``extractor_binary`` is None, by default
+        ``DEFAULT_DOCKER_IMAGE``.
+    extractor_binary : Path | None
+        Local extractor binary to run directly, without Docker. A containerised
+        server should bake the binary into its image (multi-stage ``COPY
+        --from=kaszanas/sc2infoextractorgo:dev``) and set this, by default None.
+    perform_integrity_checks : bool
+        Enable the extractor's integrity checks, by default False.
+    perform_validity_checks : bool
+        Enable the extractor's validity checks, by default False.
+    dependency_cache_dir : Path | None
+        Map dependency cache persisted across calls; None uses
         ``~/.cache/latent_trainer_serve/sc2_extractor_dependencies``.
-    skip_dependency_download:
-        Pass True once dependencies are already cached there, to avoid
-        needing network access on every call.
-    keep_run_dir:
-        Copy the run directory to *debug_dir* even on success.
+    skip_dependency_download : bool
+        Skip downloading dependencies once they are cached, by default False.
+    timeout : int
+        Seconds before the extractor is killed, by default 300.
+    debug_dir : Path | None
+        Where run artifacts are copied on failure; None uses
+        ``~/.cache/latent_trainer_serve/last_extraction_run``.
+    keep_run_dir : bool
+        Copy the run artifacts to ``debug_dir`` even on success, by default False.
+
+    Returns
+    -------
+    SC2ReplayData
+        The parsed replay.
 
     Raises
     ------
     FileNotFoundError
-        If *replay_path* doesn't exist.
+        If ``replay_path`` does not exist.
     ReplayExtractionError
-        If the container fails, times out, or produces no JSON output --
-        the message includes SC2InfoExtractorGo's own reported reason
-        (parsed from its processed_failed_*.log) when available, and the
-        path the run's artifacts were copied to for further inspection.
+        If the extractor fails, times out or writes no JSON. The message includes
+        the extractor's own reason when available and where artifacts were copied.
     """
     replay_path = Path(replay_path).resolve()
     if not replay_path.is_file():

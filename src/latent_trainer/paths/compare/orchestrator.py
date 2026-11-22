@@ -37,12 +37,34 @@ def run_comparison(
     seed: int,
     flow_checkpoint: Path | None,
 ) -> ComparisonReport:
-    """Compare all methods across N samples.
+    """
+    Run every method on the same samples and collect per-run metrics.
+
+    Both players are encoded once and the encodings reused for all samples.
 
     Parameters
     ----------
-    n_samples:
-        Number of samples to analyse. 0 means use all samples in the dataset.
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_path : Path
+        Dense cache (its test split is used).
+    method_specs : Sequence[MethodSpec]
+        Methods to run.
+    n_samples : int
+        Samples to analyse; 0 uses all.
+    n_steps : int
+        Waypoints per path.
+    top_k : int
+        Features per feedback table.
+    seed : int
+        Seed for sample selection.
+    flow_checkpoint : Path | None
+        Flow checkpoint for ``neural_flow`` methods.
+
+    Returns
+    -------
+    ComparisonReport
+        All per-run results and the run configuration.
     """
     # Load model and data once:
     print("Loading model and data...")
@@ -166,6 +188,21 @@ def run_comparison(
 
 
 def save_report(report: ComparisonReport, output_dir: Path) -> Path:
+    """
+    Pickle a comparison report to ``output_dir/report.pkl``.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Report to save.
+    output_dir : Path
+        Destination directory.
+
+    Returns
+    -------
+    Path
+        Path of the written file.
+    """
     path = output_dir / "report.pkl"
     with open(path, "wb") as f:
         pickle.dump(report, f)
@@ -174,5 +211,20 @@ def save_report(report: ComparisonReport, output_dir: Path) -> Path:
 
 
 def load_report(path: Path) -> ComparisonReport:
+    """
+    Load a report pickled by :func:`save_report`.
+
+    Only load files you created: unpickling runs arbitrary code.
+
+    Parameters
+    ----------
+    path : Path
+        ``report.pkl`` file.
+
+    Returns
+    -------
+    ComparisonReport
+        The loaded report.
+    """
     with open(path, "rb") as f:
         return pickle.load(f)

@@ -1,4 +1,5 @@
-"""Test-set evaluation for a trained GuidedVAE checkpoint.
+"""
+Test-set evaluation for a trained GuidedVAE checkpoint.
 
 Runs a full forward pass on the held-out test split and produces:
   - Console summary of test metrics
@@ -48,7 +49,28 @@ def _forward_pass(
     batch_size: int,
     device: torch.device,
 ) -> dict[str, np.ndarray]:
-    """Run the full dataset through the model and collect raw outputs."""
+    """
+    Run a dataset through the model and collect raw outputs.
+
+    Parameters
+    ----------
+    model : LitGuidedVAE
+        Trained model in eval mode.
+    X : torch.Tensor
+        Normalised features, ``[N, 2, F]``.
+    y : torch.Tensor
+        Labels, ``[N]``.
+    batch_size : int
+        Inference batch size.
+    device : torch.device
+        Device to run on.
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        ``probs``, ``targets``, per-sample reconstruction MSE in original and
+        normalised scale, ``mu`` and ``logvar``.
+    """
     model.eval()
     model.to(device)
 
@@ -104,7 +126,25 @@ def _compute_vae_metrics(
     mu: np.ndarray,
     logvar: np.ndarray,
 ) -> dict[str, float]:
-    """Test MSE (original and normalised scales) and KL divergence for the VAE."""
+    """
+    Compute test reconstruction MSE (original and normalised scale) and KL.
+
+    Parameters
+    ----------
+    recon_mse : np.ndarray
+        Per-sample MSE in original units.
+    recon_mse_norm : np.ndarray
+        Per-sample MSE in normalised units.
+    mu : np.ndarray
+        Posterior means.
+    logvar : np.ndarray
+        Posterior log-variances.
+
+    Returns
+    -------
+    dict[str, float]
+        ``test_mse``, ``test_mse_norm`` and ``test_kl``.
+    """
     test_mse = float(recon_mse.mean())
     test_mse_norm = float(recon_mse_norm.mean())
     # KL per sample: -0.5 * sum_j(1 + logvar_j - mu_j^2 - exp(logvar_j))
@@ -114,7 +154,21 @@ def _compute_vae_metrics(
 
 
 def _compute_classifier_metrics(probs: np.ndarray, targets: np.ndarray) -> dict[str, float]:
-    """Accuracy, ROC-AUC, Brier score, and F1 for the win-probability classifier."""
+    """
+    Compute accuracy, ROC-AUC, Brier score and F1 of the win classifier.
+
+    Parameters
+    ----------
+    probs : np.ndarray
+        Predicted P(player 1 wins).
+    targets : np.ndarray
+        True labels.
+
+    Returns
+    -------
+    dict[str, float]
+        ``test_acc``, ``test_roc_auc``, ``test_brier`` and ``test_f1``.
+    """
     from sklearn.metrics import f1_score, roc_auc_score
 
     preds = (probs >= 0.5).astype(float)
@@ -128,6 +182,18 @@ def _compute_classifier_metrics(probs: np.ndarray, targets: np.ndarray) -> dict[
 def _plot_confusion_matrix(
     probs: np.ndarray, targets: np.ndarray, output_dir: Path
 ) -> None:
+    """
+    Plot the confusion matrix at threshold 0.5.
+
+    Parameters
+    ----------
+    probs : np.ndarray
+        Predicted P(player 1 wins), ``[N]``.
+    targets : np.ndarray
+        True labels, ``[N]``.
+    output_dir : Path
+        Directory for the plot.
+    """
     from sklearn.metrics import confusion_matrix
 
     cm = confusion_matrix(targets, (probs >= 0.5).astype(int))
@@ -160,6 +226,18 @@ def _plot_confusion_matrix(
 
 
 def _plot_roc(probs: np.ndarray, targets: np.ndarray, output_dir: Path) -> None:
+    """
+    Plot the ROC curve with its AUC.
+
+    Parameters
+    ----------
+    probs : np.ndarray
+        Predicted P(player 1 wins), ``[N]``.
+    targets : np.ndarray
+        True labels, ``[N]``.
+    output_dir : Path
+        Directory for the plot.
+    """
     from sklearn.metrics import auc, roc_curve
 
     fpr, tpr, _ = roc_curve(targets, probs)
@@ -179,6 +257,18 @@ def _plot_roc(probs: np.ndarray, targets: np.ndarray, output_dir: Path) -> None:
 
 
 def _plot_calibration(probs: np.ndarray, targets: np.ndarray, output_dir: Path) -> None:
+    """
+    Plot the calibration (reliability) curve.
+
+    Parameters
+    ----------
+    probs : np.ndarray
+        Predicted P(player 1 wins), ``[N]``.
+    targets : np.ndarray
+        True labels, ``[N]``.
+    output_dir : Path
+        Directory for the plot.
+    """
     from sklearn.calibration import calibration_curve
 
     prob_true, prob_pred = calibration_curve(targets, probs, n_bins=10)
@@ -200,7 +290,16 @@ def _write_latex_table(
     columns: list[tuple[str, dict[str, float], dict[str, float]]],
     output_dir: Path,
 ) -> None:
-    """Write evaluation table. columns = [(label, vae_metrics, cls_metrics), ...]."""
+    """
+    Write the evaluation metrics as a LaTeX table.
+
+    Parameters
+    ----------
+    columns : list[tuple[str, dict[str, float], dict[str, float]]]
+        One ``(label, vae_metrics, classifier_metrics)`` per evaluated dataset.
+    output_dir : Path
+        Directory for the ``.tex`` file.
+    """
     n = len(columns)
     col_spec = "l" + "r" * n
     col_headers = " & ".join(f"\\textbf{{{label}}}" for label, _, _ in columns)
@@ -258,6 +357,20 @@ def _plot_recon_error(
     test_mse: np.ndarray,
     output_dir: Path,
 ) -> None:
+    """
+    Plot the distributions of per-sample reconstruction MSE per split.
+
+    Parameters
+    ----------
+    train_mse : np.ndarray
+        Training-split MSE.
+    val_mse : np.ndarray
+        Validation-split MSE.
+    test_mse : np.ndarray
+        Test-split MSE.
+    output_dir : Path
+        Directory for the plot.
+    """
     fig, ax = plt.subplots(figsize=(7, 4))
     for mse, label, color in zip(
         [train_mse, val_mse, test_mse],
@@ -349,7 +462,31 @@ def main(
     ood_label: tuple[str, ...],
     max_input_dim: int | None,
 ) -> None:
-    """Evaluate a GuidedVAE checkpoint on the held-out test set and optional OOD datasets."""
+    """
+    Evaluate a guided VAE checkpoint on the test split and optional OOD datasets.
+
+    Parameters
+    ----------
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset : str
+        Dense cache file name inside ``DATA_DIR``.
+    batch_size : int
+        Inference batch size.
+    output_dir : Path
+        Directory for plots and tables.
+    mlflow_uri : str
+        MLflow tracking URI; an empty string skips MLflow logging.
+    run_id : str | None
+        MLflow run to log the test metrics into; None skips logging.
+    ood_dataset : tuple[Path, ...]
+        Out-of-distribution caches to evaluate as well.
+    ood_label : tuple[str, ...]
+        Labels of the OOD datasets, same order; defaults to ``OOD 1``, ...
+    max_input_dim : int | None
+        Keep only the first N feature columns, for checkpoints trained on a
+        truncated cache.
+    """
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

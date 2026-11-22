@@ -1,4 +1,5 @@
-"""MLFlow helper utilities.
+"""
+MLFlow helper utilities.
 
 Provides thin wrappers around the MLFlow client so every module uses
 consistent tracking URIs, experiment naming, artifact logging, and
@@ -63,12 +64,20 @@ logger = logging.getLogger(__name__)
 
 
 def setup_mlflow(mlflow_tracking_uri: str, experiment_name: str) -> str:
-    """Configure the global MLFlow tracking URI and create the experiment.
+    """
+    Set the global MLflow tracking URI and select (or create) the experiment.
+
+    Parameters
+    ----------
+    mlflow_tracking_uri : str
+        MLflow tracking URI.
+    experiment_name : str
+        Experiment name.
 
     Returns
     -------
     str
-        The experiment ID (useful for downstream queries).
+        The experiment id.
     """
     mlflow.set_tracking_uri(mlflow_tracking_uri)
     experiment = mlflow.set_experiment(experiment_name)
@@ -93,7 +102,8 @@ def start_parent_run(
     params: dict | None = None,
     tags: dict | None = None,
 ) -> mlflow.ActiveRun:
-    """Open a parent MLFlow run that child trial runs can nest under.
+    """
+    Open a parent MLFlow run that child trial runs can nest under.
 
     The caller **must** use this as a context manager::
 
@@ -136,7 +146,8 @@ def create_mlflow_logger(
     *,
     run_id: str | None = None,
 ) -> MLFlowLogger:
-    """Create a Lightning ``MLFlowLogger`` instance.
+    """
+    Create a Lightning ``MLFlowLogger`` instance.
 
     Parameters
     ----------
@@ -166,7 +177,8 @@ def create_child_mlflow_logger(
     tracking_uri: str = DEFAULT_MLFLOW_URI,
     params: dict | None = None,
 ) -> MLFlowLogger:
-    """Create a child MLFlow run tagged with its parent's run ID.
+    """
+    Create a child MLFlow run tagged with its parent's run ID.
 
     This opens a new run and tags it with ``parent_run_id`` so it
     appears grouped in the MLFlow UI.
@@ -226,7 +238,8 @@ def log_checkpoint_artifacts(
     checkpoint_dir: Path,
     tracking_uri: str = DEFAULT_MLFLOW_URI,
 ) -> None:
-    """Log a checkpoint directory as MLFlow artifacts on the active run.
+    """
+    Log a checkpoint directory as MLFlow artifacts on the active run.
 
     Must be called inside an active ``mlflow.start_run()`` context.
 
@@ -252,10 +265,17 @@ def log_best_trial(
     config: ExperimentConfig,
     additional_params: dict | None = None,
 ) -> None:
-    """Log the best Optuna trial as a dedicated MLFlow run.
+    """
+    Log the best Optuna trial as a ``best_trial_summary`` MLflow run.
 
-    This creates a summary run containing the best hyperparameters and
-    the objective value, making it easy to find in the MLFlow UI.
+    Parameters
+    ----------
+    study : optuna.Study
+        Completed study.
+    config : ExperimentConfig
+        Run configuration (tracking URI and experiment name).
+    additional_params : dict | None
+        Extra parameters to log, e.g. reconstructed architecture, by default None.
     """
     best = study.best_trial
     mlflow.set_tracking_uri(config.mlflow_tracking_uri)
@@ -280,7 +300,23 @@ def log_artifact(
     mlflow_logger: MLFlowLogger,
     model_path: Path,
 ):
+    """
+    Log the checkpoint directory and the final model file to the logger's run.
 
+    Parameters
+    ----------
+    checkpoint_dir : Path
+        Directory of Lightning checkpoints.
+    mlflow_logger : MLFlowLogger
+        Logger whose run receives the artifacts.
+    model_path : Path
+        Final model file.
+
+    Raises
+    ------
+    ValueError
+        If the logger has no active run id.
+    """
     if not mlflow_logger.run_id:
         raise ValueError("MLFlow logger must have an active run_id to log artifacts")
 
@@ -314,7 +350,19 @@ _GUIDED_VAE_PARAM_TYPES: dict[str, type] = {
 
 
 def _coerce_guided_vae_params(raw: dict[str, str]) -> dict[str, Any]:
-    """Coerce string-valued MLflow params to Python types."""
+    """
+    Convert string-valued MLflow params to their Python types.
+
+    Parameters
+    ----------
+    raw : dict[str, str]
+        Params as stored by MLflow; keys must be in ``_GUIDED_VAE_PARAM_TYPES``.
+
+    Returns
+    -------
+    dict[str, Any]
+        Typed params (lists parsed with ``ast.literal_eval``).
+    """
     result: dict[str, Any] = {}
     for key, raw_val in raw.items():
         t = _GUIDED_VAE_PARAM_TYPES[key]
@@ -327,7 +375,8 @@ def load_guided_vae_params_from_mlflow(
     run_name: str | None = None,
     tracking_uri: str = DEFAULT_MLFLOW_URI,
 ) -> dict[str, Any]:
-    """Load GuidedVAE training params from MLflow.
+    """
+    Load GuidedVAE training params from MLflow.
 
     Parameters
     ----------

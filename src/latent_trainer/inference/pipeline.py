@@ -1,4 +1,5 @@
-"""End-to-end single-replay counterfactual prediction pipeline.
+"""
+End-to-end single-replay counterfactual prediction pipeline.
 
 This is the single end-user-facing entry point: extraction -> features ->
 encode -> path-generation -> feedback report, for one .SC2Replay file.
@@ -51,6 +52,19 @@ DEFAULT_CACHE_DIR = Path.home() / ".cache" / "latent_trainer_serve"
 
 
 def _replay_hash(replay_path: Path) -> str:
+    """
+    Return a short content hash of a replay file.
+
+    Parameters
+    ----------
+    replay_path : Path
+        Replay file.
+
+    Returns
+    -------
+    str
+        First 16 hex digits of the file's SHA-256.
+    """
     h = hashlib.sha256()
     with open(replay_path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -59,6 +73,22 @@ def _replay_hash(replay_path: Path) -> str:
 
 
 def _load_model(model_path: Path) -> LitGuidedVAE:
+    """
+    Load a guided VAE checkpoint for inference.
+
+    The std buffer is floored at 1.0 again in case an older checkpoint with
+    near-zero stds is served.
+
+    Parameters
+    ----------
+    model_path : Path
+        Lightning checkpoint.
+
+    Returns
+    -------
+    LitGuidedVAE
+        Model in eval mode on CUDA if available, else CPU.
+    """
     vae_model = LitGuidedVAE.load_from_checkpoint(checkpoint_path=model_path)
     vae_model.eval()
     # Defense-in-depth: a near-zero std for a near-constant feature turns any
@@ -79,16 +109,33 @@ def _extract_features_cached(
     docker_image: str,
     extractor_binary: Path | None = None,
 ) -> tuple[torch.Tensor, int, float | None]:
-    """Extract + transform a replay, caching the result by content hash.
+    """
+    Extract and transform a replay, caching the result by content hash.
 
-    Re-analyzing the same replay (e.g. with a different --strategy) then
-    skips both the extraction and the feature computation.
+    Re-analysing the same replay (e.g. with another strategy) skips both the
+    extraction and the feature computation.
 
-    Returns (features, label, duration_seconds). duration_seconds is the
-    replay's real-world length (elapsedGameLoops / GAME_LOOPS_PER_SECOND),
-    used to translate each bin's event-index-fraction window into an
-    approximate wall-clock time range for display. ``None`` if the header's
-    elapsedGameLoops isn't available for some reason.
+    Parameters
+    ----------
+    replay_path : Path
+        Replay file.
+    cache_dir : Path
+        Directory for the per-replay feature cache.
+    docker_image : str
+        Extractor image used without ``extractor_binary``.
+    extractor_binary : Path | None
+        Local extractor binary, by default None.
+
+    Returns
+    -------
+    tuple[torch.Tensor, int, float | None]
+        Granular features ``[2, F]``, the true label, and the game length in
+        seconds (None if the header lacks ``elapsedGameLoops``).
+
+    Raises
+    ------
+    ValueError
+        If the granular transform skips the replay.
     """
     replay_hash = _replay_hash(replay_path)
     cache_path = cache_dir / f"{replay_hash}_granular_features.pt"
@@ -151,38 +198,71 @@ def predict_replay(
     # optimal_transport-only tunable (see paths/cli.py::cmd_optimal_transport):
     ot_reg: float = 0.01,
 ) -> dict:
-    """Run extraction -> features -> encode -> path -> feedback for one replay.
+    """
+    Run extraction, features, encoding, path finding and feedback for one replay.
 
     Parameters
     ----------
-    player:
-        Which player (0 or 1) to analyze. ``None`` -> analyze whichever
-        player actually lost the match (the natural choice: every game has
-        exactly one loser, and that's who the "improvement path" is for).
-    strategy:
-        ``"linear"``, ``"gradient_ascent"``, or ``"optimal_transport"``.
-        ``"neural_flow"`` is not supported here -- it needs a separately
-        trained OT-flow-matching checkpoint (paths/cli.py's
-        ``cmd_neural_flow``) that doesn't exist for the granular feature
-        set this pipeline serves.
-    extractor_binary:
-        Path to a locally available SC2InfoExtractorGo binary. When set,
-        extraction runs that binary directly -- no Docker involved. When
-        ``None`` (default), falls back to ``docker run <docker_image>``.
-        A containerized server should bake the binary into its own image
-        (multi-stage ``COPY --from=kaszanas/sc2infoextractorgo:dev``) and
-        set this, avoiding Docker-out-of-Docker entirely.
-    output_dir:
-        Where to write this call's plots/report. ``None`` -> the process-wide
-        default (today's CLI behavior). Callers handling concurrent requests
-        (e.g. an API) must pass a request-scoped directory so plots from
-        different replays/requests don't overwrite each other.
+    replay_path : Path
+        The ``.SC2Replay`` file.
+    model_path : Path
+        Guided VAE checkpoint.
+    reference_pack_path : Path
+        Pre-encoded reference latents (see :mod:`reference_pack`).
+    player : int | None
+        Player index to analyse (0 or 1); None analyses the player who lost.
+    strategy : str
+        ``"linear"``, ``"gradient_ascent"`` or ``"optimal_transport"``.
+        ``"neural_flow"`` is not supported here: it needs a separately trained
+        flow checkpoint, by default ``"linear"``.
+    method : str
+        Linear target: ``"centroid"`` (outlier-robust mean of winners) or
+        ``"nearest"`` (mean of the ``k_neighbours`` nearest winners), by
+        default ``"centroid"``.
+    k_neighbours : int
+        Neighbours for ``method="nearest"``, by default 5.
+    n_steps : int
+        Waypoints along the path, by default 50.
+    top_k : int
+        Features reported in the feedback, by default 15.
+    docker_image : str
+        Extractor image used without ``extractor_binary``.
+    extractor_binary : Path | None
+        Local extractor binary; avoids Docker-out-of-Docker in a container,
+        by default None.
+    cache_dir : Path | None
+        Feature cache directory; None uses the default cache.
+    output_dir : Path | None
+        Directory for plots and the report; concurrent callers must pass a
+        request-scoped directory. None uses the process-wide default.
+    ga_steps : int
+        Gradient ascent iterations, by default 1000.
+    ga_lr : float
+        Gradient ascent learning rate, by default 0.005.
+    ga_momentum : float
+        Gradient ascent momentum, by default 0.5.
+    density_weight : float
+        Weight of the KDE density term in gradient ascent, by default 0.3.
+    kde_bandwidth : float
+        KDE bandwidth for gradient ascent, by default 0.5.
+    convergence_threshold : float
+        P(win) at which gradient ascent stops early, by default 0.95.
+    ot_reg : float
+        Entropic regularisation of optimal transport (0 uses exact EMD), by
+        default 0.01.
 
     Returns
     -------
     dict
-        ``run_path_charting_pipeline``'s result: ``{"feedback": ...,
-        "saved_files": {plot_key: {"pdf": Path, "png": Path}}}``.
+        ``run_path_charting_pipeline``'s result (``feedback``, ``saved_files``)
+        plus ``game_duration_seconds`` and ``n_bins_total``.
+
+    Raises
+    ------
+    NotImplementedError
+        If ``strategy`` is not supported.
+    ValueError
+        If ``method`` is unknown or optimal transport produces non-finite values.
     """
     replay_path = Path(replay_path)
     cache_dir = Path(cache_dir) if cache_dir is not None else DEFAULT_CACHE_DIR

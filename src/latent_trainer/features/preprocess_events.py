@@ -1,4 +1,5 @@
-"""Build the ``events`` cache: ragged per-player event streams for the sequence model.
+"""
+Build the ``events`` cache: ragged per-player event streams for the sequence model.
 
 Split membership comes from ``splits.json`` via ``extract_with_manifest``, which
 also guarantees index-ordered rows.  The unit vocabulary is a sorted union built
@@ -37,11 +38,21 @@ TRANSFORM_NAME = "events"
 
 
 def build_unit_vocab(sample_groups: list[list[ReplayEventSample]]) -> list[str]:
-    """Union every replay's local vocabulary into one sorted global vocabulary.
+    """
+    Union every replay's local vocabulary into one sorted global vocabulary.
 
-    Sorting is what makes the ids stable: the same dataset produces the same
-    vocabulary regardless of worker scheduling, sample order, or interpreter
-    run.  The two reserved tokens stay at the head so id 0 is always padding.
+    Sorting makes ids independent of worker scheduling and sample order; the
+    reserved tokens stay first so id 0 is always padding.
+
+    Parameters
+    ----------
+    sample_groups : list[list[ReplayEventSample]]
+        Extracted samples, grouped (e.g. by split).
+
+    Returns
+    -------
+    list[str]
+        ``["<PAD>", "<UNK>", *sorted(names)]``.
     """
     names: set[str] = set()
     for group in sample_groups:
@@ -55,8 +66,21 @@ def _flatten_split(
     samples: list[ReplayEventSample],
     unit_vocab: list[str],
 ) -> dict[str, torch.Tensor]:
-    """Concatenate a split's streams into flat arrays plus CSR-style offsets."""
+    """
+    Concatenate a split's streams into flat arrays plus CSR-style offsets.
 
+    Parameters
+    ----------
+    samples : list[ReplayEventSample]
+        The split's samples, in manifest order.
+    unit_vocab : list[str]
+        Global vocabulary used to remap each replay's local unit ids.
+
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        The ten per-split fields of :class:`EventCacheFileSpec`, unprefixed.
+    """
     global_id = {name: index for index, name in enumerate(unit_vocab)}
 
     stat_values: list[np.ndarray] = []
@@ -131,7 +155,30 @@ def preprocess_event_dataset(
     n_samples: int = 0,
     seed: int = 42,
 ) -> None:
-    """Extract raw event streams for every manifest replay and cache them ragged."""
+    """
+    Extract event streams for every manifest replay and cache them ragged.
+
+    Writes ``cached_dataset_events[_<n>].pt`` to ``output_directory``.
+
+    Parameters
+    ----------
+    single_json_dataset_path : Path | str
+        Path to the single-JSON SC2EGSet file.
+    splits_path : Path | str
+        Location of ``splits.json``.
+    create_splits : bool
+        Create the manifest from the replays this run keeps, by default False.
+    output_directory : Path | str
+        Directory for the cache file, by default ``DATA_DIR``.
+    n_workers : int
+        Worker processes, by default 8.
+    chunk_size : int
+        Replays per worker task, by default 64.
+    n_samples : int
+        If > 0, extract a seeded subset, by default 0.
+    seed : int
+        Seed for split creation and sampling, by default 42.
+    """
     logger.info(
         f"SC2EGSet event-stream extraction: n_workers={n_workers}, "
         f"chunk_size={chunk_size}, n_samples={n_samples}"

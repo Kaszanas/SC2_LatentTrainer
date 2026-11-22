@@ -1,4 +1,5 @@
-"""SC2 Guided VAE model definitions.
+"""
+SC2 Guided VAE model definitions.
 
 Active models:
 - ``suGuidedVAE``: Supervised Guided VAE for tabular SC2 features.
@@ -10,6 +11,31 @@ from torch import nn
 
 
 class suGuidedVAE(nn.Module):
+    """
+    Supervised guided VAE over per-player feature vectors.
+
+    Each player is encoded independently. The first ``supervised_dim`` latent
+    dims of both players feed an opponent-aware outcome classifier on
+    ``cat(p1_sup, p2_sup)``; the remaining dims are left to the adversary in
+    :class:`LitGuidedVAE` to keep them free of outcome information.
+
+    Parameters
+    ----------
+    encoder_hidden_dims : list[int]
+        Encoder hidden widths; the decoder mirrors them in reverse.
+    latent_dim : int
+        Size of the latent distribution per player.
+    input_dim : int
+        Number of input features per player.
+    supervised_dim : int
+        Latent dims per player reserved for the outcome classifier.
+
+    Raises
+    ------
+    ValueError
+        If ``supervised_dim`` is not in ``(0, latent_dim)``.
+    """
+
     def __init__(
         self,
         encoder_hidden_dims: list[int],
@@ -17,28 +43,6 @@ class suGuidedVAE(nn.Module):
         input_dim: int,
         supervised_dim: int,
     ):
-        """
-
-
-        Parameters
-        ----------
-        encoder_hidden_dims : list[int]
-            Defines the hidden layer widths for the encoder.  The decoder mirrors these in
-            reverse order.  For example, ``[64, 128, 256, 512]``.
-        latent_dim : int
-            Size of the VAE latent distribution.
-        input_dim : int
-            Number of input features.
-        classifier_dim : int
-            Number of latent dims (per player) reserved for supervised classification.
-            The remaining ``latent_dim - classifier_dim`` dims are adversarially disentangled.
-
-        Raises
-        ------
-        ValueError
-            If ``classifier_dim`` is not in the range (0, ``latent_dim``).
-        """
-
         super().__init__()
 
         if not (0 < supervised_dim < latent_dim):
@@ -83,6 +87,20 @@ class suGuidedVAE(nn.Module):
         )
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode features into the latent posterior.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Features ``[B, F]`` or per-player ``[B, 2, F]``.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor]
+            ``(mu, logvar)`` shaped like the input with ``F`` replaced by
+            ``latent_dim``; ``logvar`` is clamped to ``[-20, 2]``.
+        """
         original_shape = x.shape
         if len(x.shape) == 3:
             batch_size, num_players, num_features = x.shape
@@ -103,11 +121,39 @@ class suGuidedVAE(nn.Module):
         return mu, logvar
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        """
+        Sample ``z = mu + eps * std`` with the reparameterisation trick.
+
+        Parameters
+        ----------
+        mu : torch.Tensor
+            Posterior mean.
+        logvar : torch.Tensor
+            Posterior log-variance.
+
+        Returns
+        -------
+        torch.Tensor
+            Sampled latent, same shape as ``mu``.
+        """
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """
+        Decode latents back to feature space.
+
+        Parameters
+        ----------
+        z : torch.Tensor
+            Latents ``[B, latent_dim]`` or ``[B, 2, latent_dim]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Reconstructed features, ``[B, F]`` or ``[B, 2, F]``.
+        """
         original_shape = z.shape
         if len(z.shape) == 3:
             batch_size, num_players, latent_dim = z.shape
@@ -121,6 +167,21 @@ class suGuidedVAE(nn.Module):
         return output
 
     def cls(self, z: torch.Tensor) -> torch.Tensor:
+        """
+        Predict P(player 1 wins) from the supervised latent dims.
+
+        Parameters
+        ----------
+        z : torch.Tensor
+            Latents ``[B, 2, latent_dim]`` (both players, concatenated in player
+            order), or ``[B, latent_dim]`` whose first ``supervised_dim`` dims are fed
+            as is.
+
+        Returns
+        -------
+        torch.Tensor
+            Win probability ``[B, 1]``.
+        """
         # Use only the first supervised_dim from each player,
         # concatenated opponent-aware
         if z.dim() == 3:
@@ -132,6 +193,19 @@ class suGuidedVAE(nn.Module):
         return self.classifier(z_cls)  # [batch, 1]
 
     def forward(self, x: torch.Tensor):
+        """
+        Encode, sample, classify and reconstruct.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Features ``[B, 2, F]`` (or ``[B, F]``).
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+            ``(reconstruction, mu, logvar, win_probability)``.
+        """
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
 
@@ -142,7 +216,22 @@ class suGuidedVAE(nn.Module):
 
 
 class Classifier(nn.Module):
-    """Adversarial classifier operating on the non-supervised latent dims."""
+    """
+    Adversarial classifier operating on the free (non-supervised) latent dims.
+
+    Parameters
+    ----------
+    latent_dim : int
+        Size of the latent distribution per player.
+    supervised_dim : int
+        Supervised dims per player; the input width is
+        ``2 * (latent_dim - supervised_dim)``.
+
+    Raises
+    ------
+    ValueError
+        If ``supervised_dim`` is not in ``(0, latent_dim)``.
+    """
 
     def __init__(self, latent_dim: int, supervised_dim: int) -> None:
         super().__init__()
@@ -169,6 +258,20 @@ class Classifier(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Predict P(player 1 wins) from both players' free dims.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Free dims ``[B, 2, latent_dim - supervised_dim]`` (players are
+            concatenated) or already flat ``[B, 2 * (latent_dim - supervised_dim)]``.
+
+        Returns
+        -------
+        torch.Tensor
+            Win probability ``[B, 1]``.
+        """
         # x: [batch, 2, n_vae_dis - k_cls_dims] — concat players before classifying
         if x.dim() == 3:
             batch_size, num_players, latent_dim = x.shape

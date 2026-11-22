@@ -24,7 +24,19 @@ _CANONICAL_ORDER: list[str] = [s.display_name for s in DEFAULT_METHOD_SPECS]
 
 
 def _ordered_methods(report: ComparisonReport) -> list[str]:
-    """Return display names in DEFAULT_METHOD_SPECS order, unknowns appended last."""
+    """
+    Return display names in DEFAULT_METHOD_SPECS order, unknowns appended last.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+
+    Returns
+    -------
+    list[str]
+        Display names in canonical order.
+    """
     present = {s.display_name for s in report.methods}
     ordered = [n for n in _CANONICAL_ORDER if n in present]
     ordered += sorted(present - set(ordered))
@@ -32,7 +44,19 @@ def _ordered_methods(report: ComparisonReport) -> list[str]:
 
 
 def _sort_stats(stats: Sequence[MethodStats]) -> list[MethodStats]:
-    """Sort MethodStats by DEFAULT_METHOD_SPECS order, unknowns appended last."""
+    """
+    Sort MethodStats by DEFAULT_METHOD_SPECS order, unknowns appended last.
+
+    Parameters
+    ----------
+    stats : Sequence[MethodStats]
+        Per-method statistics.
+
+    Returns
+    -------
+    list[MethodStats]
+        Statistics in canonical order.
+    """
     order = {name: i for i, name in enumerate(_CANONICAL_ORDER)}
     return sorted(stats, key=lambda s: order.get(s.display_name, len(_CANONICAL_ORDER)))
 
@@ -70,7 +94,19 @@ _GRID_POINTS = 100
 
 
 def _build_palette(report: ComparisonReport) -> dict[str, str]:
-    """Return {display_name: hex_colour} stable across any subset of methods."""
+    """
+    Return {display_name: hex_colour} stable across any subset of methods.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+
+    Returns
+    -------
+    dict[str, str]
+        Display name to hex colour.
+    """
     result = {}
     fallback_idx = 0
     for s in report.methods:
@@ -85,12 +121,25 @@ def _build_palette(report: ComparisonReport) -> dict[str, str]:
 
 
 def _name_map(report: ComparisonReport) -> dict[str, str]:
-    """Return {method_name: display_name}."""
+    """
+    Return {method_name: display_name}.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+
+    Returns
+    -------
+    dict[str, str]
+        Method name to display name.
+    """
     return {s.name: s.display_name for s in report.methods}
 
 
 def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Plot mean P(win) trajectory along the path for all methods on one axis.
+    """
+    Plot mean P(win) trajectory along the path for all methods on one axis.
 
     SD bands are omitted here to keep the combined view readable — see
     plot_pwin_curves_band_per_method for per-method ±1 SD detail.
@@ -99,6 +148,18 @@ def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path
     the 0.5 threshold (dashed line) early in the path (low α).  Showing means
     only keeps the combined view readable when several methods are compared.
     Methods whose mean never reaches 0.5 fail to produce winning paths on average.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     names = _name_map(report)
     palette = _build_palette(report)
@@ -150,7 +211,8 @@ def plot_pwin_curves_band(report: ComparisonReport, *, output_dir: Path) -> Path
 def plot_pwin_curves_band_per_method(
     report: ComparisonReport, *, output_dir: Path
 ) -> list[Path]:
-    """Per-method plots of mean P(win) with ±1 SD band along the path.
+    """
+    Per-method plots of mean P(win) with ±1 SD band along the path.
 
     Interpretation: the shaded band shows run-to-run variability for this method
     in isolation.  A narrow band indicates the method behaves consistently
@@ -159,6 +221,18 @@ def plot_pwin_curves_band_per_method(
     Compare the crossover point (where the mean first exceeds 0.5) with the band
     width: if the lower edge of the band dips below 0.5 at the crossover, many
     individual runs may still fail even though the mean succeeds.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    list[Path]
+        Paths of the saved PDFs.
     """
     names = _name_map(report)
     palette = _build_palette(report)
@@ -214,7 +288,8 @@ def plot_pwin_curves_band_per_method(
 
 
 def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Violin plot of the crossover α — the path step where P(win) first reaches 0.5.
+    """
+    Violin plot of the crossover α — the path step where P(win) first reaches 0.5.
 
     Interpretation: a lower crossover α means the method reaches a winning state
     earlier in the path, requiring less movement in latent space.  A narrow violin
@@ -222,6 +297,18 @@ def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path
     it occurs, requires most or all of the path.  The fraction below each method name
     shows how many runs succeeded out of all attempted (failed runs are excluded from
     the violin but count against the success rate).
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     names = _name_map(report)
     palette = _build_palette(report)
@@ -290,13 +377,26 @@ def plot_crossover_violin(report: ComparisonReport, *, output_dir: Path) -> Path
 
 
 def plot_success_rate_bar(stats: Sequence[MethodStats], *, output_dir: Path) -> Path:
-    """Bar chart of the fraction of runs where P(win) ≥ 0.5 was reached at any point.
+    """
+    Bar chart of the fraction of runs where P(win) ≥ 0.5 was reached at any point.
 
     Interpretation: this is the headline reliability metric — the percentage of losing
     players for whom the method found at least one waypoint with a majority win
     probability.  Higher is better.  The count above each bar (n_success/n_runs) shows
     the raw numbers.  The dashed line at 50 % provides a reference; methods below it
     fail more often than they succeed.
+
+    Parameters
+    ----------
+    stats : Sequence[MethodStats]
+        Per-method statistics.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     if not stats:
         return output_dir / "compare_success_rate.pdf"
@@ -350,7 +450,8 @@ def plot_success_rate_bar(stats: Sequence[MethodStats], *, output_dir: Path) -> 
 
 
 def plot_pwin_gain_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Violin plot of ΔP(win) = P(win) at path end minus P(win) at path start.
+    """
+    Violin plot of ΔP(win) = P(win) at path end minus P(win) at path start.
 
     Interpretation: positive gain means the method moved the player toward a winning
     state; negative gain means it moved them away.  All runs (including those that
@@ -358,6 +459,18 @@ def plot_pwin_gain_violin(report: ComparisonReport, *, output_dir: Path) -> Path
     improvement.  A violin centred well above zero with a small spread indicates a
     consistent, reliable improvement; one straddling zero suggests the method is no
     better than chance for many samples.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     names = _name_map(report)
     palette = _build_palette(report)
@@ -401,8 +514,8 @@ def plot_pwin_gain_violin(report: ComparisonReport, *, output_dir: Path) -> Path
 
 
 def plot_nearest_win_distance(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Grouped bar chart of the Euclidean distance to the nearest winning latent at
-    path start and path end, averaged across samples (±1 SD error bars).
+    """
+    Plot the distance to the nearest winning latent at path start and end.
 
     Interpretation: a method that genuinely moves the player closer to real winning
     behaviour should show a lower End bar than Start bar. This metric is
@@ -410,6 +523,18 @@ def plot_nearest_win_distance(report: ComparisonReport, *, output_dir: Path) -> 
     independent check that the path ends in a region actually occupied by winning
     players in the training data, not just a region the classifier happens to score
     highly.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     names = _name_map(report)
 
@@ -465,13 +590,26 @@ def plot_nearest_win_distance(report: ComparisonReport, *, output_dir: Path) -> 
 
 
 def plot_pwin_start_end(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Grouped bar chart of mean P(win) at the start and end of each method's path.
+    """
+    Plot mean P(win) at the start and end of each method's path.
 
     Interpretation: the Start bars should be similar across methods (they all begin
     from the same losing player latent) and should sit well below 0.5.  A large End
     bar — ideally above the dashed 0.5 line — indicates the method reliably guides
     the path into winning territory on average.  A small gap between Start and End
     means the method barely moves the win probability despite traversing latent space.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     names = _name_map(report)
 
@@ -516,8 +654,8 @@ def plot_pwin_start_end(report: ComparisonReport, *, output_dir: Path) -> Path:
 
 
 def plot_pwin_distribution(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Per-method KDE density plots of P(win) at path start and path end, plus a
-    combined Start reference panel.
+    """
+    Plot per-method KDEs of P(win) at path start and end, plus a start reference panel.
 
     Interpretation: the first panel (Start reference) overlays all methods' starting
     P(win) distributions; they should be nearly identical and concentrated below 0.5,
@@ -527,6 +665,18 @@ def plot_pwin_distribution(report: ComparisonReport, *, output_dir: Path) -> Pat
     dashed 0.5 line.  Bimodal End distributions suggest the method works well for some
     samples and fails for others.  Comparing the End panels across methods is valid
     only when their Start panels look similar (verified by the reference panel).
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     names = _name_map(report)
 
@@ -608,8 +758,8 @@ def plot_pwin_distribution(report: ComparisonReport, *, output_dir: Path) -> Pat
 
 
 def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Violin plot of the log-density shift: log p(z_end) minus log p(z_start),
-    where p is a KDE fitted to winning player latents.
+    """
+    Plot the winner-KDE log-density shift, log p(z_end) - log p(z_start).
 
     Interpretation: a positive shift means the path endpoint sits in a denser region
     of the winning distribution than the start — i.e., the method moves the player
@@ -617,6 +767,18 @@ def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Pat
     indicates the method consistently finds plausible winning regions, not just
     classifier-high-but-sparse corners of latent space.  Values near or below zero
     suggest the path wanders off the winning manifold even if P(win) increases.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     names = _name_map(report)
     palette = _build_palette(report)
@@ -665,8 +827,8 @@ def plot_kde_density_shift(report: ComparisonReport, *, output_dir: Path) -> Pat
 def plot_feature_jaccard_heatmap(
     report: ComparisonReport, *, signal: str = "raw", output_dir: Path
 ) -> Path:
-    """Heatmap of pairwise Jaccard similarity between the top-k feedback features
-    recommended by each method pair, for a given feedback signal (e.g. raw, mvd).
+    """
+    Plot pairwise Jaccard similarity of the methods' top-k feedback features.
 
     Interpretation: a cell value of 1.0 means two methods highlight identical
     features; 0.0 means completely disjoint recommendations.  High similarity between
@@ -674,6 +836,20 @@ def plot_feature_jaccard_heatmap(
     the path algorithm.  Low similarity reveals that different methods prioritise
     fundamentally different aspects of play, suggesting the choice of method matters
     for the advice given to a player, not just for the win-probability trajectory.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    signal : str
+        Feedback signal: ``raw``, ``mv`` or ``weighted``, by default "raw".
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     df = jaccard_between_methods(report, signal=signal)  # type: ignore[arg-type]
     if df.empty:
@@ -707,7 +883,8 @@ def plot_feature_jaccard_heatmap(
 def plot_cond_success_rate_bar(
     stats: Sequence[MethodStats], *, output_dir: Path
 ) -> Path:
-    """Grouped bar chart comparing two success-rate tiers per method.
+    """
+    Plot two success-rate tiers per method as grouped bars.
 
     Tiers:
       - "Any waypoint ≥ 0.50": fraction of runs that crossed the basic win threshold.
@@ -719,6 +896,18 @@ def plot_cond_success_rate_bar(
     merely grazing 0.50.  A large gap between the two bars suggests the method often
     reaches marginal wins only.  A method with both bars high produces robust,
     high-confidence improvement paths.
+
+    Parameters
+    ----------
+    stats : Sequence[MethodStats]
+        Per-method statistics.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     if not stats:
         return output_dir / "compare_cond_success_rate.pdf"
@@ -807,7 +996,8 @@ def plot_cond_success_rate_bar(
 
 
 def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Line plot of the mean latent-vector norm ‖z(α)‖ along the path for all methods.
+    """
+    Line plot of the mean latent-vector norm ‖z(α)‖ along the path for all methods.
 
     SD bands are omitted here to keep the combined view readable — see
     plot_z_norm_band_per_method for per-method ±1 SD detail.
@@ -819,6 +1009,18 @@ def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
     points that the decoder or classifier has not been trained on, making the
     resulting feedback unreliable.  Methods that stay flat or slowly drift are
     preferred over those that diverge steeply.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     names = _name_map(report)
     palette = _build_palette(report)
@@ -880,13 +1082,26 @@ def plot_z_norm_band(report: ComparisonReport, *, output_dir: Path) -> Path:
 def plot_z_norm_band_per_method(
     report: ComparisonReport, *, output_dir: Path
 ) -> list[Path]:
-    """Per-method line plots of latent-vector norm ‖z(α)‖ with ±1 SD band along the path.
+    """
+    Per-method line plots of latent-vector norm ‖z(α)‖ with ±1 SD band along the path.
 
     Interpretation: the shaded band shows run-to-run variability for this method in
     isolation.  A narrow band close to the reference line (mean ‖z_start‖ of real data)
     indicates the method stays on the manifold consistently.  A wide band or one that
     rises steeply signals that some runs produce off-manifold latents — the SD reveals
     which methods are erratic even when their mean looks well-behaved.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    list[Path]
+        Paths of the saved PDFs.
     """
     names = _name_map(report)
     palette = _build_palette(report)
@@ -952,7 +1167,8 @@ def plot_z_norm_band_per_method(
 
 
 def plot_feature_path_length(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Violin plot of path length measured in decoded (original-scale) feature space.
+    """
+    Violin plot of path length measured in decoded (original-scale) feature space.
 
     Interpretation: unlike the latent L2 path length, this metric is measured in
     the same space as the player feedback and is therefore directly interpretable.
@@ -960,6 +1176,18 @@ def plot_feature_path_length(report: ComparisonReport, *, output_dir: Path) -> P
     changes to reach a winning profile.  A method with a short feature-space path
     but a long latent path is exploiting the non-linearity of the decoder; compare
     with the latent norm plots to detect such cases.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     names = _name_map(report)
     palette = _build_palette(report)
@@ -1007,13 +1235,26 @@ def plot_feature_path_length(report: ComparisonReport, *, output_dir: Path) -> P
 
 
 def plot_sparsity_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
-    """Violin plot of the number of features changed by more than 1σ (sparsity).
+    """
+    Violin plot of the number of features changed by more than 1σ (sparsity).
 
     Interpretation: a lower count means the method produces sparser, more focused
     recommendations — the player is told to change fewer aspects of their play to
     reach a winning profile.  Methods that change nearly all 196 features provide
     diffuse feedback that is hard to act on.  Compare across methods to see which
     produces the most targeted counterfactuals.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    output_dir : Path
+        Directory for the PDF.
+
+    Returns
+    -------
+    Path
+        Path of the saved PDF.
     """
     names = _name_map(report)
     palette = _build_palette(report)
@@ -1063,6 +1304,23 @@ def plot_sparsity_violin(report: ComparisonReport, *, output_dir: Path) -> Path:
 def render_all(
     report: ComparisonReport, stats: Sequence[MethodStats], *, output_dir: Path
 ) -> list[Path]:
+    """
+    Render every comparison plot for a report.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    stats : Sequence[MethodStats]
+        Per-method statistics from ``summarise``.
+    output_dir : Path
+        Directory for the PDFs.
+
+    Returns
+    -------
+    list[Path]
+        Paths of all saved PDFs.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     print("  Saving comparison plots...")

@@ -1,4 +1,5 @@
-"""Central configuration for the SC2 Latent Trainer.
+"""
+Central configuration for the SC2 Latent Trainer.
 
 Provides project-wide constants that are imported by multiple modules.
 

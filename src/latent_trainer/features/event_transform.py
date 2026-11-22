@@ -1,4 +1,5 @@
-"""Raw event-stream transform for SC2 replays (sequence pipeline).
+"""
+Raw event-stream transform for SC2 replays (sequence pipeline).
 
 Where ``rich_transform`` collapses a replay into one flat vector per player,
 this transform keeps the game as what it is: a regular signal plus a set of
@@ -140,14 +141,23 @@ AUTO_SPAWNED_SUFFIXES: tuple[str, ...] = ("Egg", "Cocoon")
 
 
 def is_gameplay_entity(type_name: str) -> bool:
-    """Whether a unit or upgrade name represents something a player actually did.
+    """
+    Whether a unit or upgrade name represents something a player actually did.
 
-    Applies to ``Upgrade`` events as well as unit events, and must: SC2 records
-    cosmetics as *upgrades*, so ``PylonSkin``, ``SprayZerg`` and
-    ``RewardDanceColossus`` arrive through the upgrade branch rather than as
-    units.  Real upgrades are mostly lower-case (``zerglingmovementspeed``), but
-    plenty are not (``ProtossGroundWeaponsLevel1``, ``Stimpack``, ``BlinkTech``),
-    so case is a tell and not a rule.
+    Also applied to ``Upgrade`` events: SC2 records cosmetics (``PylonSkin``,
+    ``SprayZerg``, ``RewardDanceColossus``) as upgrades. Engine placeholders and
+    automatically spawned entities (Larva, Broodling, Interceptor, eggs and
+    cocoons) are excluded too.
+
+    Parameters
+    ----------
+    type_name : str
+        Unit type or upgrade name from the tracker event.
+
+    Returns
+    -------
+    bool
+        False for non-gameplay and automatically spawned entities, else True.
     """
     if type_name in NON_GAMEPLAY_NAMES or type_name in AUTO_SPAWNED_NAMES:
         return False
@@ -166,7 +176,26 @@ N_STAT_CHANNELS = len(SORTED_PLAYERSTATS_KEYS)
 
 @dataclass
 class PlayerEventStreams:
-    """One player's two streams, with unit ids local to the parent replay."""
+    """
+    One player's two streams, with unit ids local to the parent replay.
+
+    Parameters
+    ----------
+    stat_values : np.ndarray
+        PlayerStats channels per cleaned tick, ``[T, C]`` float32.
+    stat_loops : np.ndarray
+        Game loop of each tick, ``[T]`` int32.
+    stat_tick : np.ndarray
+        Grid index of each tick (:func:`stat_tick_index`), ``[T]`` int32.
+    evt_type : np.ndarray
+        Event type id into ``EVENT_TYPE_NAMES``, ``[E]``.
+    evt_unit_local : np.ndarray
+        Unit/upgrade id into the replay's ``local_vocab``, ``[E]``.
+    evt_loops : np.ndarray
+        Game loop of each event, ``[E]`` int32.
+    evt_tick : np.ndarray
+        Slice index of each event (:func:`event_tick_index`), ``[E]`` int32.
+    """
 
     stat_values: np.ndarray  # [T_stat, 39] float32
     stat_loops: np.ndarray  # [T_stat]     int32
@@ -179,7 +208,18 @@ class PlayerEventStreams:
 
 @dataclass
 class ReplayEventSample:
-    """The transform's per-replay output."""
+    """
+    The event transform's per-replay output.
+
+    Parameters
+    ----------
+    players : tuple[PlayerEventStreams, PlayerEventStreams]
+        Streams of player 1 and player 2.
+    local_vocab : list[str]
+        Unit/upgrade names indexed by ``evt_unit_local``.
+    label : int
+        1 if player 1 won, 0 if player 2 won.
+    """
 
     players: tuple[PlayerEventStreams, PlayerEventStreams]
     local_vocab: list[str]
@@ -187,32 +227,62 @@ class ReplayEventSample:
 
 
 def stat_tick_index(loop: int) -> int:
-    """Canonical grid index of a ``PlayerStats`` tick recorded at *loop*.
+    """
+    Return the canonical grid index of a PlayerStats tick.
 
-    Rounding rather than flooring is deliberate: the opening tick sits at
-    loop 1, not loop 0, and must still land on index 0.
+    Rounds rather than floors: the opening tick sits at loop 1, not 0, and must
+    still land on index 0.
+
+    Parameters
+    ----------
+    loop : int
+        Game loop the tick was recorded at.
+
+    Returns
+    -------
+    int
+        ``round(loop / 160)``.
     """
     return int((loop + TICK_INTERVAL_LOOPS // 2) // TICK_INTERVAL_LOOPS)
 
 
 def event_tick_index(loop: int) -> int:
-    """Index of the slice an irregular event belongs to.
+    """
+    Return the index of the slice an irregular event belongs to.
 
-    A slice is "the stat tick at loop ``160k`` plus everything that happened
-    since the previous tick", so an event is attributed forward to the next
-    tick boundary: loops ``(160(k-1), 160k]`` all belong to slice ``k``.
+    A slice is the stat tick at loop ``160k`` plus everything since the previous
+    tick, so loops ``(160(k-1), 160k]`` all belong to slice ``k``.
+
+    Parameters
+    ----------
+    loop : int
+        Game loop of the event.
+
+    Returns
+    -------
+    int
+        ``ceil(loop / 160)``.
     """
     return int(-(-loop // TICK_INTERVAL_LOOPS))
 
 
 def _clean_stat_events(events: list) -> list:
-    """Apply the Phase 0 cleaning rule: dedupe by loop, drop the final tick.
+    """
+    Apply the Phase 0 cleaning rule: dedupe by loop, drop the final tick.
 
-    Duplicate loops occur in ~6k of 1.1M ticks and are exact repeats.  The
-    trailing tick is dropped because it is both off-grid (the game ended
-    mid-interval) and the game-end state — the leakage-prone ``final`` block
-    the published pipeline already excludes.  Dropping it is correctness and
-    leakage hygiene at once.
+    Duplicate loops are exact repeats. The trailing tick is off-grid (the game
+    ended mid-interval) and is the game-end state, the leakage-prone ``final``
+    block the published pipeline excludes.
+
+    Parameters
+    ----------
+    events : list
+        One player's PlayerStats events, sorted by loop.
+
+    Returns
+    -------
+    list
+        Deduplicated events without the last one.
     """
     seen_loops: set[int] = set()
     deduped = []
@@ -226,11 +296,21 @@ def _clean_stat_events(events: list) -> list:
 
 
 def _sorted_tracker_events(sc2_replay: SC2ReplayData) -> list:
-    """Tracker events in causal order.
+    """
+    Return the replay's tracker events in causal order.
 
-    ``sorted`` is stable, so events sharing a loop keep the parser's original
-    ordering — which is the true within-loop causal order, and matters because
-    a morph and a death can land on the same loop.
+    The sort is stable, so events sharing a loop keep the parser's order, which
+    is the true within-loop order (a morph and a death can share a loop).
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed replay.
+
+    Returns
+    -------
+    list
+        Tracker events sorted by loop.
     """
     return sorted(sc2_replay.trackerEvents, key=lambda event: event.loop)
 
@@ -238,18 +318,24 @@ def _sorted_tracker_events(sc2_replay: SC2ReplayData) -> list:
 def _extract_streams(
     sc2_replay: SC2ReplayData,
 ) -> tuple[dict[int, list], dict[int, list[tuple[int, int, str]]]] | None:
-    """Single pass over the replay, building both streams for both players.
+    """
+    Build both streams for both players in a single causal pass.
 
-    Returns ``(stats_by_player, events_by_player)`` where each event is
-    ``(loop, type_id, type_name)``, or ``None`` if the replay is unusable.
+    ``UnitDied`` carries only ``(unitTagIndex, unitTagRecycle)``, so owner and
+    type come from a tag map built as the game plays out, joining ``UnitBorn``
+    and ``UnitInit`` (100% of deaths resolved) and replaying ``UnitTypeChange``
+    so a morph is attributed to what the unit was when it died.
 
-    The single pass is what makes death attribution correct.  ``UnitDied``
-    carries only ``(unitTagIndex, unitTagRecycle)`` — neither owner nor type —
-    so both must come from a tag map built as the game plays out.  Phase 0
-    measured that joining against ``UnitBorn`` alone resolves 91.7% of deaths
-    and adding ``UnitInit`` reaches 100%.  ``UnitTypeChange`` is replayed onto
-    the map in order so a Zerg morph is attributed to what the unit *became* if
-    it dies after morphing, and to what it *was* if it dies before.
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed replay.
+
+    Returns
+    -------
+    tuple[dict[int, list], dict[int, list[tuple[int, int, str]]]] | None
+        ``(stats_by_player, events_by_player)`` keyed by player id, events as
+        ``(loop, type_id, type_name)``; None if the replay is unusable.
     """
     stats_by_player: dict[int, list] = {pid: [] for pid in PLAYER_IDS}
     events_by_player: dict[int, list[tuple[int, int, str]]] = {
@@ -322,8 +408,28 @@ def _build_player_streams(
     vocab_index: dict[str, int],
     local_vocab: list[str],
 ) -> PlayerEventStreams | None:
-    """Turn one player's raw events into arrays, interning type names locally."""
+    """
+    Turn one player's raw events into arrays, interning type names locally.
 
+    Stat ticks are cleaned with :func:`_clean_stat_events`; events after the
+    last kept tick are past the observation horizon and dropped.
+
+    Parameters
+    ----------
+    stat_events : list
+        The player's PlayerStats events.
+    raw_events : Iterable[tuple[int, int, str]]
+        The player's ``(loop, type_id, type_name)`` events.
+    vocab_index : dict[str, int]
+        Replay-local name-to-id map, extended in place.
+    local_vocab : list[str]
+        Replay-local vocabulary, extended in place.
+
+    Returns
+    -------
+    PlayerEventStreams | None
+        The player's arrays, or None if no stat tick survives cleaning.
+    """
     cleaned = _clean_stat_events(sorted(stat_events, key=lambda e: e.loop))
     if not cleaned:
         return None
@@ -374,12 +480,21 @@ def _build_player_streams(
 
 
 def event_transform(sc2_replay: SC2ReplayData) -> ReplayEventSample | None:
-    """Extract both event streams for both players, or ``None`` to skip.
+    """
+    Extract both event streams for both players, or None to skip the replay.
 
-    Mirrors the ``rich_transform`` contract (skip on missing outcome, missing
-    stats, or a game shorter than three minutes) so the same preprocessing
-    bookkeeping applies, but returns a structured sample rather than a dense
-    tensor — the streams are ragged and cannot be stacked.
+    Mirrors the ``rich_transform`` skip rules (undecided outcome, missing stats,
+    game shorter than 4032 loops) but returns a ragged structured sample.
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed replay.
+
+    Returns
+    -------
+    ReplayEventSample | None
+        Streams for both players and the label, or None to skip.
     """
     label = _get_outcome(sc2_replay=sc2_replay)
     if label is None:

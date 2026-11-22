@@ -1,4 +1,5 @@
-"""FastAPI app: upload a .SC2Replay, get a counterfactual feedback report back.
+"""
+FastAPI app: upload a .SC2Replay, get a counterfactual feedback report back.
 
 Configured entirely via environment variables (never per-request), so a
 client can never point the server at a different checkpoint -- in
@@ -117,11 +118,17 @@ def _check_config() -> None:
 
 
 def _request_dir() -> Path:
-    """A fresh, timestamped, collision-free directory for one request's plots.
+    """
+    Create a fresh, timestamped, collision-free directory for one request's plots.
 
     Named by wall-clock time (to UTC seconds) plus a short random suffix, so
     concurrent uploads never write into the same directory and the creation
     time of any report is visible directly from its path/URL.
+
+    Returns
+    -------
+    Path
+        The created directory.
     """
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     request_id = f"{stamp}_{uuid.uuid4().hex[:8]}"
@@ -131,10 +138,22 @@ def _request_dir() -> Path:
 
 
 def _list_history(query: str | None = None) -> list[dict]:
-    """List past analyses (newest first), each described by its meta.json.
+    """
+    List past analyses (newest first), each described by its meta.json.
 
     ``query`` filters by case-insensitive substring match against the
     original replay filename, so a replay can be found again by name.
+
+    Parameters
+    ----------
+    query : str | None
+        Case-insensitive substring of the original replay file name; None lists
+        everything, by default None.
+
+    Returns
+    -------
+    list[dict]
+        Contents of each analysis's ``meta.json``, newest first.
     """
     entries = []
     for meta_path in RESULTS_DIR.glob("*/meta.json"):
@@ -153,19 +172,45 @@ _BIN_FEATURE_RE = re.compile(r"^bin(\d+)_")
 
 
 def _format_mmss(seconds: float) -> str:
+    """
+    Format seconds as ``m:ss``.
+
+    Parameters
+    ----------
+    seconds : float
+        Duration in seconds; rounded to whole seconds, negatives become 0.
+
+    Returns
+    -------
+    str
+        E.g. ``"6:05"``.
+    """
     seconds = max(0, int(round(seconds)))
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
 def _add_bin_time_range(row: dict, duration_seconds: float | None, n_bins_total: int) -> dict:
-    """Add bin_start/bin_end (mm:ss) to one ranked-table row, if its feature
-    is a "binNN_..." granular feature and the replay's duration is known.
+    """
+    Add ``bin_start``/``bin_end`` (``m:ss``) to one ranked-table row.
 
-    Bins are always 1/n_bins_total-of-the-game windows by event-index
-    fraction (see docs/robust_temporal_model_roadmap.md for the caveat that
-    this is an approximation of real time, not an exact one) -- meta
-    features (e.g. supplyCappedPercent) aren't tied to any bin and get
-    ``None`` for both.
+    Only ``binNN_...`` granular features get a range, and only when the game
+    length is known. Bins are fractions of each replay's event-index range, so
+    the times are approximate (see ``docs/robust_temporal_model_roadmap.md``).
+    Meta features get None for both.
+
+    Parameters
+    ----------
+    row : dict
+        Ranked-table row with a ``feature`` key.
+    duration_seconds : float | None
+        Game length in seconds, or None if unknown.
+    n_bins_total : int
+        Number of granular bins.
+
+    Returns
+    -------
+    dict
+        Copy of the row with ``bin_start`` and ``bin_end``.
     """
     match = _BIN_FEATURE_RE.match(row["feature"])
     if not match or duration_seconds is None:
@@ -179,10 +224,26 @@ def _add_bin_time_range(row: dict, duration_seconds: float | None, n_bins_total:
 def _feedback_to_json(
     feedback: dict, duration_seconds: float | None, n_bins_total: int
 ) -> dict:
-    """Strip the raw numpy-array (`_`-prefixed) keys -- only the already-
-    plain-Python ranked tables and labels are meant for a client. Also
-    annotates each ranked-table row with its bin's approximate real-game-time
-    start/end, for display."""
+    """
+    Make a feedback dict JSON-ready for clients.
+
+    Drops the ``_``-prefixed numpy arrays, keeping the ranked tables and labels,
+    and annotates each ranked-table row with its bin's approximate time range.
+
+    Parameters
+    ----------
+    feedback : dict
+        Output of ``compute_feedback``.
+    duration_seconds : float | None
+        Game length in seconds, or None if unknown.
+    n_bins_total : int
+        Number of granular bins.
+
+    Returns
+    -------
+    dict
+        JSON-serialisable feedback.
+    """
     out = {k: v for k, v in feedback.items() if not k.startswith("_")}
     for key in ("raw", "minimum_viable", "gain_weighted"):
         if key in out:
@@ -194,6 +255,21 @@ def _feedback_to_json(
 
 
 def _plot_urls(saved_files: dict, request_id: str) -> dict:
+    """
+    Map saved plot files to the URLs they are served under.
+
+    Parameters
+    ----------
+    saved_files : dict
+        ``{plot_key: {"pdf": Path, "png": Path}}``.
+    request_id : str
+        Request directory name.
+
+    Returns
+    -------
+    dict
+        ``{plot_key: {"pdf": url, "png": url}}``.
+    """
     urls = {}
     for plot_key, paths in saved_files.items():
         urls[plot_key] = {
@@ -219,6 +295,35 @@ async def analyze(
     n_steps: int = Form(50),
     top_k: int = Form(15),
 ) -> JSONResponse:
+    """
+    Analyse an uploaded replay with every supported strategy.
+
+    Parameters
+    ----------
+    file : UploadFile
+        The ``.SC2Replay`` upload.
+    player : Optional[int]
+        Player index (0 or 1) to analyse; None analyses the loser.
+    method : str
+        Linear target: ``centroid`` or ``nearest``.
+    k_neighbours : int
+        Neighbours for ``nearest``.
+    n_steps : int
+        Waypoints per path.
+    top_k : int
+        Features per feedback table.
+
+    Returns
+    -------
+    JSONResponse
+        Request id, per-strategy feedback and plot URLs.
+
+    Raises
+    ------
+    HTTPException
+        400 for an invalid ``method`` or ``player``; 422 if the replay cannot be
+        extracted or transformed.
+    """
     if player is not None and player not in (0, 1):
         raise HTTPException(status_code=400, detail="player must be 0 or 1")
     if method not in ("centroid", "nearest"):
@@ -300,7 +405,19 @@ async def analyze(
 
 @app.get("/history")
 async def history(q: Optional[str] = None) -> JSONResponse:
-    """List past analyses, newest first. ?q= filters by replay filename."""
+    """
+    List past analyses, newest first. ?q= filters by replay filename.
+
+    Parameters
+    ----------
+    q : Optional[str]
+        Replay file name filter, by default None.
+
+    Returns
+    -------
+    JSONResponse
+        Past analyses, newest first.
+    """
     return JSONResponse(_list_history(query=q))
 
 
@@ -309,7 +426,24 @@ _REQUEST_ID_RE = re.compile(r"^\d{8}T\d{6}Z_[0-9a-f]{8}$")
 
 @app.get("/history/{request_id}")
 async def history_detail(request_id: str) -> JSONResponse:
-    """Return one past analysis's full report, by its request_id."""
+    """
+    Return one past analysis's full report, by its request_id.
+
+    Parameters
+    ----------
+    request_id : str
+        Id of a past analysis.
+
+    Returns
+    -------
+    JSONResponse
+        The stored report.
+
+    Raises
+    ------
+    HTTPException
+        400 for a malformed id, 404 if no report exists.
+    """
     if not _REQUEST_ID_RE.match(request_id):
         # request_id is used to build a filesystem path -- reject anything
         # that doesn't match the format _request_dir() actually generates,
@@ -322,15 +456,30 @@ async def history_detail(request_id: str) -> JSONResponse:
 
 
 class _NoCacheStaticFiles(StaticFiles):
-    """Always revalidate -- a browser silently serving a stale cached
-    index.html/script against a newer API response shape (e.g. after the
-    /analyze response changed from {feedback,plots} to {strategies:{...}})
-    is exactly the kind of bug that's invisible server-side and confusing
-    client-side ("Cannot read properties of undefined"). The web UI is tiny,
-    so there's no real cost to never caching it.
+    """
+    Serve static files with ``Cache-Control: no-cache``.
+
+    A browser serving a stale cached ``index.html``/script against a newer API
+    response shape fails only client-side ("Cannot read properties of
+    undefined"). The web UI is tiny, so never caching it costs nothing.
     """
 
     async def get_response(self, path: str, scope):
+        """
+        Serve a static file with caching disabled.
+
+        Parameters
+        ----------
+        path : str
+            Requested path.
+        scope : Scope
+            ASGI scope.
+
+        Returns
+        -------
+        Response
+            The file response with a no-cache header.
+        """
         response = await super().get_response(path, scope)
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response

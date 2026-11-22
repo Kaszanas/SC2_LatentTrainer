@@ -1,4 +1,5 @@
-"""Perception-Action Cycle (PAC) extraction from StarCraft II game events.
+"""
+Perception-Action Cycle (PAC) extraction from StarCraft II game events.
 
 A PAC is one *fixation* of the player's screen together with the actions issued
 while it was held.  The idea comes from the expertise literature: a player
@@ -62,7 +63,24 @@ CAMERA_EVENT_NAME = "CameraUpdate"
 
 @dataclass
 class PerceptionActionCycle:
-    """One camera fixation and the actions issued while it was held."""
+    """
+    One camera fixation and the actions issued while it was held.
+
+    Parameters
+    ----------
+    start_loop : int
+        Loop of the camera event that opened the fixation.
+    x : float
+        Camera target x at the start of the fixation.
+    y : float
+        Camera target y at the start of the fixation.
+    camera_loops : list[int]
+        Loops of every camera update within the fixation.
+    action_loops : list[int]
+        Loops of the actions issued during the fixation.
+    end_loop : int | None
+        Loop of the next fixation's start; None for the last fixation.
+    """
 
     start_loop: int
     """Game loop at which the fixation was established."""
@@ -101,6 +119,14 @@ class PerceptionActionCycle:
 
     @property
     def n_actions(self) -> int:
+        """
+        Number of actions issued during the fixation.
+
+        Returns
+        -------
+        int
+            ``len(action_loops)``.
+        """
         return len(self.action_loops)
 
     @property
@@ -113,7 +139,22 @@ class PerceptionActionCycle:
 
 @dataclass
 class PerceptionActionCycleStats:
-    """Per-player summary of a list of :class:`PerceptionActionCycle`."""
+    """
+    Per-player summary of a list of :class:`PerceptionActionCycle`.
+
+    Parameters
+    ----------
+    n_cycles : int
+        Number of cycles.
+    ppm : float
+        Perception-action cycles per minute.
+    pal : float
+        Mean perception-action latency in seconds (fixation start to first action).
+    app : float
+        Mean actions per cycle.
+    gap : float
+        Mean seconds from a cycle's last action to the next fixation.
+    """
 
     n_cycles: int
     ppm: float
@@ -127,11 +168,26 @@ class PerceptionActionCycleStats:
 
 
 def _displacement(x_a: float, y_a: float, x_b: float, y_b: float) -> float:
-    """Combined x and y shift, matching PACAnalyzer's dispersion measure.
+    """
+    Return the combined x and y camera shift (L1 distance).
 
-    This is the L1 (Manhattan) distance rather than Euclidean, which is what
-    "max combined x & y shift" describes and what the reference implementation
-    thresholds against.
+    Matches PACAnalyzer's dispersion measure ("max combined x & y shift").
+
+    Parameters
+    ----------
+    x_a : float
+        x of the first point.
+    y_a : float
+        y of the first point.
+    x_b : float
+        x of the second point.
+    y_b : float
+        y of the second point.
+
+    Returns
+    -------
+    float
+        ``|x_a - x_b| + |y_a - y_b|``.
     """
     return abs(x_a - x_b) + abs(y_a - y_b)
 
@@ -143,7 +199,8 @@ def extract_perception_action_cycles(
     duration_threshold_seconds: float = DEFAULT_DURATION_THRESHOLD_SECONDS,
     loops_per_second: float = GAME_LOOPS_PER_SECOND,
 ) -> list[PerceptionActionCycle]:
-    """Segment one player's game events into perception-action cycles.
+    """
+    Segment one player's game events into perception-action cycles.
 
     Parameters
     ----------
@@ -225,7 +282,21 @@ def _merge_short_fixations(
     cycles: list[PerceptionActionCycle],
     minimum_duration_loops: float,
 ) -> list[PerceptionActionCycle]:
-    """Fold fixations shorter than the threshold into the preceding one."""
+    """
+    Fold fixations shorter than the threshold into the preceding one.
+
+    Parameters
+    ----------
+    cycles : list[PerceptionActionCycle]
+        Cycles in chronological order; merged cycles are mutated in place.
+    minimum_duration_loops : float
+        Minimum dwell in game loops; ``<= 0`` disables merging.
+
+    Returns
+    -------
+    list[PerceptionActionCycle]
+        Cycles with brief fixations merged (a leading brief one is kept).
+    """
     if minimum_duration_loops <= 0:
         return cycles
 
@@ -248,15 +319,26 @@ def summarize_perception_action_cycles(
     total_loops: int,
     loops_per_second: float = GAME_LOOPS_PER_SECOND,
 ) -> PerceptionActionCycleStats:
-    """Reduce a player's cycles to the four PAC statistics.
+    """
+    Reduce a player's cycles to the four PAC statistics.
 
-    Cycles containing no actions are excluded from ``pal`` and from ``gap``
-    (they have no first or last action to measure from) but still count toward
-    ``ppm`` and ``app`` -- looking somewhere and doing nothing is itself part
-    of the behaviour being measured.
+    Cycles without actions are excluded from ``pal`` and ``gap`` but count
+    toward ``ppm`` and ``app``. Returns zeroed statistics rather than raising
+    when there is nothing to summarise.
 
-    Returns zeroed statistics rather than raising when there is nothing to
-    summarise, so a player who never moved the camera does not abort a batch.
+    Parameters
+    ----------
+    cycles : list[PerceptionActionCycle]
+        The player's cycles.
+    total_loops : int
+        Game length in loops, the denominator of ``ppm``.
+    loops_per_second : float
+        Game loops per real second, by default 22.4 (Faster speed).
+
+    Returns
+    -------
+    PerceptionActionCycleStats
+        ``n_cycles``, ``ppm``, ``pal``, ``app`` and ``gap``.
     """
     n_cycles = len(cycles)
     if n_cycles == 0 or total_loops <= 0:
@@ -287,11 +369,20 @@ def summarize_perception_action_cycles(
 
 
 class PACAlgorithm:
-    """Convenience wrapper binding a threshold configuration to the functions.
+    """
+    Bind a PAC threshold configuration to the module-level functions.
 
-    The module-level functions are the interface; this exists so a
-    configuration can be set once and reused across a dataset, and to fill the
-    placeholder of the same name in ``sc2_datasets``.
+    Exists so a configuration can be set once and reused across a dataset, and
+    to fill the placeholder of the same name in ``sc2_datasets``.
+
+    Parameters
+    ----------
+    displacement_threshold : float
+        Maximum combined x+y camera shift within one fixation, by default 6.
+    duration_threshold_seconds : float
+        Minimum dwell for a fixation to stand on its own, by default 0.2.
+    loops_per_second : float
+        Game loops per real second, by default 22.4.
     """
 
     def __init__(
@@ -305,7 +396,21 @@ class PACAlgorithm:
         self.loops_per_second = loops_per_second
 
     def extract(self, game_events: list, user_id: int) -> list[PerceptionActionCycle]:
-        """Segment one player's events into cycles using this configuration."""
+        """
+        Segment one player's events into cycles using this configuration.
+
+        Parameters
+        ----------
+        game_events : list
+            The replay's game events (other users' events are ignored).
+        user_id : int
+            The ``userid`` to extract for (not the ``playerID``).
+
+        Returns
+        -------
+        list[PerceptionActionCycle]
+            Cycles in chronological order.
+        """
         return extract_perception_action_cycles(
             game_events=game_events,
             user_id=user_id,
@@ -317,7 +422,21 @@ class PACAlgorithm:
     def summarize(
         self, cycles: list[PerceptionActionCycle], total_loops: int
     ) -> PerceptionActionCycleStats:
-        """Reduce cycles to the four PAC statistics using this configuration."""
+        """
+        Reduce cycles to the four PAC statistics using this configuration.
+
+        Parameters
+        ----------
+        cycles : list[PerceptionActionCycle]
+            The player's cycles.
+        total_loops : int
+            Game length in loops.
+
+        Returns
+        -------
+        PerceptionActionCycleStats
+            The summary statistics.
+        """
         return summarize_perception_action_cycles(
             cycles=cycles,
             total_loops=total_loops,

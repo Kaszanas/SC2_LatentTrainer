@@ -1,3 +1,5 @@
+"""Iterative optimal-transport barycentric paths in latent space."""
+
 import numpy as np
 import ot
 
@@ -14,12 +16,38 @@ def path_optimal_transport(
     Z_loss: np.ndarray | None = None,
     k_opponents: int = 50,
 ) -> np.ndarray:
-    """Iterative OT barycentric flow from z_start toward the winning distribution.
+    """
+    Move from ``z_start`` toward the winning distribution by repeated OT steps.
 
-    If opponent_z and Z_loss are provided, b is uniform over the k_opponents
-    winners whose beaten opponent is most similar to the current opponent.
-    This keeps b well-conditioned (no near-zero weights) so Sinkhorn converges
-    under the same reg/numItermax as the baseline.
+    Each step solves OT from the current point to the winners (log-domain
+    Sinkhorn, or exact EMD for ``reg=0``) and moves ``step_size`` of the way to
+    the barycentric target. With ``opponent_z`` and ``Z_loss``, the targets are
+    restricted to the ``k_opponents`` winners whose beaten opponent is most
+    similar to the current opponent, keeping the target weights uniform.
+
+    Parameters
+    ----------
+    z_start : np.ndarray
+        Starting latent, ``[D]``.
+    Z_win : np.ndarray
+        Winning latents, ``[N, D]``.
+    reg : float
+        Entropic regularisation; 0 uses exact EMD, by default 0.05.
+    n_waypoints : int
+        Points on the returned path, including the start, by default 20.
+    step_size : float
+        Fraction of the distance to the target moved per step, by default 0.1.
+    opponent_z : np.ndarray | None
+        Current opponent's latent, by default None.
+    Z_loss : np.ndarray | None
+        Latents of the opponents beaten by each row of ``Z_win``, by default None.
+    k_opponents : int
+        Winners kept when conditioning on the opponent, by default 50.
+
+    Returns
+    -------
+    np.ndarray
+        Path ``[n_waypoints, D]``.
     """
     path = [z_start.copy()]
     z_current = z_start.copy()

@@ -1,3 +1,5 @@
+"""Click sub-commands of the path-charting CLI, one per strategy."""
+
 from functools import partial
 from pathlib import Path
 
@@ -55,7 +57,32 @@ def cmd_linear(
     method: str,
     k_neighbours: int,
 ):
-    """Linear interpolation toward a winning target."""
+    """
+    Chart a linear path toward a winning target.
+
+    Parameters
+    ----------
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_filename : str
+        Dense cache file name inside ``DATA_DIR``.
+    sample_idx : int | None
+        Game to analyse; None picks one at random.
+    n_steps : int
+        Waypoints along the path.
+    top_k : int
+        Features shown in the feedback.
+    method : str
+        Target: ``centroid`` of the winners or ``nearest`` (mean of the
+        ``k_neighbours`` nearest winners).
+    k_neighbours : int
+        Neighbours for the ``nearest`` target.
+
+    Raises
+    ------
+    click.ClickException
+        If ``method`` is unknown.
+    """
     path_context = prepare_path_context(
         model_path=model_path,
         dataset_path=DATA_DIR / dataset_filename,
@@ -166,7 +193,34 @@ def cmd_gradient_ascent(
     kde_bandwidth: float,
     convergence_threshold: float,
 ):
-    """Gradient ascent on P(win) regularised by a KDE density prior."""
+    """
+    Chart a path by gradient ascent on P(win) with a KDE density prior.
+
+    Parameters
+    ----------
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_filename : str
+        Dense cache file name inside ``DATA_DIR``.
+    sample_idx : int | None
+        Game to analyse; None picks one at random.
+    n_steps : int
+        Waypoints along the path.
+    top_k : int
+        Features shown in the feedback.
+    ga_steps : int
+        Maximum ascent steps.
+    ga_lr : float
+        Step size.
+    ga_momentum : float
+        Momentum.
+    density_weight : float
+        Weight of the KDE density gradient.
+    kde_bandwidth : float
+        Gaussian KDE bandwidth.
+    convergence_threshold : float
+        P(win) at which to stop early.
+    """
     path_context = prepare_path_context(
         model_path=model_path,
         dataset_path=DATA_DIR / dataset_filename,
@@ -244,7 +298,29 @@ def cmd_optimal_transport(
     top_k: int,
     ot_reg: float,
 ):
-    """Wasserstein-barycentric path into the winning distribution."""
+    """
+    Chart an iterative OT barycentric path into the winning distribution.
+
+    Parameters
+    ----------
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_filename : str
+        Dense cache file name inside ``DATA_DIR``.
+    sample_idx : int | None
+        Game to analyse; None picks one at random.
+    n_steps : int
+        Waypoints along the path.
+    top_k : int
+        Features shown in the feedback.
+    ot_reg : float
+        Entropic regularisation; 0 uses exact EMD.
+
+    Raises
+    ------
+    click.ClickException
+        If the path contains non-finite values.
+    """
     path_context = prepare_path_context(
         model_path=model_path,
         dataset_path=DATA_DIR / dataset_filename,
@@ -319,8 +395,29 @@ def cmd_neural_flow(
     guidance_scale: float,
     diagnose: bool,
 ):
-    """Counterfactual path via OT-Flow Matching (learned velocity field)."""
+    """
+    Chart a counterfactual path with a trained OT flow-matching model.
 
+    Parameters
+    ----------
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_filename : str
+        Dense cache file name inside ``DATA_DIR``.
+    sample_idx : int | None
+        Game to analyse; None picks one at random.
+    n_steps : int
+        Waypoints along the path.
+    top_k : int
+        Features shown in the feedback.
+    flow_checkpoint : Path
+        Trained flow checkpoint.
+    guidance_scale : float
+        Classifier-guidance strength added to each Euler step; 0 is the pure flow.
+    diagnose : bool
+        Print the reachable P(win) ceiling, the path P(win) trace and the
+        endpoint's distance to the winners.
+    """
     path_context = prepare_path_context(
         model_path=model_path,
         dataset_path=DATA_DIR / dataset_filename,
@@ -389,7 +486,16 @@ def cmd_neural_flow(
 
 
 def _print_diagnostics(path_context, score_fn) -> None:
-    """Report the P(win) ceiling and opponent context for the chosen sample."""
+    """
+    Print the P(win) ceiling over the winners and the opponent context.
+
+    Parameters
+    ----------
+    path_context : PathContext
+        Context of the analysed game.
+    score_fn : Callable[[torch.Tensor], torch.Tensor]
+        Opponent-aware P(win) of latents.
+    """
     import numpy as np
 
     win_latents = compute_win_latents(
@@ -419,7 +525,18 @@ def _print_diagnostics(path_context, score_fn) -> None:
 
 
 def _print_path_trace(path_z_np, score_fn, path_context) -> None:
-    """Print P(win) at 10 evenly-spaced waypoints and nearest-win distance at endpoint."""
+    """
+    Print P(win) at 10 evenly spaced waypoints and the endpoint's nearest-win distance.
+
+    Parameters
+    ----------
+    path_z_np : np.ndarray
+        Path, ``[n_steps, D]``.
+    score_fn : Callable[[torch.Tensor], torch.Tensor]
+        Opponent-aware P(win) of latents.
+    path_context : PathContext
+        Context of the analysed game.
+    """
     import numpy as np
 
     path_z = torch.tensor(path_z_np, dtype=torch.float32)

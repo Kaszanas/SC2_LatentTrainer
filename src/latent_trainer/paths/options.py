@@ -46,7 +46,19 @@ PATH_CHARTING_CLI_COMMON_OPTIONS = [
 
 
 def global_options(fn):
-    """Decorator that attaches all common path-charting options to a command."""
+    """
+    Attach all common path-charting options to a click command.
+
+    Parameters
+    ----------
+    fn : Callable
+        Command function to decorate.
+
+    Returns
+    -------
+    Callable
+        The decorated function.
+    """
     for option in reversed(PATH_CHARTING_CLI_COMMON_OPTIONS):
         fn = option(fn)
     return fn

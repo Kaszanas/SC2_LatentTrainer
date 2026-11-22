@@ -1,16 +1,12 @@
-"""Standalone training script for the OT-Flow Matching model.
+"""
+Train the OT flow-matching model on a frozen guided VAE's latents.
 
-Loads a pre-trained GuidedVAE checkpoint, encodes all training and validation
-data into latent space, builds (z_losing, z_winning) pairs per match, and
-trains a :class:`~latent_trainer.paths.flow.LitOTFlowMatching` model with
-Lightning + MLFlow logging.
+Encodes the train and val splits, splits each game into loser and winner
+latents (supervised dims only) and trains
+:class:`~latent_trainer.paths.flow.LitOTFlowMatching`; pairs are re-matched
+by OT inside each batch. Logs to MLflow.
 
-Usage::
-
-    uv run python -m latent_trainer.paths.train \\
-        --model_path output/checkpoints/my_exp/best.ckpt \\
-        --experiment_name latent_flow \\
-        --epochs 100
+Usage: ``uv run --extra cuda python -m latent_trainer.paths.train --model_path output/checkpoints/my_exp/best.ckpt --experiment_name latent_flow --epochs 100``
 """
 
 from __future__ import annotations
@@ -143,7 +139,35 @@ def main(
     mlflow_uri: str,
     output_dir: Path,
 ) -> None:
-    """Train an OT-Flow Matching model to map losing → winning latents."""
+    """
+    Train an OT flow-matching model mapping losing to winning latents.
+
+    Parameters
+    ----------
+    dataset_filename : str
+        Dense cache file name inside ``DATA_DIR``.
+    model_path : Path
+        Trained guided VAE checkpoint.
+    experiment_name : str
+        MLflow experiment name.
+    run_name : str
+        MLflow run name.
+    hidden_dim : int
+        Hidden width of the velocity network.
+    epochs : int
+        Maximum epochs.
+    batch_size : int
+        Mini-batch size.
+    learning_rate : float
+        Adam learning rate.
+    max_input_dim : int | None
+        Keep only the first N feature columns, for checkpoints trained on a
+        truncated cache.
+    mlflow_uri : str
+        MLflow tracking URI.
+    output_dir : Path
+        Base directory for checkpoints and TensorBoard logs.
+    """
     logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT)
     L.seed_everything(SEED)
 

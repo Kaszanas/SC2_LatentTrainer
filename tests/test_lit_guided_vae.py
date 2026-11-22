@@ -44,6 +44,7 @@ def _trainer(max_epochs: int = 1) -> pl.Trainer:
 
 
 def test_forward_shapes_pair_input():
+    """Pair input gives per-player outputs and one win probability per pair."""
     model = _make_model()
     recon, mu, logvar, cls = model(torch.randn(4, 2, INPUT_DIM))
     assert recon.shape == (4, 2, INPUT_DIM)
@@ -52,6 +53,7 @@ def test_forward_shapes_pair_input():
 
 
 def test_encode_flat_input():
+    """Encoding ``[B, F]`` works and clamps logvar to ``[-20, 2]``."""
     model = _make_model()
     mu, logvar = model.model.encode(torch.randn(5, INPUT_DIM))
     assert mu.shape == logvar.shape == (5, LATENT_DIM)
@@ -59,6 +61,7 @@ def test_encode_flat_input():
 
 
 def test_classifier_reads_only_supervised_dims_in_player_order():
+    """The win classifier sees ``cat(p1_sup, p2_sup)`` and ignores the free dims."""
     model = _make_model().eval()
     z = torch.randn(3, 2, LATENT_DIM)
 
@@ -74,6 +77,7 @@ def test_classifier_reads_only_supervised_dims_in_player_order():
 
 
 def test_adversary_input_is_free_dims():
+    """The adversary receives exactly the free (non-supervised) dims."""
     model = _make_model()
     z = torch.randn(3, 2, LATENT_DIM)
     free = model._slice_free_dims(z)
@@ -82,6 +86,7 @@ def test_adversary_input_is_free_dims():
 
 
 def test_prepare_label_shape_and_validation():
+    """Labels become ``[B, 1]`` float32; values outside 0/1 raise."""
     label = LitGuidedVAE._prepare_label(torch.tensor([0, 1, 1]))
     assert label.dtype == torch.float32 and label.shape == (3, 1)
     with pytest.raises(ValueError):
@@ -89,6 +94,7 @@ def test_prepare_label_shape_and_validation():
 
 
 def test_training_runs_three_optimizers_and_updates_weights():
+    """Training steps three optimizers, updates both models and logs val metrics."""
     pl.seed_everything(0)
     model = _make_model()
     before_vae = [p.detach().clone() for p in model.model.parameters()]
@@ -111,6 +117,7 @@ def test_training_runs_three_optimizers_and_updates_weights():
 
 
 def test_checkpoint_round_trip_keeps_normalisation(tmp_path):
+    """A checkpoint reload keeps ``mean``/``std`` and the encoder outputs."""
     mean = torch.arange(INPUT_DIM, dtype=torch.float32).unsqueeze(0)
     std = torch.full((1, INPUT_DIM), 3.0)
     model = _make_model(mean=mean, std=std)

@@ -1,3 +1,5 @@
+"""Single-run guided VAE training (sweep trials and final retraining)."""
+
 import logging
 from pathlib import Path
 from typing import Any
@@ -50,8 +52,53 @@ def train_guided(
     mlflow_uri: str = DEFAULT_MLFLOW_URI,
     parent_run_id: str | None = None,
 ) -> LitGuidedVAE:
-    """Run a single guided-VAE training run and return the trained model."""
+    """
+    Run a single guided VAE training run (legacy entry point).
 
+    Deprecated: passes ``vae_latent_dim``, ``learning_rate_classifier`` and
+    ``weight_decay_c``, which :class:`LitGuidedVAE` no longer accepts, so it
+    raises if called. Use :func:`train_guided_pipeline`; scheduled for removal.
+
+    Parameters
+    ----------
+    normalized_dataloaders : NormalizedDataloaders
+        Train/val loaders plus normalisation statistics.
+    output_dir : Path | str
+        Output directory, by default ``OUTPUT_DIR``.
+    supervised_dim : int
+        Supervised latent dims per player.
+    epochs : int
+        Maximum epochs.
+    vae_latent_dim : int
+        Latent dims per player.
+    classification_weight : float
+        Weight of the classification losses.
+    encoder_hidden_dims : list[int]
+        Encoder hidden widths.
+    experiment_name : str
+        MLflow experiment name.
+    run_name : str
+        MLflow run name.
+    learning_rate : float
+        VAE learning rate, by default 1e-4.
+    weight_decay : float
+        VAE weight decay, by default 1e-5.
+    learning_rate_classifier : float
+        Adversary learning rate, by default 1e-4.
+    weight_decay_c : float
+        Adversary weight decay, by default 1e-4.
+    test_interval : int
+        Validation interval in epochs, by default 1.
+    mlflow_uri : str
+        MLflow tracking URI, by default ``DEFAULT_MLFLOW_URI``.
+    parent_run_id : str | None
+        Parent MLflow run for nesting, by default None.
+
+    Returns
+    -------
+    LitGuidedVAE
+        The trained model.
+    """
     guided_vae_model = LitGuidedVAE(
         vae_latent_dim=vae_latent_dim,
         learning_rate=learning_rate,
@@ -149,7 +196,8 @@ def train_guided_pipeline(
     trial_tag: str | None = None,
     sweep_mode: bool = False,
 ) -> dict[str, float] | None:
-    """Run one Guided-VAE trial and return all validation metrics (sweep) or None.
+    """
+    Run one Guided-VAE trial and return all validation metrics (sweep) or None.
 
     Used by both the Ray Tune HPO trainable (``sweep_mode=True``) and the
     final best-params retraining run (``sweep_mode=False``).
@@ -396,7 +444,40 @@ def main(
     epochs: int,
     mlflow_uri: str,
 ) -> None:
+    """
+    Retrain the guided VAE with fixed hyperparameters.
 
+    Parameters
+    ----------
+    dataset_filename : str
+        Cached dataset file name inside ``DATA_DIR``.
+    experiment_name : str
+        MLflow experiment name.
+    run_name : str
+        MLflow run name.
+    latent_dim : int
+        Latent dims per player.
+    encoder_hidden_dims : str
+        Comma-separated encoder hidden widths, e.g. ``"256,128,64"``.
+    supervised_dim : int
+        Supervised latent dims per player.
+    batch_size : int
+        Training batch size.
+    learning_rate : float
+        VAE learning rate.
+    weight_decay : float
+        VAE weight decay.
+    learning_rate_cls : float
+        Adversary learning rate.
+    weight_decay_cls : float
+        Adversary weight decay.
+    classification_weight : float
+        Weight of the classification losses.
+    epochs : int
+        Maximum epochs.
+    mlflow_uri : str
+        MLflow tracking URI.
+    """
     hidden_dims = [int(d) for d in encoder_hidden_dims.split(",")]
 
     dataset_path = DATA_DIR / dataset_filename

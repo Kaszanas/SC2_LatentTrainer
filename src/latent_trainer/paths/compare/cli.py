@@ -32,6 +32,24 @@ from latent_trainer.settings import DATA_DIR, OUTPUT_DIR
 
 
 def _parse_methods(methods_str: str) -> list[MethodSpec]:
+    """
+    Resolve a ``--methods`` value to method specs.
+
+    Parameters
+    ----------
+    methods_str : str
+        Comma-separated method names, or ``"all"``.
+
+    Returns
+    -------
+    list[MethodSpec]
+        Matching default method specs.
+
+    Raises
+    ------
+    click.UsageError
+        If a method name is unknown.
+    """
     if methods_str.strip().lower() == "all":
         return list(DEFAULT_METHOD_SPECS)
     requested = {m.strip() for m in methods_str.split(",")}
@@ -103,8 +121,36 @@ def cmd_compare(
     output_dir: Path | None,
     save_raw: bool,
 ):
-    """Aggregate path-charting metrics across N samples and all methods."""
+    """
+    Aggregate path-charting metrics across samples and methods.
 
+    Parameters
+    ----------
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_filename : str
+        Dense cache file name inside ``DATA_DIR``.
+    sample_idx : int | None
+        Shared global option; not used by this command.
+    n_steps : int
+        Waypoints per path.
+    top_k : int
+        Features per feedback table.
+    n_samples : int
+        Samples to evaluate; 0 uses all.
+    seed : int
+        Random seed.
+    methods : str
+        Comma-separated method names or ``"all"``.
+    flow_checkpoint : Path | None
+        Flow checkpoint, required for ``neural_flow`` (skipped if absent).
+    config : Path | None
+        JSON from ``tune --output_config`` overriding method hyperparameters.
+    output_dir : Path | None
+        Output directory; None uses ``output/compare/``.
+    save_raw : bool
+        Pickle the full ``ComparisonReport`` for re-plotting.
+    """
     pl.seed_everything(seed)
 
     output_dir = output_dir or (OUTPUT_DIR / "compare")
@@ -212,7 +258,36 @@ def cmd_tune(
     flow_checkpoint: Path | None,
     seed: int,
 ):
-    """Find best hyperparameters for each method using Optuna."""
+    """
+    Tune each method's hyperparameters with Optuna.
+
+    Parameters
+    ----------
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_filename : str
+        Dense cache file name inside ``DATA_DIR``.
+    sample_idx : int | None
+        Shared global option; not used by this command.
+    n_steps : int
+        Waypoints per path.
+    top_k : int
+        Features per feedback table.
+    methods : str
+        Methods to tune, comma-separated or ``"all"``.
+    n_trials : int
+        Optuna trials per method.
+    n_samples : int
+        Samples per trial; 0 uses all.
+    metric : str
+        Metric to maximise, e.g. ``"auc"``.
+    output_config : Path | None
+        Write the best parameters as JSON for ``compare --config``.
+    flow_checkpoint : Path | None
+        Flow checkpoint; ``neural_flow`` is skipped without it.
+    seed : int
+        Random seed.
+    """
     dataset_path = DATA_DIR / dataset_filename
     method_specs = _parse_methods(methods)
 
@@ -271,10 +346,25 @@ def cmd_compare_datasets(
     labels: tuple[str, ...],
     output_dir: Path | None,
 ):
-    """Cross-dataset comparison from saved ComparisonReport pickles.
+    """
+    Compare saved ``ComparisonReport`` pickles across datasets.
 
-    Run 'compare --save_raw' once per dataset to generate the report.pkl files,
-    then call this command to produce side-by-side plots and a LaTeX table.
+    Run ``compare --save_raw`` once per dataset first; this produces
+    side-by-side plots and a LaTeX table.
+
+    Parameters
+    ----------
+    reports : tuple[Path, ...]
+        ``report.pkl`` files.
+    labels : tuple[str, ...]
+        Dataset labels in the same order; empty uses ``Dataset 1``, ...
+    output_dir : Path | None
+        Output directory; None uses ``output/cross_dataset/``.
+
+    Raises
+    ------
+    click.UsageError
+        If the number of labels and reports differ.
     """
     output_dir = output_dir or (OUTPUT_DIR / "cross_dataset")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -308,9 +398,15 @@ def cmd_compare_datasets(
     help="Directory for plots and tables. Defaults to the same directory as report.pkl.",
 )
 def cmd_replot(report_path: Path, output_dir: Path | None) -> None:
-    """Re-render all plots and LaTeX tables from a saved report.pkl without rerunning computation.
+    """
+    Re-render all plots and LaTeX tables from a saved ``report.pkl``.
 
-    Use 'compare --save_raw' to produce the report.pkl first.
+    Parameters
+    ----------
+    report_path : Path
+        Report pickled by ``compare --save_raw``.
+    output_dir : Path | None
+        Output directory; None uses the report's directory.
     """
     output_dir = output_dir or report_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -337,6 +433,14 @@ def cmd_replot(report_path: Path, output_dir: Path | None) -> None:
 
 
 def _print_summary(stats) -> None:
+    """
+    Print the per-method summary table to stdout.
+
+    Parameters
+    ----------
+    stats : Sequence[MethodStats]
+        Output of :func:`summarise`.
+    """
     if not stats:
         return
     threshold = stats[0].p_win_threshold

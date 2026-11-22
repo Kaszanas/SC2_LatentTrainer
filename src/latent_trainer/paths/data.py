@@ -1,3 +1,5 @@
+"""Model/data loading, latent encoding and opponent-aware scoring for path charting."""
+
 # ---------------------------------------------------------------------------
 # Model loading and encoding
 # ---------------------------------------------------------------------------
@@ -29,8 +31,19 @@ FEATURE_NAMES: list[str] = _build_feature_names()
 
 
 def build_granular_feature_names(n_bins: int) -> list[str]:
-    """Feature names matching rich_transform.prepare_player_features_granular's
-    layout: [meta(1), bin0(39), bin1(39), ..., bin{n_bins-1}(39)]."""
+    """
+    Return feature names matching the ``granular`` transform layout.
+
+    Parameters
+    ----------
+    n_bins : int
+        Number of temporal bins.
+
+    Returns
+    -------
+    list[str]
+        ``[meta(1), bin00_<stat>(39), ..., bin{n_bins-1}_<stat>(39)]``.
+    """
     names: list[str] = list(META_FEATURE_NAMES)
     for i in range(n_bins):
         for field in SORTED_PLAYERSTATS_KEYS:
@@ -39,11 +52,40 @@ def build_granular_feature_names(n_bins: int) -> list[str]:
 
 
 def get_supervised_dim(vae: LitGuidedVAE) -> int:
-    """Number of supervised latent dimensions in the trained model."""
+    """
+    Return the number of supervised latent dims of a trained model.
+
+    Parameters
+    ----------
+    vae : LitGuidedVAE
+        Trained model.
+
+    Returns
+    -------
+    int
+        ``vae.model.supervised_dim``.
+    """
     return vae.model.supervised_dim
 
 
 def nearest_winning_target(sample_z, win_latents, k=5) -> torch.Tensor:
+    """
+    Return the mean of the ``k`` winning latents nearest to a sample.
+
+    Parameters
+    ----------
+    sample_z : torch.Tensor
+        Sample latent, ``[D]``.
+    win_latents : torch.Tensor
+        Winning latents, ``[N, D]``.
+    k : int
+        Number of neighbours, by default 5.
+
+    Returns
+    -------
+    torch.Tensor
+        Mean of the nearest winners, ``[D]``.
+    """
     dists = torch.cdist(sample_z.unsqueeze(0), win_latents.unsqueeze(0)).squeeze(0)
     _, indices = dists.topk(k, largest=False)
     return win_latents[indices.squeeze()].mean(dim=0)
@@ -55,10 +97,24 @@ def opponent_filtered_win_target(
     loss_latents: torch.Tensor,
     k: int = 50,
 ) -> torch.Tensor:
-    """Centroid of the k winning latents whose beaten opponent is closest to opponent_z.
+    """
+    Return the centroid of the winners whose beaten opponent is closest to ``opponent_z``.
 
-    Filters the winner pool to games where the opponent profile matches the
-    current opponent, making the target opponent-aware.
+    Parameters
+    ----------
+    opponent_z : torch.Tensor
+        Current opponent's latent, ``[D]``.
+    win_latents : torch.Tensor
+        Winning latents, ``[N, D]``.
+    loss_latents : torch.Tensor
+        Latent of the opponent each winner beat, ``[N, D]``.
+    k : int
+        Number of winners averaged, by default 50.
+
+    Returns
+    -------
+    torch.Tensor
+        Opponent-aware target latent, ``[D]``.
     """
     dists = torch.cdist(opponent_z.unsqueeze(0), loss_latents).squeeze(0)
     _, indices = dists.topk(k, largest=False)
@@ -67,6 +123,21 @@ def opponent_filtered_win_target(
 
 @torch.no_grad()
 def encode_player(vae, data: torch.Tensor) -> torch.Tensor:
+    """
+    Encode one player's features to posterior means, in chunks of 256.
+
+    Parameters
+    ----------
+    vae : suGuidedVAE
+        Model exposing ``encode``.
+    data : torch.Tensor
+        Normalised features of one player, ``[N, F]``.
+
+    Returns
+    -------
+    torch.Tensor
+        Posterior means, ``[N, latent_dim]``.
+    """
     mus = []
     for i in range(0, len(data), 256):
         mu, _ = vae.encode(data[i : i + 256])
@@ -76,6 +147,25 @@ def encode_player(vae, data: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def decode_features(vae, z, norm_mean, norm_std) -> np.ndarray:
+    """
+    Decode latents and undo the feature normalisation.
+
+    Parameters
+    ----------
+    vae : suGuidedVAE
+        Model exposing ``decode``.
+    z : torch.Tensor
+        Latents, ``[N, latent_dim]``.
+    norm_mean : torch.Tensor
+        Training feature mean.
+    norm_std : torch.Tensor
+        Training feature std.
+
+    Returns
+    -------
+    np.ndarray
+        Features in original units, ``[N, F]``.
+    """
     recon_norm = vae.decode(z)
     return (recon_norm * norm_std + norm_mean).cpu().numpy()
 
@@ -84,7 +174,24 @@ def load_model_and_data(
     model_path: Path,
     cached_dataset_filepath: Path,
 ) -> tuple[LitGuidedVAE, torch.Tensor, torch.Tensor]:
+    """
+    Load a guided VAE checkpoint and the normalised test split of a dense cache.
 
+    Features are truncated to the model's input width and normalised with the
+    checkpoint's ``mean``/``std``.
+
+    Parameters
+    ----------
+    model_path : Path
+        Guided VAE checkpoint.
+    cached_dataset_filepath : Path
+        Dense feature cache.
+
+    Returns
+    -------
+    tuple[LitGuidedVAE, torch.Tensor, torch.Tensor]
+        Model in eval mode, test features ``[N, 2, F]`` and test labels.
+    """
     # TODO: If there are other models than Guided VAE, this function
     # TODO: will need to take the model class as an argument instead of hardcoding:
     vae_model = LitGuidedVAE.load_from_checkpoint(checkpoint_path=model_path)
@@ -130,14 +237,27 @@ def opponent_aware_score(
     player_idx: int,
 ) -> torch.Tensor:
     """
-    P(z wins) for each row in z against a fixed opponent.
+    Return P(z wins) for each row of ``z`` against a fixed opponent.
 
-    The classifier operates only on the supervised latent dims
-    (first ``supervised_dim`` entries).
-    We derive that count from the classifier's
-    input layer so callers don't need to pass it explicitly.
+    The supervised dim count is read from the classifier's input layer.
+
+    Parameters
+    ----------
+    z : torch.Tensor
+        Candidate latents of the analysed player, ``[N, D]``.
+    guided_vae : LitGuidedVAE
+        Trained model.
+    opponent_z : torch.Tensor
+        Opponent latent, ``[D]``.
+    player_idx : int
+        0 if the analysed player is player 1, 1 if player 2; sets the order of
+        the classifier input.
+
+    Returns
+    -------
+    torch.Tensor
+        Win probabilities of the analysed player, ``[N]``.
     """
-
     classifier = guided_vae.model.classifier
     z = z.to(opponent_z.device)
 
@@ -160,12 +280,28 @@ def opponent_aware_logit(
     opponent_z: torch.Tensor,
     player_idx: int,
 ) -> torch.Tensor:
-    """Pre-sigmoid logit for each row in z, with a fixed opponent.
-
-    Strips the final Sigmoid layer from the classifier so we get
-    raw logits — better gradients far from the decision boundary.
     """
+    Return the pre-sigmoid win logit for each row of ``z`` against a fixed opponent.
 
+    Runs the classifier without its final Sigmoid, giving better gradients far
+    from the decision boundary.
+
+    Parameters
+    ----------
+    z : torch.Tensor
+        Candidate latents of the analysed player, ``[N, D]``.
+    guided_vae : LitGuidedVAE
+        Trained model.
+    opponent_z : torch.Tensor
+        Opponent latent, ``[D]``.
+    player_idx : int
+        0 if the analysed player is player 1, 1 if player 2.
+
+    Returns
+    -------
+    torch.Tensor
+        Win logits of the analysed player, ``[N]``.
+    """
     classifier = guided_vae.model.classifier
     z = z.to(opponent_z.device)
 
@@ -189,6 +325,31 @@ def opponent_aware_logit(
 # Shared path-charting context
 @dataclass
 class PathContext:
+    """
+    Everything a strategy needs to chart a path for one selected game.
+
+    Parameters
+    ----------
+    guided_vae : LitGuidedVAE
+        Trained model.
+    X : torch.Tensor
+        Normalised features, ``[N, 2, F]``.
+    labels : np.ndarray
+        Labels as numpy, ``[N]``; 1 = player 1 won.
+    labels_tensor : torch.Tensor
+        Labels as a tensor, ``[N]``.
+    latents_p0 : torch.Tensor
+        Player 1 latents, ``[N, D]``.
+    latents_p1 : torch.Tensor
+        Player 2 latents, ``[N, D]``.
+    chosen : int
+        Index of the analysed game.
+    player_idx : int
+        Index of the losing player in that game (0 or 1).
+    sample_z : torch.Tensor
+        The losing player's latent, the start of the path.
+    """
+
     guided_vae: LitGuidedVAE
     X: torch.Tensor
     labels: np.ndarray
@@ -205,7 +366,23 @@ def compute_win_latents(
     latents_p0: torch.Tensor,
     latents_p1: torch.Tensor,
 ) -> torch.Tensor:
-    """Return the winning player's latent for each sample (label=1 → p0 won)."""
+    """
+    Return the winning player's latent for each game.
+
+    Parameters
+    ----------
+    labels_tensor : torch.Tensor
+        Labels, ``[N]``; 1 = player 1 won.
+    latents_p0 : torch.Tensor
+        Player 1 latents, ``[N, D]``.
+    latents_p1 : torch.Tensor
+        Player 2 latents, ``[N, D]``.
+
+    Returns
+    -------
+    torch.Tensor
+        Winner latents, ``[N, D]``.
+    """
     return torch.where(
         (labels_tensor == 1).unsqueeze(1),
         latents_p0,
@@ -218,7 +395,23 @@ def compute_loss_latents(
     latents_p0: torch.Tensor,
     latents_p1: torch.Tensor,
 ) -> torch.Tensor:
-    """Return the losing player's latent for each sample (label=0 → p1 won, p0 lost)."""
+    """
+    Return the losing player's latent for each game.
+
+    Parameters
+    ----------
+    labels_tensor : torch.Tensor
+        Labels, ``[N]``; 1 = player 1 won.
+    latents_p0 : torch.Tensor
+        Player 1 latents, ``[N, D]``.
+    latents_p1 : torch.Tensor
+        Player 2 latents, ``[N, D]``.
+
+    Returns
+    -------
+    torch.Tensor
+        Loser latents, ``[N, D]``.
+    """
     return torch.where(
         (labels_tensor == 0).unsqueeze(1),
         latents_p0,
@@ -236,10 +429,32 @@ def build_path_context(
     latents_p1: torch.Tensor,
     chosen: int,
 ) -> "PathContext":
-    """Build a PathContext from pre-encoded latents.
+    """
+    Build a :class:`PathContext` from pre-encoded latents.
 
-    Extracted so the orchestrator can reuse a single encode pass across all
-    samples instead of reloading the model per sample.
+    Lets the orchestrator reuse one encoding pass across many games.
+
+    Parameters
+    ----------
+    guided_vae : LitGuidedVAE
+        Trained model.
+    X : torch.Tensor
+        Normalised features, ``[N, 2, F]``.
+    labels : np.ndarray
+        Labels as numpy.
+    labels_tensor : torch.Tensor
+        Labels as a tensor.
+    latents_p0 : torch.Tensor
+        Player 1 latents.
+    latents_p1 : torch.Tensor
+        Player 2 latents.
+    chosen : int
+        Index of the game to analyse.
+
+    Returns
+    -------
+    PathContext
+        Context whose ``sample_z`` is the losing player's latent.
     """
     player_idx = int(labels[chosen])
     sample_z = latents_p0[chosen] if player_idx == 0 else latents_p1[chosen]
@@ -261,11 +476,25 @@ def prepare_path_context(
     dataset_path: Path,
     sample_idx: int | None,
 ) -> PathContext:
-    """Load model + data, encode both players, and select a game to analyse.
+    """
+    Load model and data, encode both players and select a game to analyse.
 
-    Every game has exactly one loser. ``sample_z`` is always that player's
-    latent — the starting point for the improvement path. The winning target
-    (centroid, nearest-win, etc.) is determined separately by each strategy.
+    Every game has exactly one loser; ``sample_z`` is that player's latent. Each
+    strategy chooses its own winning target.
+
+    Parameters
+    ----------
+    model_path : Path
+        Guided VAE checkpoint.
+    dataset_path : Path
+        Dense feature cache (its test split is used).
+    sample_idx : int | None
+        Game index to analyse; None or an out-of-range index picks one at random.
+
+    Returns
+    -------
+    PathContext
+        Context for the selected game.
     """
     print("Loading model and data...")
     guided_vae, X, y = load_model_and_data(

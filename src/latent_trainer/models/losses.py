@@ -1,4 +1,5 @@
-"""Loss functions for the guided VAE training loop.
+"""
+Loss functions for the guided VAE training loop.
 
 ``loss_supervised`` is used by :func:`latent_trainer.models.train_model.train_guided`
 for the ``suGuidedVAE`` (tabular SC2 features).
@@ -14,7 +15,8 @@ def loss_supervised(
     mu: torch.Tensor,
     logvar: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """VAE loss: MSE reconstruction + KL divergence.
+    """
+    VAE loss: MSE reconstruction + KL divergence.
 
     Parameters
     ----------

@@ -16,6 +16,74 @@ from latent_trainer.paths.compare.results import ComparisonReport, PathRunResult
 
 @dataclass
 class MethodStats:
+    """
+    Per-method statistics aggregated over all compared samples.
+
+    ``*_mean``/``*_sd`` pairs are the mean and sample standard deviation over
+    runs (NaN SD for a single run).
+
+    Parameters
+    ----------
+    method_name : str
+        Method identifier.
+    display_name : str
+        Name shown in plots and tables.
+    n_runs : int
+        Runs without an error.
+    n_success : int
+        Runs whose P(win) crossed 0.5.
+    success_rate : float
+        ``n_success / n_runs``.
+    crossover_alpha_mean, crossover_alpha_sd : float
+        Normalised path position of the first crossover (successful runs only).
+    p_win_gain_mean, p_win_gain_sd : float
+        P(win) end minus start.
+    p_win_max_mean, p_win_max_sd : float
+        Maximum P(win) along the path.
+    auc_mean, auc_sd : float
+        Area under the P(win) curve over ``alpha`` in ``[0, 1]``.
+    monotonicity_mean, monotonicity_sd : float
+        Fraction of non-decreasing consecutive P(win) steps.
+    p_win_start_mean, p_win_start_sd : float
+        P(win) at the path start.
+    p_win_end_mean, p_win_end_sd : float
+        P(win) at the path end.
+    dist_nearest_win_end_mean, dist_nearest_win_end_sd : float
+        Distance from the path end to the nearest winning latent.
+    kde_density_shift_mean, kde_density_shift_sd : float
+        Winner-KDE density at the end minus at the start.
+    cond_n_eligible : int
+        Runs starting below P(win) 0.5.
+    cond_n_success : int
+        Eligible runs that crossed 0.5.
+    cond_success_rate : float
+        Success rate among eligible runs.
+    p_win_threshold : float
+        SD-adjusted bar ``0.5 + std(P(win) start)`` across all runs.
+    sd_adj_n_eligible : int
+        Runs starting below ``p_win_threshold``.
+    sd_adj_n_success : int
+        Eligible runs that reached ``p_win_threshold``.
+    sd_adj_success_rate : float
+        SD-adjusted success rate.
+    p_win_gain_norm_mean, p_win_gain_norm_sd : float
+        Normalised gain ``(P_end - P_start) / (1 - P_start)``.
+    mean_z_norm_mean, mean_z_norm_sd : float
+        Mean latent norm along the path (off-manifold diagnostic).
+    max_z_norm_mean, max_z_norm_sd : float
+        Maximum latent norm along the path.
+    wall_time_mean_s, wall_time_sd_s : float
+        Wall-clock seconds per run.
+    path_length_feature_mean, path_length_feature_sd : float
+        Path length in decoded feature space (original scale).
+    n_features_changed_mean, n_features_changed_sd : float
+        Features changed by more than 1 training SD (sparsity).
+    kde_density_path_mean_mean, kde_density_path_mean_sd : float
+        Path-averaged winner-KDE log-density (on-manifold quality).
+    recon_cycle_error_mean_mean, recon_cycle_error_mean_sd : float
+        Mean ``||z - encode(decode(z))||`` along the path.
+    """
+
     method_name: str
     display_name: str
     n_runs: int
@@ -92,6 +160,19 @@ class MethodStats:
 
 
 def _mean_sd(values: list[float]) -> tuple[float, float]:
+    """
+    Return the mean and sample standard deviation of a list.
+
+    Parameters
+    ----------
+    values : list[float]
+        Values.
+
+    Returns
+    -------
+    tuple[float, float]
+        ``(mean, sd)``; ``(nan, nan)`` if empty, ``(value, nan)`` for one value.
+    """
     if not values:
         return math.nan, math.nan
     if len(values) == 1:
@@ -100,7 +181,19 @@ def _mean_sd(values: list[float]) -> tuple[float, float]:
 
 
 def summarise(report: ComparisonReport) -> tuple[MethodStats, ...]:
-    """Aggregate results into per-method statistics."""
+    """
+    Aggregate the per-run results into per-method statistics.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+
+    Returns
+    -------
+    tuple[MethodStats, ...]
+        One entry per method, in report order.
+    """
     # Compute SD-adjusted threshold once from all runs (method-agnostic)
     all_starts = [
         r.p_win_start
@@ -259,7 +352,23 @@ def jaccard_between_methods(
     report: ComparisonReport,
     signal: Literal["raw", "mv", "weighted"] = "weighted",
 ) -> pd.DataFrame:
-    """Compute a methods x methods Jaccard similarity matrix for top-k features."""
+    """
+    Compute a methods x methods Jaccard similarity matrix of top-k features.
+
+    Similarities are averaged over samples where both methods ran without error.
+
+    Parameters
+    ----------
+    report : ComparisonReport
+        Comparison results.
+    signal : Literal["raw", "mv", "weighted"]
+        Which feedback signal's top-k features to compare, by default "weighted".
+
+    Returns
+    -------
+    pd.DataFrame
+        Symmetric matrix indexed by method display name.
+    """
     method_names = [s.name for s in report.methods]
     method_display = {s.name: s.display_name for s in report.methods}
 
