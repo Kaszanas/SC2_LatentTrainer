@@ -9,11 +9,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from latent_trainer.features.type import CachedDatasetFileSpec
 from latent_trainer.features.rich_transform import (
     META_FEATURE_NAMES,
     SORTED_PLAYERSTATS_KEYS,
 )
+from latent_trainer.features.type import CachedDatasetFileSpec
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
 
 

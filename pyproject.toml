@@ -72,7 +72,20 @@ environments = [
 exclude = [".venv"]
 line-length = 88
 extend-exclude = ["src/sc2_combat_detector/proto", "src/proto"]
-lint.extend-select = ["I"]
+# Docstrings: numpy convention, summary on the second line,
+# every argument described.
+lint.extend-select = ["I", "D", "D213", "D417"]
+# Constructor args are documented in the class docstring.
+lint.ignore = ["D105", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: one-line summary per test/fixture; fixture args need no Parameters section.
+"tests/**" = ["D100", "D104", "D417"]
+# Separate standalone project with its own tooling.
+"experiments/**" = ["D"]
 
 
 [build-system]
