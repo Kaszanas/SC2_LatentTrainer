@@ -1,24 +1,16 @@
-"""Pre-process the SC2EGSet dataset and cache transformed tensors to disk.
+"""Dense feature caches (rich / granular / averaged_economy) for the guided VAE.
 
-This script iterates through all replays once, applies the transform,
-catches broken replays, and saves valid (features, label) pairs to a .pt file.
-Subsequent training runs can load from this cache instantly.
-
-Usage:
-    # Default (rich transform):
-    uv run python src/latent_trainer/features/preprocess_dataset.py
-
-    # Legacy economy-average transform:
-    uv run python src/latent_trainer/features/preprocess_dataset.py --transform economy
+Split membership comes from ``splits.json`` (see ``features/splits.py``); run via
+``python -m latent_trainer.features``.
 """
 
+import functools
 import logging
 import os
 from concurrent.futures import (
     FIRST_COMPLETED,
     ProcessPoolExecutor,
     ThreadPoolExecutor,
-    as_completed,
     wait,
 )
 from dataclasses import asdict
@@ -34,15 +26,19 @@ from sc2_datasets.replay_data.sc2_replay_data import SC2ReplayData
 from sc2_datasets.transforms.pytorch.economy_vs_outcome import (
     economy_average_vs_outcome,
 )
-from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 
 from latent_trainer.features.event_transform import event_transform
+from latent_trainer.features.extraction import (
+    extract_with_manifest,
+    load_source_dataset,
+)
 from latent_trainer.features.rich_transform import (
     rich_transform,
     rich_transform_granular,
 )
+from latent_trainer.features.splits import SPLIT_NAMES
 from latent_trainer.features.type import CachedDatasetFileSpec
 from latent_trainer.settings import DATA_DIR
 
@@ -69,110 +65,6 @@ def _transform_single_object(
     return result
 
 
-def process_batch(
-    executor: ProcessPoolExecutor | ThreadPoolExecutor,
-    n_workers: int,
-    dataset_object: Dataset,
-    transform_fn: Callable,
-    start_index: int,
-    end_index: int,
-) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
-    set_features = []
-    set_labels = []
-    skipped = 0
-    errors = 0
-
-    with executor(max_workers=n_workers) as executor:
-        futures = [
-            executor.submit(
-                _transform_single_object,
-                dataset_object=dataset_object,
-                index=i,
-                transform_fn=transform_fn,
-            )
-            for i in range(start_index, end_index)
-        ]
-
-        for future in tqdm(
-            as_completed(futures),
-            desc=f"  Batch {start_index}:{end_index} (parallel)",
-            total=len(futures),
-        ):
-            result = future.result()
-
-            if isinstance(result, Exception):
-                errors += 1
-            elif result is None:
-                skipped += 1
-            else:
-                features, label = result
-                set_features.append(
-                    features
-                    if isinstance(features, torch.Tensor)
-                    else torch.tensor(features, dtype=torch.float32)
-                )
-                set_labels.append(label)
-
-    return set_features, set_labels, skipped, errors
-
-
-def process_set(
-    dataset_object: DataLoader,
-    executor: ProcessPoolExecutor | ThreadPoolExecutor,
-    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]] = None,
-    n_workers: int = 24,
-) -> tuple[list[torch.Tensor], list[torch.Tensor], int, int]:
-    """
-    Process a dataset split (train/test/val) in parallel,
-    apply the transform, and return lists of features and labels along with counts of skipped and errored replays.
-
-    Parameters
-    ----------
-    dataset_object : DataLoader
-        Dataloader for the dataset split to process (train/test/val)
-    transform_fn : Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]], optional
-        Function to apply as the transform, by default None
-    n_workers : int, optional
-        Number of worker processes to use for parallel processing, by default 24
-
-    Returns
-    -------
-    tuple[list[torch.Tensor], list[torch.Tensor], int, int]
-        A tuple containing:
-        - List of feature tensors
-        - List of label tensors
-        - Count of skipped replays (where transform returned None)
-        - Count of errors encountered during processing
-    """
-
-    skipped = 0
-    errors = 0
-
-    set_features = []
-    set_labels = []
-
-    batch_size = 20_000
-    total_size = len(dataset_object)
-
-    for start_index in range(0, total_size, batch_size):
-        end_index = min(start_index + batch_size, total_size)
-        batch_features, batch_labels, batch_skipped, batch_errors = process_batch(
-            executor=executor,
-            n_workers=n_workers,
-            dataset_object=dataset_object,
-            transform_fn=transform_fn,
-            start_index=start_index,
-            end_index=end_index,
-        )
-
-        set_features.extend(batch_features)
-        set_labels.extend(batch_labels)
-        skipped += batch_skipped
-        errors += batch_errors
-
-    return set_features, set_labels, skipped, errors
-
-
 def process_replay(
     replay: SC2ReplayData,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, int]],
@@ -193,203 +85,6 @@ def process_replay(
         return None
 
     return features, label
-
-
-def check_split(
-    train_dataset: DataLoader,
-    test_dataset: DataLoader,
-    val_dataset: DataLoader,
-) -> None:
-
-    total = len(train_dataset) + len(test_dataset) + len(val_dataset)
-    logging.info(
-        f"  Total replays: {total} (train: {len(train_dataset)}, test: {len(test_dataset)}, val: {len(val_dataset)})"
-    )
-    if total == 0:
-        logging.warning("Dataset is empty! No replays found.")
-        return
-
-    train_frac = len(train_dataset) / total
-    test_frac = len(test_dataset) / total
-    val_frac = len(val_dataset) / total
-
-    # Check if within 1.5% of target
-    if (
-        abs(train_frac - 0.8) > 0.015
-        or abs(test_frac - 0.1) > 0.015
-        or abs(val_frac - 0.1) > 0.015
-    ):
-        logging.warning(
-            f"Dataset split deviates from 80/10/10! "
-            f"Got: Train={train_frac:.2%}, Test={test_frac:.2%}, Val={val_frac:.2%}"
-        )
-        raise ValueError(
-            f"Dataset split deviates from 80/10/10! "
-            f"Got: Train={train_frac:.2%}, Test={test_frac:.2%}, Val={val_frac:.2%}"
-        )
-
-    return total
-
-
-def preprocess_dataset(
-    transform_name: str,
-    transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
-    single_json_dataset_path: Path | str,
-    output_directory: Path | str = DATA_DIR,
-    n_workers: int = 24,
-) -> None:
-    """
-    Preprocess a single JSON dataset and cache the transformed tensors to disk.
-
-    Parameters
-    ----------
-    transform_name : str
-        The name of the transformation (e.g. ``"rich"`` or ``"averaged_economy"``).
-        Used to label the output file as ``cached_dataset_<transform_name>.pt``.
-    transform_fn : Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]]
-        Function that maps a raw SC2ReplayData replay to a (features, label) pair.
-    dataset_name : str, optional
-        Name of the dataset, matching the JSON file stem, by default ``"sc2egset_merged"``.
-    single_json_dataset_path : Path | str, optional
-        Path to the single-JSON index file for the dataset,
-        by default ``H:/sc2egset_merged/sc2egset_merged.json``.
-    output_directory : Path | str, optional
-        Directory where the cached ``.pt`` file will be written,
-        by default ``./data``.
-    n_workers : int, optional
-        Number of worker processes for parallel replay processing, by default 24.
-    """
-
-    logging.info(f"SC2EGSet Dataset Pre-processing ({transform_name} transform)")
-
-    # Initialize datamodule (this downloads + extracts if needed)
-    logging.info("[1/3] Loading SC2EGSet datamodule (downloading if needed)...")
-
-    datamodule = SC2EGSetDataModuleSingleJSON(
-        json_path=single_json_dataset_path,
-        download=False,
-    )
-
-    # Initialize the datamodule to get train/test/val splits (but skip any transforms for now)
-    datamodule.prepare_data()
-    datamodule.setup("fit")
-
-    # Get train, test, and val datasets
-    train_dataset = datamodule.train_dataset
-    test_dataset = datamodule.test_dataset
-    val_dataset = datamodule.val_dataset
-
-    train_dataset.indices = sorted(train_dataset.indices)
-    test_dataset.indices = sorted(test_dataset.indices)
-    val_dataset.indices = sorted(val_dataset.indices)
-
-    total = check_split(
-        train_dataset=train_dataset,
-        test_dataset=test_dataset,
-        val_dataset=val_dataset,
-    )
-
-    # Process all replays
-    logging.info("[2/3] Processing replays and applying transform...")
-
-    logging.info("  Processing training set...")
-    train_features, train_labels, skipped_train, errors_train = process_set(
-        dataset_object=train_dataset,
-        executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
-        transform_fn=transform_fn,
-        n_workers=n_workers,
-    )
-    logging.info("  Processing test set...")
-    test_features, test_labels, skipped_test, errors_test = process_set(
-        dataset_object=test_dataset,
-        executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
-        transform_fn=transform_fn,
-        n_workers=n_workers,
-    )
-    logging.info("  Processing validation set...")
-    val_features, val_labels, skipped_val, errors_val = process_set(
-        dataset_object=val_dataset,
-        executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
-        transform_fn=transform_fn,
-        n_workers=n_workers,
-    )
-
-    # Stack into tensors
-    logging.info("\n[3/3] Saving cached dataset...")
-
-    train_features_tensor = torch.stack(train_features)
-    train_labels_tensor = torch.tensor(train_labels, dtype=torch.long)
-    test_features_tensor = torch.stack(test_features)
-    test_labels_tensor = torch.tensor(test_labels, dtype=torch.long)
-    val_features_tensor = torch.stack(val_features)
-    val_labels_tensor = torch.tensor(val_labels, dtype=torch.long)
-
-    # Fill in missing samples up to the correct split using the test set since
-    # it is the least critical for training:
-    if len(train_features_tensor) < 0.8 * total:
-        needed = int(0.8 * total) - len(train_features_tensor)
-        logging.warning(
-            f"Training set has {len(train_features_tensor)} samples, which is less than 80% of total. "
-            f"Filling in {needed} samples from the test set to maintain correct split ratios."
-        )
-        # remove from test set and add to the train set:
-        train_features_tensor = torch.cat(
-            [train_features_tensor, test_features_tensor[:needed]], dim=0
-        )
-        train_labels_tensor = torch.cat(
-            [train_labels_tensor, test_labels_tensor[:needed]], dim=0
-        )
-        test_features_tensor = test_features_tensor[needed:]
-        test_labels_tensor = test_labels_tensor[needed:]
-
-    # Fill in the validation set if needed using the test set since it is the least critical for training:
-    if len(val_features_tensor) < 0.1 * total:
-        needed = int(0.1 * total) - len(val_features_tensor)
-        logging.warning(
-            f"Validation set has {len(val_features_tensor)} samples, which is less than 10% of total. "
-            f"Filling in {needed} samples from the test set to maintain correct split ratios."
-        )
-        val_features_tensor = torch.cat(
-            [val_features_tensor, test_features_tensor[:needed]], dim=0
-        )
-        val_labels_tensor = torch.cat(
-            [val_labels_tensor, test_labels_tensor[:needed]], dim=0
-        )
-        test_features_tensor = test_features_tensor[needed:]
-        test_labels_tensor = test_labels_tensor[needed:]
-
-    file_spec = CachedDatasetFileSpec(
-        train_features=train_features_tensor,
-        train_labels=train_labels_tensor,
-        test_features=test_features_tensor,
-        test_labels=test_labels_tensor,
-        val_features=val_features_tensor,
-        val_labels=val_labels_tensor,
-        transform=transform_name,
-    )
-
-    # Save
-    os.makedirs(os.path.dirname(output_directory), exist_ok=True)
-    path_to_save = output_directory / f"cached_dataset_{transform_name}.pt"
-    torch.save(
-        asdict(file_spec),
-        path_to_save,
-    )
-
-    file_size_mb = os.path.getsize(path_to_save) / (1024 * 1024)
-
-    logging.info(f"\n{'=' * 60}")
-    logging.info("Pre-processing complete!")
-    logging.info(f"  Transform:        {transform_name}")
-    logging.info(f"  Total replays:    {total}")
-    logging.info(f"  Valid train:      {len(train_features_tensor)}")
-    logging.info(f"  Valid val:        {len(val_features_tensor)}")
-    logging.info(f"  Valid test:       {len(test_features_tensor)}")
-    logging.info(f"  Skipped (None):   {skipped_train + skipped_val + skipped_test}")
-    logging.info(f"  Errors:           {errors_train + errors_val + errors_test}")
-    logging.info(f"  Feature shape:    {train_features_tensor.shape}")
-    logging.info(f"  Cache file:       {output_directory} ({file_size_mb:.1f} MB)")
-    logging.info(f"{'=' * 60}")
 
 
 class TransformEnumFunction(click.Choice):
@@ -599,14 +294,16 @@ def preprocess_dataset_test_only(
         offset += len(batch)
 
         test_dataset.indices = sorted(batch)
-        batch_features, batch_labels, batch_skipped, batch_errors = process_set_chunked_single_pool(
-            dataset_object=test_dataset,
-            executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
-            transform_fn=transform_fn,
-            n_workers=n_workers,
-            chunk_size=chunk_size,
-            max_inflight_tasks=max_inflight_tasks,
-            set_name="test",
+        batch_features, batch_labels, batch_skipped, batch_errors = (
+            process_set_chunked_single_pool(
+                dataset_object=test_dataset,
+                executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
+                transform_fn=transform_fn,
+                n_workers=n_workers,
+                chunk_size=chunk_size,
+                max_inflight_tasks=max_inflight_tasks,
+                set_name="test",
+            )
         )
         all_features.extend(batch_features)
         all_labels.extend(batch_labels)
@@ -664,186 +361,77 @@ def preprocess_dataset_test_only(
     logging.info(f"{'=' * 60}")
 
 
-def _subsample_indices(
-    indices: list[int],
-    n_target: int,
-    generator: torch.Generator,
-) -> list[int]:
-    """Return a sorted random subset of *indices* of size *n_target* using *generator*."""
-    if n_target <= 0 or n_target >= len(indices):
-        return indices
-    perm = torch.randperm(len(indices), generator=generator)[:n_target]
-    return sorted(torch.tensor(indices)[perm].tolist())
-
-
-def preprocess_dataset_chunked_profile(
+def preprocess_dataset(
     transform_name: str,
     transform_fn: Callable[[SC2ReplayData], tuple[torch.Tensor, torch.Tensor]],
     single_json_dataset_path: Path | str,
+    splits_path: Path | str,
+    create_splits: bool = False,
     output_directory: Path | str = DATA_DIR,
     n_workers: int = 8,
     chunk_size: int = 64,
-    max_inflight_tasks: int | None = None,
     n_samples: int = 0,
     seed: int = 42,
 ) -> None:
-    """Alternative preprocess entrypoint for performance profiling.
-
-    This leaves ``preprocess_dataset`` unchanged and writes a separate cache file
-    with ``_chunked`` suffix for side-by-side comparison.
-    """
-
+    """Build ``cached_dataset_<transform>[_<n>].pt`` with splits from ``splits.json``."""
     logging.info(
-        "SC2EGSet Dataset Pre-processing (chunked profile path): "
-        f"transform={transform_name}, n_workers={n_workers}, "
-        f"chunk_size={chunk_size}, max_inflight_tasks={max_inflight_tasks}"
+        f"SC2EGSet dense pre-processing: transform={transform_name}, "
+        f"n_workers={n_workers}, chunk_size={chunk_size}, n_samples={n_samples}"
     )
 
-    datamodule = SC2EGSetDataModuleSingleJSON(
-        json_path=single_json_dataset_path,
-        download=False,
-    )
-    datamodule.prepare_data()
-    datamodule.setup("fit")
-
-    train_dataset = datamodule.train_dataset
-    test_dataset = datamodule.test_dataset
-    val_dataset = datamodule.val_dataset
-
-    train_dataset.indices = sorted(train_dataset.indices)
-    test_dataset.indices = sorted(test_dataset.indices)
-    val_dataset.indices = sorted(val_dataset.indices)
-
-    total = check_split(
-        train_dataset=train_dataset,
-        test_dataset=test_dataset,
-        val_dataset=val_dataset,
-    )
-
-    if n_samples > 0:
-        generator = torch.Generator()
-        generator.manual_seed(seed)
-        n_train = round(n_samples * len(train_dataset.indices) / total)
-        n_test = round(n_samples * len(test_dataset.indices) / total)
-        n_val = n_samples - n_train - n_test
-        train_dataset.indices = _subsample_indices(
-            train_dataset.indices, n_train, generator
-        )
-        test_dataset.indices = _subsample_indices(
-            test_dataset.indices, n_test, generator
-        )
-        val_dataset.indices = _subsample_indices(val_dataset.indices, n_val, generator)
-        logging.info(
-            f"  Sampled {len(train_dataset.indices)} train / "
-            f"{len(test_dataset.indices)} test / "
-            f"{len(val_dataset.indices)} val from {total} total (seed={seed})"
-        )
-
-    val_features, val_labels, skipped_val, errors_val = process_set_chunked_single_pool(
-        dataset_object=val_dataset,
-        executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
-        transform_fn=transform_fn,
+    result = extract_with_manifest(
+        load_source_dataset(single_json_dataset_path),
+        functools.partial(process_replay, transform_fn=transform_fn),
+        transform_name=transform_name,
+        dataset_file=Path(single_json_dataset_path).name,
+        splits_path=Path(splits_path),
+        create_splits=create_splits,
+        n_samples=n_samples,
+        seed=seed,
         n_workers=n_workers,
         chunk_size=chunk_size,
-        max_inflight_tasks=max_inflight_tasks,
-        set_name="val",
     )
 
-    logging.info(
-        f"Validation set complete: {len(val_features)} valid, {skipped_val} skipped, {errors_val} errors."
-    )
-
-    val_features_tensor = torch.stack(val_features)
-    val_labels_tensor = torch.tensor(val_labels, dtype=torch.long)
-
-    test_features, test_labels, skipped_test, errors_test = (
-        process_set_chunked_single_pool(
-            dataset_object=test_dataset,
-            executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
-            transform_fn=transform_fn,
-            n_workers=n_workers,
-            chunk_size=chunk_size,
-            max_inflight_tasks=max_inflight_tasks,
-            set_name="test",
+    tensors: dict[str, torch.Tensor] = {}
+    for split in SPLIT_NAMES:
+        pairs = result.outputs[split]
+        if not pairs:
+            raise ValueError(f"Split '{split}' is empty; nothing to cache.")
+        tensors[f"{split}_features"] = torch.stack(
+            [
+                features
+                if isinstance(features, torch.Tensor)
+                else torch.tensor(features, dtype=torch.float32)
+                for features, _ in pairs
+            ]
         )
-    )
+        tensors[f"{split}_labels"] = torch.tensor(
+            [int(label) for _, label in pairs], dtype=torch.long
+        )
 
-    test_features_tensor = torch.stack(test_features)
-    test_labels_tensor = torch.tensor(test_labels, dtype=torch.long)
-
-    train_features, train_labels, skipped_train, errors_train = (
-        process_set_chunked_single_pool(
-            dataset_object=train_dataset,
-            executor=ProcessPoolExecutor if n_workers > 1 else ThreadPoolExecutor,
-            transform_fn=transform_fn,
-            n_workers=n_workers,
-            chunk_size=chunk_size,
-            max_inflight_tasks=max_inflight_tasks,
-            set_name="train",
-        )
-    )
-
-    train_features_tensor = torch.stack(train_features)
-    train_labels_tensor = torch.tensor(train_labels, dtype=torch.long)
-
-    # Fill in missing samples up to the correct split using the test set since
-    # it is the least critical for training:
-    if len(train_features_tensor) < 0.8 * total:
-        needed = int(0.8 * total) - len(train_features_tensor)
-        logging.warning(
-            f"Training set has {len(train_features_tensor)} samples, which is less than 80% of total. "
-            f"Filling in {needed} samples from the test set to maintain correct split ratios."
-        )
-        # remove from test set and add to the train set:
-        train_features_tensor = torch.cat(
-            [train_features_tensor, test_features_tensor[:needed]], dim=0
-        )
-        train_labels_tensor = torch.cat(
-            [train_labels_tensor, test_labels_tensor[:needed]], dim=0
-        )
-        test_features_tensor = test_features_tensor[needed:]
-        test_labels_tensor = test_labels_tensor[needed:]
-
-    # Fill in the validation set if needed using the test set since it is the least critical for training:
-    if len(val_features_tensor) < 0.1 * total:
-        needed = int(0.1 * total) - len(val_features_tensor)
-        logging.warning(
-            f"Validation set has {len(val_features_tensor)} samples, which is less than 10% of total. "
-            f"Filling in {needed} samples from the test set to maintain correct split ratios."
-        )
-        val_features_tensor = torch.cat(
-            [val_features_tensor, test_features_tensor[:needed]], dim=0
-        )
-        val_labels_tensor = torch.cat(
-            [val_labels_tensor, test_labels_tensor[:needed]], dim=0
-        )
-        test_features_tensor = test_features_tensor[needed:]
-        test_labels_tensor = test_labels_tensor[needed:]
-
+    manifest = result.manifest
     file_spec = CachedDatasetFileSpec(
-        train_features=train_features_tensor,
-        train_labels=train_labels_tensor,
-        test_features=test_features_tensor,
-        test_labels=test_labels_tensor,
-        val_features=val_features_tensor,
-        val_labels=val_labels_tensor,
+        **tensors,
         transform=transform_name,
+        train_ids=manifest.ids("train"),
+        val_ids=manifest.ids("val"),
+        test_ids=manifest.ids("test"),
+        splits_sha256=manifest.sha256(),
     )
 
-    os.makedirs(os.path.dirname(output_directory), exist_ok=True)
+    output_directory = Path(output_directory)
+    os.makedirs(output_directory, exist_ok=True)
     suffix = f"_{n_samples}" if n_samples > 0 else ""
     path_to_save = output_directory / f"cached_dataset_{transform_name}{suffix}.pt"
     torch.save(asdict(file_spec), path_to_save)
 
-    logging.info(f"\n{'=' * 60}")
-    logging.info("Chunked profile pre-processing complete!")
+    logging.info("=" * 60)
+    logging.info("Dense pre-processing complete!")
     logging.info(f"  Transform:        {transform_name}")
-    logging.info(f"  Total replays:    {total}")
-    logging.info(f"  Valid train:      {len(train_features_tensor)}")
-    logging.info(f"  Valid val:        {len(val_features_tensor)}")
-    logging.info(f"  Valid test:       {len(test_features_tensor)}")
-    logging.info(f"  Skipped (None):   {skipped_train + skipped_val + skipped_test}")
-    logging.info(f"  Errors:           {errors_train + errors_val + errors_test}")
-    logging.info(f"  Feature shape:    {train_features_tensor.shape}")
+    for split in SPLIT_NAMES:
+        logging.info(f"  {split:<6} rows:      {len(tensors[f'{split}_labels'])}")
+    logging.info(f"  Skipped / errors: {result.n_skipped} / {result.n_errors}")
+    logging.info(f"  Feature shape:    {tuple(tensors['train_features'].shape)}")
+    logging.info(f"  Splits sha256:    {manifest.sha256()}")
     logging.info(f"  Cache file:       {path_to_save}")
     logging.info(f"{'=' * 60}")

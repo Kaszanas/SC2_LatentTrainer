@@ -9,7 +9,7 @@ import lightning as pl
 from latent_trainer.features.event_transform import event_transform
 from latent_trainer.features.preprocess_dataset import (
     TransformEnumFunction,
-    preprocess_dataset_chunked_profile,
+    preprocess_dataset,
     preprocess_dataset_test_only,
 )
 from latent_trainer.features.preprocess_events import preprocess_event_dataset
@@ -64,6 +64,22 @@ from latent_trainer.settings import DATA_DIR, LOGGING_FORMAT, SEED
     help="Random seed for reproducible sampling.",
 )
 @click.option(
+    "--splits_path",
+    type=click.Path(dir_okay=False, path_type=Path, resolve_path=True),
+    default=(DATA_DIR / "splits.json").resolve(),
+    show_default=True,
+    help="Train/val/test split manifest shared by every cache.",
+)
+@click.option(
+    "--create_splits",
+    is_flag=True,
+    default=False,
+    help=(
+        "Create the split manifest from the replays this run keeps (seeded random "
+        "80/10/10). Refuses to overwrite an existing manifest."
+    ),
+)
+@click.option(
     "--test_only",
     is_flag=True,
     default=False,
@@ -91,6 +107,8 @@ def main(
     n_workers: int,
     n_samples: int,
     seed: int,
+    splits_path: Path,
+    create_splits: bool,
     test_only: bool,
     feature_blocks: str | None,
 ) -> None:
@@ -131,6 +149,8 @@ def main(
         preprocess_event_dataset(
             output_directory=DATA_DIR,
             single_json_dataset_path=single_json_dataset_path,
+            splits_path=splits_path,
+            create_splits=create_splits,
             n_workers=n_workers,
             n_samples=n_samples,
             seed=seed,
@@ -143,6 +163,8 @@ def main(
     # in the --test_only path survived unnoticed for every transform. A failure
     # here should fail the command.
     if test_only:
+        if create_splits:
+            raise click.BadParameter("--create_splits does not apply to --test_only.")
         preprocess_dataset_test_only(
             output_directory=DATA_DIR,
             single_json_dataset_path=single_json_dataset_path,
@@ -153,9 +175,11 @@ def main(
             seed=seed,
         )
     else:
-        preprocess_dataset_chunked_profile(
+        preprocess_dataset(
             output_directory=DATA_DIR,
             single_json_dataset_path=single_json_dataset_path,
+            splits_path=splits_path,
+            create_splits=create_splits,
             transform_fn=transform,
             transform_name=transform_name,
             n_workers=n_workers,

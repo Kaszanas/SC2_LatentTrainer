@@ -1,5 +1,5 @@
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 import torch
@@ -86,6 +86,11 @@ class CachedDatasetFileSpec:
     test_features: torch.Tensor
     test_labels: torch.Tensor
     transform: str
+    # Provenance: row-aligned replay ids and the splits.json hash (empty in old caches).
+    train_ids: list[str] = field(default_factory=list)
+    val_ids: list[str] = field(default_factory=list)
+    test_ids: list[str] = field(default_factory=list)
+    splits_sha256: str = ""
 
 
 # ------------------------------------------------------------------
@@ -153,6 +158,11 @@ class EventCacheFileSpec:
     event_type_names: list[str]
     tick_interval_loops: int
     transform: str
+    # Provenance: row-aligned replay ids and the splits.json hash (empty in old caches).
+    train_ids: list[str] = field(default_factory=list)
+    val_ids: list[str] = field(default_factory=list)
+    test_ids: list[str] = field(default_factory=list)
+    splits_sha256: str = ""
 
 
 @dataclass
@@ -190,6 +200,9 @@ class EventDataBundle:
     unit_vocab: list[str]
     event_type_names: list[str]
     tick_interval_loops: int
+
+    split_ids: dict[str, list[str]] = field(default_factory=dict)
+    splits_sha256: str = ""
 
 
 class EventSequenceDataset(Dataset):

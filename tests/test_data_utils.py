@@ -107,9 +107,13 @@ class TestNormalize:
         train_X, val_X, test_X = dummy_tensors
         normalized_data = normalize(train_X, val_X, test_X)
         flat = normalized_data.train_X.reshape(-1, train_X.shape[-1])
-        # After standardisation, mean should be ~0 and std ~1
+        raw_std = train_X.reshape(-1, train_X.shape[-1]).std(dim=0)
+        # Mean ~0 everywhere; std ~1 only where the raw std clears the 1.0 floor,
+        # low-variance channels are centred but deliberately not scaled up.
         assert flat.mean(dim=0).abs().max() < 0.1
-        assert (flat.std(dim=0) - 1.0).abs().max() < 0.1
+        wide = raw_std >= 1.0
+        assert (flat.std(dim=0)[wide] - 1.0).abs().max() < 0.1
+        torch.testing.assert_close(flat.std(dim=0)[~wide], raw_std[~wide])
 
     def test_no_nan_or_inf(
         self, dummy_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
@@ -168,9 +172,10 @@ class TestLoadAndNormalize:
 # ---------------------------------------------------------------------------
 class TestLoadCachedDataloaders:
     def test_returns_loaders_and_dim(self, dummy_cache: str) -> None:
-        train_dl, val_dl, input_dim = load_cached_dataloaders(dummy_cache, batch_size=4)
+        loaders = load_cached_dataloaders(dummy_cache, batch_size=4)
+        input_dim = loaders.input_dim
         assert input_dim == 10
-        batch = next(iter(train_dl))
+        batch = next(iter(loaders.train_loader))
         features, labels = batch
         assert features.shape[-1] == input_dim
 

@@ -350,6 +350,8 @@ def load_event_cache(cached_dataset_filepath: Path) -> EventDataBundle:
         unit_vocab=spec.unit_vocab,
         event_type_names=spec.event_type_names,
         tick_interval_loops=spec.tick_interval_loops,
+        split_ids={"train": spec.train_ids, "val": spec.val_ids, "test": spec.test_ids},
+        splits_sha256=spec.splits_sha256,
     )
 
 
