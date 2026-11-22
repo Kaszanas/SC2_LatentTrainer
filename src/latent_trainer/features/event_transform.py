@@ -330,7 +330,7 @@ def _sorted_tracker_events(sc2_replay: SC2ReplayData) -> list:
 
 def _extract_streams(
     sc2_replay: SC2ReplayData,
-) -> tuple[dict[int, list], dict[int, list[tuple[int, int, str]]]] | None:
+) -> tuple[dict[int, list], dict[int, list[tuple[int, int, str]]]]:
     """
     Build both streams for both players in a single causal pass.
 
@@ -346,9 +346,9 @@ def _extract_streams(
 
     Returns
     -------
-    tuple[dict[int, list], dict[int, list[tuple[int, int, str]]]] | None
+    tuple[dict[int, list], dict[int, list[tuple[int, int, str]]]]
         ``(stats_by_player, events_by_player)`` keyed by player id, events as
-        ``(loop, type_id, type_name)``; None if the replay is unusable.
+        ``(loop, type_id, type_name)``; a player's list may be empty.
     """
     stats_by_player: dict[int, list] = {pid: [] for pid in PLAYER_IDS}
     events_by_player: dict[int, list[tuple[int, int, str]]] = {
@@ -408,10 +408,6 @@ def _extract_streams(
                     events_by_player[event.playerId].append(
                         (event.loop, EVENT_TYPE_IDS["Upgrade"], event.upgradeTypeName)
                     )
-
-    for player_id in PLAYER_IDS:
-        if not stats_by_player[player_id]:
-            return None
 
     return stats_by_player, events_by_player
 
@@ -534,24 +530,99 @@ def event_transform(sc2_replay: SC2ReplayData) -> ReplayEventSample | None:
     ReplayEventSample | None
         Streams for both players and the label, or None to skip.
     """
+    sample, _ = _transform_or_skip(sc2_replay)
+    return sample
+
+
+def event_skip_reason(sc2_replay: SC2ReplayData) -> tuple[str, str] | None:
+    """
+    Explain why :func:`event_transform` skips a replay.
+
+    Runs the same code path as the transform, so the reason is by construction
+    the branch that rejected the replay.
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed replay.
+
+    Returns
+    -------
+    tuple[str, str] | None
+        ``(code, detail)`` with ``code`` from :data:`SKIP_REASONS` and the
+        values that triggered it, or None if the replay is kept.
+    """
+    _, reason = _transform_or_skip(sc2_replay)
+    return reason
+
+
+# Skip reasons, in the order they are checked:
+SKIP_REASONS: dict[str, str] = {
+    "no_outcome": "result is undecided/draw/tie, unrecognised, or player 1 missing",
+    "bad_header": "header.elapsedGameLoops missing or not a number",
+    "too_short": f"game shorter than {MIN_GAME_LOOPS} loops (3 min)",
+    "game_events_error": "the parser flagged the game events as broken",
+    "no_player_stats": "a player has no PlayerStats tracker events",
+    "no_player_info": "a player is missing from toonPlayerDescMap",
+    "unknown_race": "a player's played race is not Terr/Prot/Zerg",
+    "no_stat_ticks": "a player has no PlayerStats tick left after cleaning",
+}
+
+
+def _results(sc2_replay: SC2ReplayData) -> str:
+    """
+    Describe every player's result, for skip details.
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed replay.
+
+    Returns
+    -------
+    str
+        ``playerID=result`` pairs.
+    """
+    return ", ".join(
+        f"{toon.toon_player_info.playerID}={toon.toon_player_info.result!r}"
+        for toon in sc2_replay.toonPlayerDescMap
+    )
+
+
+def _transform_or_skip(
+    sc2_replay: SC2ReplayData,
+) -> tuple[ReplayEventSample | None, tuple[str, str] | None]:
+    """
+    Build the sample, or return the reason the replay is skipped.
+
+    Parameters
+    ----------
+    sc2_replay : SC2ReplayData
+        Parsed replay.
+
+    Returns
+    -------
+    tuple[ReplayEventSample | None, tuple[str, str] | None]
+        ``(sample, None)`` if kept, else ``(None, (code, detail))``.
+    """
     label = _get_outcome(sc2_replay=sc2_replay)
     if label is None:
-        return None
+        return None, ("no_outcome", f"results: {_results(sc2_replay)}")
 
     try:
         game_duration = float(sc2_replay.header.elapsedGameLoops)
-        if game_duration < MIN_GAME_LOOPS:
-            return None
-    except (AttributeError, ValueError, TypeError):
-        return None
+    except (AttributeError, ValueError, TypeError) as error:
+        return None, ("bad_header", repr(error))
+    if game_duration < MIN_GAME_LOOPS:
+        return None, ("too_short", f"elapsedGameLoops={game_duration:.0f}")
 
     if sc2_replay.gameEventsErr:
-        return None
+        return None, ("game_events_error", "gameEventsErr=True")
 
-    extracted = _extract_streams(sc2_replay=sc2_replay)
-    if extracted is None:
-        return None
-    stats_by_player, events_by_player = extracted
+    stats_by_player, events_by_player = _extract_streams(sc2_replay=sc2_replay)
+    for player_id in PLAYER_IDS:
+        if not stats_by_player[player_id]:
+            return None, ("no_player_stats", f"player {player_id}")
 
     local_vocab: list[str] = []
     vocab_index: dict[str, int] = {}
@@ -559,8 +630,14 @@ def event_transform(sc2_replay: SC2ReplayData) -> ReplayEventSample | None:
     players: list[PlayerEventStreams] = []
     for player_id in PLAYER_IDS:
         info = _get_player_info(sc2_replay=sc2_replay, player_id=player_id)
-        if info is None or info.race not in RACE_IDS:
-            return None
+        if info is None:
+            return None, ("no_player_info", f"player {player_id}")
+        if info.race not in RACE_IDS:
+            return None, (
+                "unknown_race",
+                f"player {player_id}: race={info.race!r}, "
+                f"selectedRace={info.selectedRace!r}",
+            )
         streams = _build_player_streams(
             stat_events=stats_by_player[player_id],
             raw_events=events_by_player[player_id],
@@ -571,11 +648,13 @@ def event_transform(sc2_replay: SC2ReplayData) -> ReplayEventSample | None:
             local_vocab=local_vocab,
         )
         if streams is None:
-            return None
+            n_stats = len(stats_by_player[player_id])
+            return None, ("no_stat_ticks", f"player {player_id}: {n_stats} raw ticks")
         players.append(streams)
 
-    return ReplayEventSample(
+    sample = ReplayEventSample(
         players=(players[0], players[1]),
         local_vocab=local_vocab,
         label=int(label),
     )
+    return sample, None

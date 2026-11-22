@@ -8,7 +8,9 @@ import pytest
 from latent_trainer.features.event_transform import (
     N_STAT_CHANNELS,
     RACE_IDS,
+    SKIP_REASONS,
     STAT_CHANNEL_NAMES,
+    event_skip_reason,
     event_transform,
 )
 from latent_trainer.features.perception_action_cycle import (
@@ -236,9 +238,35 @@ def test_pac_channels_follow_user_id_not_player_id():
 
 
 @pytest.mark.parametrize(
-    "kwargs",
-    [{"races": ("Terr", "Rand")}, {"races": ("Terr", "")}, {"game_events_err": True}],
+    ("kwargs", "code"),
+    [
+        ({"races": ("Terr", "Rand")}, "unknown_race"),
+        ({"races": ("Terr", "")}, "unknown_race"),
+        ({"game_events_err": True}, "game_events_error"),
+    ],
 )
-def test_replays_without_played_race_or_with_broken_game_events_are_skipped(kwargs):
-    """Unknown race or unparsed game events make the replay unusable."""
-    assert event_transform(_replay(**kwargs)) is None
+def test_skipped_replays_report_the_branch_that_rejected_them(kwargs, code):
+    """A skipped replay returns None and its reason names the failing check."""
+    replay = _replay(**kwargs)
+    assert event_transform(replay) is None
+    assert event_skip_reason(replay)[0] == code
+    assert code in SKIP_REASONS
+
+
+def test_skip_reasons_carry_the_offending_values():
+    """Details hold the values that triggered the skip."""
+    short = _replay()
+    short.header.elapsedGameLoops = 1000
+    assert event_skip_reason(short) == ("too_short", "elapsedGameLoops=1000")
+
+    undecided = _replay()
+    for toon in undecided.toonPlayerDescMap:
+        toon.toon_player_info.result = "Undecided"
+    code, detail = event_skip_reason(undecided)
+    assert code == "no_outcome" and "'Undecided'" in detail
+
+    no_stats = _replay()
+    no_stats.trackerEvents = [e for e in no_stats.trackerEvents if e.playerId == 1]
+    assert event_skip_reason(no_stats) == ("no_player_stats", "player 2")
+
+    assert event_skip_reason(_replay()) is None
