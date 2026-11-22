@@ -122,6 +122,8 @@ site/
 # Data is regenerable, except the split manifest that fixes the reported splits:
 data/*
 !data/splits.json
+# Nested data directories (e.g. experiments/data/) stay ignored entirely:
+*/**/data/
 
 # Model outputs (regenerable)
 output/
