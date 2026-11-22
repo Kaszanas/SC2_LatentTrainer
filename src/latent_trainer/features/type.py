@@ -474,6 +474,53 @@ class EventSequenceDataset(Dataset):
         }
 
     def __getitem__(self, idx: int) -> dict:
+        """
+        Return both players' streams and the label of one replay.
+
+        Why the layout: every player stream has its own length (72-266 stat
+        ticks, up to ~13.5k events), so a dense ``[N, 2, T, ...]`` tensor would be
+        mostly padding, and a list of per-replay tensors would make the cache
+        hundreds of thousands of small objects that are slow to save, load and
+        share with DataLoader workers. Instead each split stores every stream
+        concatenated into a few large arrays, plus an ``offsets`` array (CSR, as in
+        sparse matrices): stream ``s`` is ``values[offsets[s] : offsets[s + 1]]``.
+        The unit is the *player* stream, not the replay, because each player's
+        stream has its own boundaries.
+
+        Why ``2 * idx`` and ``2 * idx + 1``: ``_flatten_split`` in
+        ``preprocess_events.py`` loops over replays in order and, inside, over
+        that replay's players, appending one offset per stream and one label per
+        replay. ``event_transform`` emits a replay only when both players
+        (``PLAYER_IDS = (1, 2)``, in that order) have streams, otherwise the
+        replay is skipped and never cached. So every replay contributes exactly
+        two streams, replays ``0 .. idx-1`` occupy streams ``0 .. 2*idx-1``, and
+        replay ``idx`` owns stream ``2 * idx`` (player 1) and ``2 * idx + 1``
+        (player 2). ``offsets`` starts at 0 and gains one entry per stream, so it
+        has ``2N + 1`` entries and ``offsets[2 * idx + 2]`` always exists.
+        Labels get one entry per replay, so they are indexed by ``idx`` directly.
+
+        Example with two replays of 3 and 5 ticks per player::
+
+            stream s      0      1      2       3
+            replay, p     0, 1   0, 2   1, 1    1, 2
+            offsets       [0,    3,     6,      11,     16]
+            rows          0:3    3:6    6:11    11:16
+
+        ``dataset[1]`` reads streams 2 and 3, rows ``6:11`` and ``11:16``.
+
+        The player order must not change: the label means "player 1 won".
+
+        Parameters
+        ----------
+        idx : int
+            Replay index within the split.
+
+        Returns
+        -------
+        dict
+            ``players``: ``[player 1, player 2]`` stream dicts from
+            :meth:`_stream`; ``label``: 1 if player 1 won, else 0.
+        """
         return {
             "players": [self._stream(idx * 2), self._stream(idx * 2 + 1)],
             "label": self.split.labels[idx],
