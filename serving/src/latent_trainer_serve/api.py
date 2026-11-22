@@ -305,7 +305,7 @@ async def analyze(
     ----------
     file : UploadFile
         The ``.SC2Replay`` upload.
-    player : Optional[int]
+    player : int | None
         Player index (0 or 1) to analyse; None analyses the loser.
     method : str
         Linear target: ``centroid`` or ``nearest``.
@@ -413,7 +413,7 @@ async def history(q: str | None = None) -> JSONResponse:
 
     Parameters
     ----------
-    q : Optional[str]
+    q : str | None
         Replay file name filter, by default None.
 
     Returns

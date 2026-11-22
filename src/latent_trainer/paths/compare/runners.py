@@ -77,7 +77,8 @@ def run_method(
     loss_latents : torch.Tensor
         Latent of the opponent each winner beat.
     all_latents : torch.Tensor
-        All latents (density reference for gradient ascent).
+        All latents; currently unused (gradient ascent's density reference is
+        the winner latents).
     win_kde : KernelDensity
         KDE fitted to the winner latents.
 
@@ -164,7 +165,8 @@ def _run_method_inner(
     loss_latents : torch.Tensor
         Latent of the opponent each winner beat.
     all_latents : torch.Tensor
-        All latents (density reference for gradient ascent).
+        All latents; currently unused (gradient ascent's density reference is
+        the winner latents).
     win_kde : KernelDensity
         KDE fitted to the winner latents.
 
