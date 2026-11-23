@@ -62,6 +62,38 @@ class ExperimentConfig:
     hpo_objective_weights : dict[str, float]
         Weights of the validation metrics summed into the HPO objective, by
         default ``val_vae_loss`` and ``val_cls_loss`` at 0.5 each.
+    slice_ticks : int
+        Event model: PlayerStats ticks per slice, by default 1.
+    drop_tail_frac : float
+        Event model: share of each game's slices dropped from the end, by
+        default 0.1.
+    val_cutoffs_min : tuple[float, ...]
+        Event model: fixed validation cutoffs in game minutes, validated next
+        to the whole game, by default (5, 10, 15).
+    kl_warmup_epochs : float
+        Event model: epochs over which the KL weight ramps up, by default 2.0.
+    precision : str
+        Lightning precision for the event model, by default ``"bf16-mixed"``.
+    num_workers : int
+        DataLoader workers for the event model, by default 0.
+    search_train_fraction : float
+        Share of the training split used by search trials, by default 0.3.
+    search_max_epochs : int
+        Epoch cap of search trials, by default 30.
+    asha_grace_period : int
+        Epochs before ASHA may stop a trial, by default 3.
+    asha_reduction_factor : int
+        ASHA reduction factor, by default 3.
+    confirm_top_k : int
+        Best search configs retrained in the confirm stage, by default 5.
+    confirm_seeds : int
+        Seeds per config in the confirm stage, by default 3.
+    final_seeds : int
+        Seeds of the chosen config in the final stage, by default 5.
+    early_stopping_patience : int
+        Patience of confirm and final runs, by default 10.
+    cache_sha256 : str
+        SHA-256 of the cache file, filled once by the driver for provenance.
     """
 
     # Pipeline selection
@@ -125,3 +157,22 @@ class ExperimentConfig:
     hpo_objective_weights: dict[str, float] = field(
         default_factory=lambda: {"val_vae_loss": 0.5, "val_cls_loss": 0.5}
     )
+
+    # Event model data settings (fixed during the search):
+    slice_ticks: int = 1
+    drop_tail_frac: float = 0.1
+    val_cutoffs_min: tuple[float, ...] = (5.0, 10.0, 15.0)
+    kl_warmup_epochs: float = 2.0
+    precision: str = "bf16-mixed"
+    num_workers: int = 0
+
+    # Event model search, confirm and final stages:
+    search_train_fraction: float = 0.3
+    search_max_epochs: int = 30
+    asha_grace_period: int = 3
+    asha_reduction_factor: int = 3
+    confirm_top_k: int = 5
+    confirm_seeds: int = 3
+    final_seeds: int = 5
+    early_stopping_patience: int = 10
+    cache_sha256: str = ""

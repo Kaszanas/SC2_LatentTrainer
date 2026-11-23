@@ -41,7 +41,10 @@ from __future__ import annotations
 
 import ast
 import getpass
+import hashlib
 import logging
+import platform
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -449,3 +452,94 @@ def load_guided_vae_params_from_mlflow(
         )
 
     return _coerce_guided_vae_params(filtered)
+
+
+# Provenance:
+def file_sha256(path: Path, chunk_size: int = 1 << 24) -> str:
+    """
+    Hash a file with SHA-256 in chunks.
+
+    Parameters
+    ----------
+    path : Path
+        File to hash.
+    chunk_size : int
+        Bytes read at a time, by default 16 MiB.
+
+    Returns
+    -------
+    str
+        Hex digest.
+    """
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _git(*args: str) -> str:
+    """
+    Run a git command in the repository and return its output.
+
+    Parameters
+    ----------
+    *args : str
+        Git arguments.
+
+    Returns
+    -------
+    str
+        Stripped standard output, or ``"unknown"`` if git is unavailable.
+    """
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=Path(__file__).resolve().parent,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return result.stdout.strip()
+
+
+def run_provenance(
+    seed: int, splits_sha256: str, cache_sha256: str, cache_path: Path
+) -> dict[str, str]:
+    """
+    Collect what a run needs to be reproduced, as MLflow parameters.
+
+    Parameters
+    ----------
+    seed : int
+        Seed of the run.
+    splits_sha256 : str
+        Hash of the ``splits.json`` the cache was built from.
+    cache_sha256 : str
+        Hash of the cache file.
+    cache_path : Path
+        Cache file used.
+
+    Returns
+    -------
+    dict[str, str]
+        ``prov_*`` entries: git commit and whether the working tree was dirty,
+        split and cache hashes, cache file, seed, and library versions.
+    """
+    import lightning
+    import torch
+
+    dirty = _git("status", "--porcelain", "--untracked-files=no")
+    return {
+        "prov_git_commit": _git("rev-parse", "HEAD"),
+        "prov_git_dirty": str(dirty not in ("", "unknown")),
+        "prov_splits_sha256": splits_sha256,
+        "prov_cache_sha256": cache_sha256,
+        "prov_cache_file": Path(cache_path).name,
+        "prov_seed": str(seed),
+        "prov_python": platform.python_version(),
+        "prov_torch": torch.__version__,
+        "prov_lightning": lightning.__version__,
+    }

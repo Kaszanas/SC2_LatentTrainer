@@ -67,6 +67,18 @@ class LitEventGuidedVAE(GuidedAdversarialModule):
         Dataset settings to record with the model (``slice_ticks``,
         ``drop_tail_frac``, ``min_crop_s``, ``max_events_per_slice``), by
         default None.
+    objective_weights : dict[str, float] | None
+        Weights of ``val_vae_loss`` and ``val_cls_loss`` in ``val_objective``,
+        by default 0.5 each.
+
+    Notes
+    -----
+    Validation may run several dataloaders, named by :attr:`val_tags` (set by
+    the training code, e.g. ``["full", "5min", "10min", "15min"]``). Every
+    metric is logged per tag as ``val_<metric>@<tag>``; the first tag is also
+    logged under the plain names (``val_loss``, ``val_vae_loss``,
+    ``val_cls_loss``, ``val_acc``), and ``val_objective`` is the mean over all
+    tags of the weighted losses.
     """
 
     def __init__(
@@ -92,9 +104,16 @@ class LitEventGuidedVAE(GuidedAdversarialModule):
         kl_beta: float = 1.0,
         kl_warmup_steps: int = 0,
         data_config: dict | None = None,
+        objective_weights: dict[str, float] | None = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
+        self.objective_weights = objective_weights or {
+            "val_vae_loss": 0.5,
+            "val_cls_loss": 0.5,
+        }
+        self.val_tags: list[str] = ["full"]
+        self._val_sums: dict[str, dict[str, float]] = {}
 
         self.supervised_dim = supervised_dim
         self.latent_dim = latent_dim
@@ -171,6 +190,76 @@ class LitEventGuidedVAE(GuidedAdversarialModule):
         if not self.training or self.kl_warmup_steps <= 0:
             return self.kl_beta
         return self.kl_beta * min(1.0, int(self.kl_step) / self.kl_warmup_steps)
+
+    # Validation over several settings:
+    def on_validation_epoch_start(self) -> None:
+        """Reset the per-setting validation sums."""
+        self._val_sums = {}
+
+    def validation_step(self, batch: dict, batch_idx: int, dataloader_idx: int = 0):
+        """
+        Accumulate one batch's validation losses under its setting's tag.
+
+        Parameters
+        ----------
+        batch : dict
+            Output of ``collate_event_sequences``.
+        batch_idx : int
+            Index of the batch.
+        dataloader_idx : int
+            Index of the validation dataloader, mapped to :attr:`val_tags`, by
+            default 0.
+
+        Returns
+        -------
+        torch.Tensor
+            VAE loss plus weighted classification loss of the batch.
+        """
+        inputs, label = self._unpack(batch)
+        vae_loss, outcome, extra = self._vae_forward(inputs)
+        cls_loss = self._outcome_loss(outcome, label)
+        n = label.shape[0]
+        sums = self._val_sums.setdefault(
+            self.val_tags[dataloader_idx],
+            {"n": 0.0, "vae": 0.0, "cls": 0.0, "correct": 0.0, "recon": 0.0, "kl": 0.0},
+        )
+        sums["n"] += n
+        sums["vae"] += float(vae_loss) * n
+        sums["cls"] += float(cls_loss) * n
+        sums["correct"] += float(self._predicts_player_1(outcome).eq(label).sum())
+        sums["recon"] += float(extra["recon_loss"]) * n
+        sums["kl"] += float(extra["kl"]) * n
+        return vae_loss + cls_loss * self.classification_weight
+
+    def on_validation_epoch_end(self) -> None:
+        """Log per-setting metrics, the plain metrics and ``val_objective``."""
+        objective_terms = []
+        for position, tag in enumerate(self.val_tags):
+            sums = self._val_sums.get(tag)
+            if not sums or sums["n"] == 0:
+                continue
+            n = sums["n"]
+            metrics = {
+                "val_vae_loss": sums["vae"] / n,
+                "val_cls_loss": sums["cls"] / n,
+                "val_acc": sums["correct"] / n * 100,
+                "val_recon_loss": sums["recon"] / n,
+                "val_kl": sums["kl"] / n,
+            }
+            metrics["val_loss"] = (
+                metrics["val_vae_loss"]
+                + metrics["val_cls_loss"] * self.classification_weight
+            )
+            for name, value in metrics.items():
+                self.log(f"{name}@{tag}", value, sync_dist=True)
+                if position == 0:
+                    self.log(name, value, prog_bar=name != "val_kl", sync_dist=True)
+            objective_terms.append(
+                sum(w * metrics[m] for m, w in self.objective_weights.items())
+            )
+        if objective_terms:
+            objective = sum(objective_terms) / len(objective_terms)
+            self.log("val_objective", objective, prog_bar=True, sync_dist=True)
 
     # Hooks of GuidedAdversarialModule:
     def _unpack(self, batch: dict) -> tuple[dict, torch.Tensor]:

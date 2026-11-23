@@ -49,16 +49,19 @@ logger = logging.getLogger(__name__)
 @click.command()
 @click.option(
     "--pipeline",
-    type=click.Choice(["guided_vae"]),
+    type=click.Choice(["guided_vae", "event_guided_vae"]),
     default="guided_vae",
     show_default=True,
     help="Training pipeline to use.",
 )
 @click.option(
     "--dataset_filename",
-    default="cached_dataset_rich_sc2egset.pt",
-    show_default=True,
-    help="Filename of the cached dataset.  See 'features/main.py' to generate it.",
+    default=None,
+    help=(
+        "Filename of the cached dataset in data/. Defaults to "
+        "cached_dataset_rich_sc2egset.pt (guided_vae) or "
+        "cached_dataset_events.pt (event_guided_vae)."
+    ),
 )
 @click.option(
     "--sweep",
@@ -130,6 +133,54 @@ logger = logging.getLogger(__name__)
     ),
 )
 @click.option(
+    "--confirm",
+    is_flag=True,
+    default=False,
+    help="event_guided_vae: retrain the best search configs with several seeds.",
+)
+@click.option(
+    "--final",
+    is_flag=True,
+    default=False,
+    help="event_guided_vae: train the confirmed config with several seeds.",
+)
+@click.option(
+    "--max_epochs",
+    type=int,
+    default=None,
+    help="Epoch cap of training runs (confirm/final; guided_vae runs).",
+)
+@click.option(
+    "--search_max_epochs",
+    type=int,
+    default=None,
+    help="event_guided_vae: epoch cap of search trials.",
+)
+@click.option(
+    "--search_train_fraction",
+    type=float,
+    default=None,
+    help="event_guided_vae: share of the training split used by search trials.",
+)
+@click.option(
+    "--confirm_top_k",
+    type=int,
+    default=None,
+    help="event_guided_vae: search configs retrained in the confirm stage.",
+)
+@click.option(
+    "--confirm_seeds",
+    type=int,
+    default=None,
+    help="event_guided_vae: seeds per config in the confirm stage.",
+)
+@click.option(
+    "--final_seeds",
+    type=int,
+    default=None,
+    help="event_guided_vae: seeds of the final stage.",
+)
+@click.option(
     "--max_input_dim",
     type=int,
     default=None,
@@ -155,6 +206,14 @@ def main(
     source_experiment: str | None,
     source_run: str | None,
     run_name: str | None,
+    confirm: bool,
+    final: bool,
+    max_epochs: int | None,
+    search_max_epochs: int | None,
+    search_train_fraction: float | None,
+    confirm_top_k: int | None,
+    confirm_seeds: int | None,
+    final_seeds: int | None,
     max_input_dim: int | None,
 ) -> None:
     """
@@ -163,9 +222,10 @@ def main(
     Parameters
     ----------
     pipeline : str
-        Training pipeline (``guided_vae``).
-    dataset_filename : str
-        Cached dataset file name inside ``DATA_DIR``.
+        Training pipeline (``guided_vae`` or ``event_guided_vae``).
+    dataset_filename : str | None
+        Cached dataset file name inside ``DATA_DIR``; None picks the
+        pipeline's default cache.
     sweep : bool
         Run the Ray + Optuna sweep; otherwise retrain from the best trial.
     n_trials : int
@@ -186,13 +246,29 @@ def main(
         Run to load parameters from; None uses the latest best-trial summary.
     run_name : str | None
         MLflow run name for retraining; None auto-generates one.
+    confirm : bool
+        Event pipeline: run the confirm stage.
+    final : bool
+        Event pipeline: run the final stage.
+    max_epochs : int | None
+        Epoch cap of training runs; None keeps the config default.
+    search_max_epochs : int | None
+        Epoch cap of search trials; None keeps the config default.
+    search_train_fraction : float | None
+        Share of the training split used by search trials.
+    confirm_top_k : int | None
+        Search configs retrained in the confirm stage.
+    confirm_seeds : int | None
+        Seeds per config in the confirm stage.
+    final_seeds : int | None
+        Seeds of the final stage.
     max_input_dim : int | None
         Keep only the first N feature columns (best mode only).
 
     Raises
     ------
     click.BadParameter
-        If the pipeline is unknown.
+        If the pipeline is unknown or more than one stage flag is given.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -204,7 +280,25 @@ def main(
     if mlflow_uri is None:
         mlflow_uri = DEFAULT_MLFLOW_URI
 
+    if sum([sweep, confirm, final]) > 1:
+        raise click.BadParameter("use at most one of --sweep, --confirm, --final")
+    if dataset_filename is None:
+        dataset_filename = (
+            "cached_dataset_events.pt"
+            if pipeline == "event_guided_vae"
+            else "cached_dataset_rich_sc2egset.pt"
+        )
+
+    overrides = {
+        "guided_vae_epochs": max_epochs,
+        "search_max_epochs": search_max_epochs,
+        "search_train_fraction": search_train_fraction,
+        "confirm_top_k": confirm_top_k,
+        "confirm_seeds": confirm_seeds,
+        "final_seeds": final_seeds,
+    }
     config = ExperimentConfig(
+        **{key: value for key, value in overrides.items() if value is not None},
         pipeline=pipeline,
         dataset_filename=dataset_filename,
         sweep=sweep,
@@ -227,7 +321,11 @@ def main(
 
     match pipeline:
         case "guided_vae":
+            if confirm or final:
+                raise click.BadParameter("--confirm/--final are for event_guided_vae")
             _train_guided_vae(config=config)
+        case "event_guided_vae":
+            _train_event_guided_vae(config=config, confirm=confirm, final=final)
         case _:
             raise click.BadParameter(f"Unknown pipeline: {pipeline}")
 
@@ -267,6 +365,44 @@ def _train_guided_vae(config: ExperimentConfig) -> None:
     logger.info("Retraining Guided-VAE pipeline with best Optuna params…")
     run_guided_vae_best(config=config)
     logger.info("Guided-VAE best-params run complete.")
+
+
+def _train_event_guided_vae(
+    config: ExperimentConfig, confirm: bool, final: bool
+) -> None:
+    """
+    Dispatch the event pipeline to its search, confirm or final stage.
+
+    Parameters
+    ----------
+    config : ExperimentConfig
+        Run configuration; ``config.sweep`` selects the search stage.
+    confirm : bool
+        Run the confirm stage.
+    final : bool
+        Run the final stage.
+
+    Raises
+    ------
+    click.BadParameter
+        If no stage is selected.
+    """
+    from latent_trainer.hyperparameter_search.event_guided_vae import (
+        run_event_confirm,
+        run_event_final,
+        run_event_search,
+    )
+
+    if config.sweep:
+        run_event_search(config)
+    elif confirm:
+        run_event_confirm(config)
+    elif final:
+        run_event_final(config)
+    else:
+        raise click.BadParameter(
+            "event_guided_vae needs one stage: --sweep, --confirm or --final"
+        )
 
 
 if __name__ == "__main__":
