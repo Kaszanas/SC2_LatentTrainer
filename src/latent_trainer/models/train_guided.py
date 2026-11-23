@@ -1,7 +1,6 @@
 """Single-run guided VAE training (sweep trials and final retraining)."""
 
 import logging
-from pathlib import Path
 from typing import Any
 
 import click
@@ -16,7 +15,6 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
 from latent_trainer.features.data_utils import load_and_normalize
-from latent_trainer.features.type import NormalizedDataloaders
 from latent_trainer.models.lightning.lit_guided_vae import LitGuidedVAE
 from latent_trainer.settings import (
     CHECKPOINTS_DIR,
@@ -31,155 +29,6 @@ from latent_trainer.tracking.mlflow_utils import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def train_guided(
-    *,
-    normalized_dataloaders: NormalizedDataloaders,
-    output_dir: Path | str = OUTPUT_DIR,
-    supervised_dim: int,
-    epochs: int,
-    vae_latent_dim: int,
-    classification_weight: float,
-    encoder_hidden_dims: list[int],
-    experiment_name: str,
-    run_name: str,
-    learning_rate: float = 1e-4,
-    weight_decay: float = 1e-5,
-    learning_rate_classifier: float = 1e-4,
-    weight_decay_c: float = 1e-4,
-    test_interval: int = 1,
-    mlflow_uri: str = DEFAULT_MLFLOW_URI,
-    parent_run_id: str | None = None,
-) -> LitGuidedVAE:
-    """
-    Run a single guided VAE training run (legacy entry point).
-
-    Deprecated: passes ``vae_latent_dim``, ``learning_rate_classifier`` and
-    ``weight_decay_c``, which :class:`LitGuidedVAE` no longer accepts, so it
-    raises if called. Use :func:`train_guided_pipeline`; scheduled for removal.
-
-    Parameters
-    ----------
-    normalized_dataloaders : NormalizedDataloaders
-        Train/val loaders plus normalisation statistics.
-    output_dir : Path | str
-        Output directory, by default ``OUTPUT_DIR``.
-    supervised_dim : int
-        Supervised latent dims per player.
-    epochs : int
-        Maximum epochs.
-    vae_latent_dim : int
-        Latent dims per player.
-    classification_weight : float
-        Weight of the classification losses.
-    encoder_hidden_dims : list[int]
-        Encoder hidden widths.
-    experiment_name : str
-        MLflow experiment name.
-    run_name : str
-        MLflow run name.
-    learning_rate : float
-        VAE learning rate, by default 1e-4.
-    weight_decay : float
-        VAE weight decay, by default 1e-5.
-    learning_rate_classifier : float
-        Adversary learning rate, by default 1e-4.
-    weight_decay_c : float
-        Adversary weight decay, by default 1e-4.
-    test_interval : int
-        Validation interval in epochs, by default 1.
-    mlflow_uri : str
-        MLflow tracking URI, by default ``DEFAULT_MLFLOW_URI``.
-    parent_run_id : str | None
-        Parent MLflow run for nesting, by default None.
-
-    Returns
-    -------
-    LitGuidedVAE
-        The trained model.
-    """
-    guided_vae_model = LitGuidedVAE(
-        vae_latent_dim=vae_latent_dim,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        supervised_dim=supervised_dim,
-        learning_rate_classifier=learning_rate_classifier,
-        weight_decay_c=weight_decay_c,
-        classification_weight=classification_weight,
-        input_dim=normalized_dataloaders.input_dim,
-        encoder_hidden_dims=encoder_hidden_dims,
-        mean=normalized_dataloaders.mean,
-        std=normalized_dataloaders.std,
-    )
-
-    filename_pattern = "guided-vae-{epoch:02d}-{val_vae_loss:.4f}"
-
-    run_checkpoint_dir = CHECKPOINTS_DIR / experiment_name / run_name
-
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=run_checkpoint_dir,
-        filename=filename_pattern,
-        monitor="val_vae_loss",
-        mode="min",
-        save_last=True,
-        save_top_k=5,
-    )
-    early_stopping = EarlyStopping(
-        monitor="val_vae_loss",
-        patience=5,
-        mode="min",
-    )
-    tensorboard_logger = TensorBoardLogger(
-        save_dir=output_dir,
-        name="tensorboard_logs",
-    )
-    # Use child nesting if we have a parent run
-    if parent_run_id:
-        mlf_logger = create_child_mlflow_logger(
-            experiment_name=experiment_name,
-            run_name=run_name,
-            parent_run_id=parent_run_id,
-            tracking_uri=mlflow_uri,
-        )
-    else:
-        mlf_logger = create_mlflow_logger(
-            experiment_name=experiment_name,
-            run_name=run_name,
-            tracking_uri=mlflow_uri,
-        )
-
-    trainer = Trainer(
-        max_epochs=epochs,
-        logger=[tensorboard_logger, mlf_logger],
-        enable_progress_bar=True,
-        callbacks=[checkpoint_callback, early_stopping],
-        accelerator="auto",
-        devices=1,
-        check_val_every_n_epoch=test_interval,
-        log_every_n_steps=10,
-    )
-    trainer.fit(
-        model=guided_vae_model,
-        train_dataloaders=normalized_dataloaders.train_loader,
-        val_dataloaders=normalized_dataloaders.val_loader,
-    )
-
-    # Save the best model under a custom name for easier retrieval later:
-    best_model_path = run_checkpoint_dir / "best.ckpt"
-    guided_vae_model = LitGuidedVAE.load_from_checkpoint(
-        checkpoint_callback.best_model_path
-    )
-    trainer.save_checkpoint(best_model_path)
-
-    # Save Lighting Model with best hyperparameters (for easy loading later)
-    log_artifact(
-        checkpoint_dir=run_checkpoint_dir,
-        mlflow_logger=mlf_logger,
-        model_path=best_model_path,
-    )
-
-    return guided_vae_model
 
 
 def train_guided_pipeline(
