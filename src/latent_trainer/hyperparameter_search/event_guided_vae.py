@@ -13,7 +13,9 @@ Three stages, each a separate command so every long run starts deliberately:
    (``final_results.json``, MLflow tag ``served``).
 
 The test split is never loaded. Every trial loads the cache itself, so trials
-are independent processes; several share the GPU (``gpus_per_trial``).
+are independent processes; ``gpus_per_trial`` 1 runs them one at a time, a
+fraction lets several share the GPU. Ray's CPUs and object store, and each
+trial's PyTorch threads, are capped to ``cpus_per_trial``.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from pathlib import Path
 import mlflow
 import optuna
 import ray
+import torch
 from lightning.pytorch.callbacks import Callback
 from mlflow import MlflowClient
 from ray import tune
@@ -35,6 +38,8 @@ from ray.tune.search.optuna import OptunaSearch
 
 from latent_trainer.configs.experiment_config import ExperimentConfig
 from latent_trainer.configs.search_space import (
+    EVENT_DATA_KEYS,
+    EVENT_MODEL_KEYS,
     event_params_from_flat,
     get_event_guided_vae_search_space,
 )
@@ -47,6 +52,12 @@ from latent_trainer.settings import DATA_DIR, OUTPUT_DIR, SEED
 from latent_trainer.tracking.mlflow_utils import file_sha256, start_parent_run
 
 logger = logging.getLogger(__name__)
+
+# Ray's object store holds only small trial results here.
+RAY_OBJECT_STORE_BYTES = 2 * 1024**3
+# Share of a trial's VRAM slice PyTorch may fill; the rest covers the CUDA
+# context and the desktop.
+VRAM_HEADROOM = 0.9
 
 
 def stage_dir(config: ExperimentConfig) -> Path:
@@ -133,12 +144,55 @@ def _prepare(config: ExperimentConfig) -> Path:
     if not config.cache_sha256:
         config.cache_sha256 = file_sha256(cache_path)
     if not ray.is_initialized():
+        # Resource budget: Ray otherwise claims every core and reserves ~30% of
+        # RAM for its object store, which trials here never use (each loads the
+        # cache from disk).
         ray.init(
             ignore_reinit_error=True,
             log_to_driver=False,
             _temp_dir=os.path.join(os.getcwd(), "ray_tmp"),
+            num_cpus=max(1, int(config.cpus_per_trial * max_concurrent(config))),
+            num_gpus=1 if config.gpus_per_trial > 0 else 0,
+            object_store_memory=RAY_OBJECT_STORE_BYTES,
         )
     return cache_path
+
+
+def gpu_memory_fraction(config: ExperimentConfig) -> float:
+    """
+    Return the share of VRAM one trial may use.
+
+    Parameters
+    ----------
+    config : ExperimentConfig
+        Run configuration (``gpus_per_trial``).
+
+    Returns
+    -------
+    float
+        ``gpus_per_trial`` times :data:`VRAM_HEADROOM`, at most the headroom.
+    """
+    return min(1.0, config.gpus_per_trial) * VRAM_HEADROOM
+
+
+def _limit_resources(config: ExperimentConfig) -> None:
+    """
+    Cap a trial's PyTorch CPU threads and VRAM to its share.
+
+    Without the thread cap every trial starts one thread per core and the
+    machine stalls. The VRAM cap makes PyTorch free its cache and, if a batch
+    still does not fit, raise CUDA out-of-memory inside its share; together
+    with the driver's "Prefer No Sysmem Fallback" policy nothing spills into
+    system RAM.
+
+    Parameters
+    ----------
+    config : ExperimentConfig
+        Run configuration (``cpus_per_trial``, ``gpus_per_trial``).
+    """
+    torch.set_num_threads(max(1, int(config.cpus_per_trial)))
+    if torch.cuda.is_available() and config.gpus_per_trial > 0:
+        torch.cuda.set_per_process_memory_fraction(gpu_memory_fraction(config))
 
 
 def _resources(config: ExperimentConfig) -> dict:
@@ -217,6 +271,7 @@ def run_event_search(config: ExperimentConfig) -> optuna.Study:
             ray_config : dict
                 Sampled configuration.
             """
+            _limit_resources(config)
             bundle = load_event_cache(cache_path)
             subset = search_subset(
                 len(bundle.train.labels), config.search_train_fraction, SEED
@@ -325,6 +380,73 @@ def top_search_configs(config: ExperimentConfig) -> list[dict]:
     ]
 
 
+def _finished_runs(config: ExperimentConfig, mode: str, runs: list[dict]) -> dict:
+    """
+    Find runs of this stage that already finished with exactly this setup.
+
+    A previous run is reused only if MLflow shows it ``FINISHED`` with a
+    ``best_val_objective``, and its name, seed, cache hash and every model and
+    data parameter match (the cache hash covers the split manifest). Final
+    runs also need their tagged checkpoint on disk. Runs of this stage still
+    marked ``RUNNING`` were interrupted and are marked ``KILLED``.
+
+    Parameters
+    ----------
+    config : ExperimentConfig
+        Run configuration (experiment, tracking URI, ``cache_sha256``).
+    mode : str
+        ``"confirm"`` or ``"final"``.
+    runs : list[dict]
+        The planned runs, each ``{"params", "seed", "name"}``.
+
+    Returns
+    -------
+    dict
+        Result per run name for the reusable runs: ``best_val_objective``,
+        ``run_id`` and, for final runs, ``checkpoint``.
+    """
+    client = MlflowClient(tracking_uri=config.mlflow_tracking_uri)
+    experiment = client.get_experiment_by_name(config.experiment_name)
+    if experiment is None:
+        return {}
+    planned = {run["name"]: run for run in runs}
+    keys = (*EVENT_MODEL_KEYS, *EVENT_DATA_KEYS)
+    found: dict[str, dict] = {}
+    for previous in client.search_runs(
+        [experiment.experiment_id],
+        filter_string=f"params.mode = '{mode}'",
+        max_results=5000,
+    ):
+        info = previous.info
+        params, metrics = previous.data.params, previous.data.metrics
+        run = planned.get(info.run_name)
+        if run is None or info.run_name in found:
+            continue
+        if info.status == "RUNNING":
+            client.set_terminated(info.run_id, status="KILLED")
+            continue
+        same = (
+            info.status == "FINISHED"
+            and "best_val_objective" in metrics
+            and params.get("prov_seed") == str(run["seed"])
+            and params.get("prov_cache_sha256") == config.cache_sha256
+            and all(params.get(key) == str(run["params"][key]) for key in keys)
+        )
+        if not same:
+            continue
+        result = {
+            "best_val_objective": metrics["best_val_objective"],
+            "run_id": info.run_id,
+        }
+        if mode == "final":
+            checkpoint = previous.data.tags.get("checkpoint")
+            if not checkpoint or not Path(checkpoint).exists():
+                continue
+            result["checkpoint"] = checkpoint
+        found[info.run_name] = result
+    return found
+
+
 def _grid_runs(
     config: ExperimentConfig,
     cache_path: Path,
@@ -335,6 +457,10 @@ def _grid_runs(
 ) -> list[dict]:
     """
     Train a fixed list of (config, seed) runs in parallel through Ray.
+
+    With ``config.resume`` runs that already finished identically (see
+    :func:`_finished_runs`) are reused instead of retrained; their run ids
+    are recorded on the parent run as the ``resumed_run_ids`` tag.
 
     Parameters
     ----------
@@ -367,6 +493,7 @@ def _grid_runs(
             ``{"index": i}`` into ``runs``.
         """
         run = runs[ray_config["index"]]
+        _limit_resources(config)
         bundle = load_event_cache(cache_path)
         metrics = train_event_guided_run(
             bundle=bundle,
@@ -380,20 +507,40 @@ def _grid_runs(
         )
         tune.report({"index": ray_config["index"], "result": json.dumps(metrics)})
 
+    done = _finished_runs(config, mode, runs) if config.resume else {}
+    by_index: dict[int, dict] = {
+        i: done[run["name"]] for i, run in enumerate(runs) if run["name"] in done
+    }
+    todo = [i for i in range(len(runs)) if i not in by_index]
+    if config.resume:
+        mlflow.set_tag(
+            "resumed_run_ids", ",".join(r["run_id"] for r in by_index.values())
+        )
+        logger.info(
+            "Resume: reusing %d finished %s runs, training %d: %s",
+            len(by_index),
+            stage_name,
+            len(todo),
+            [runs[i]["name"] for i in todo],
+        )
+    if not todo:
+        return [by_index[i] for i in range(len(runs))]
+
+    # A resumed stage gets its own Ray folder next to the interrupted one.
+    suffix = f"_resume_{datetime.now():%Y%m%d_%H%M%S}" if config.resume else ""
     tuner = tune.Tuner(
         tune.with_resources(trainable, resources=_resources(config)),
-        param_space={"index": tune.grid_search(list(range(len(runs))))},
+        param_space={"index": tune.grid_search(todo)},
         tune_config=tune.TuneConfig(
             max_concurrent_trials=max_concurrent(config),
             trial_dirname_creator=lambda trial: f"run_{trial.trial_id}",
         ),
         run_config=tune.RunConfig(
-            name=f"{config.experiment_name}_{stage_name}",
+            name=f"{config.experiment_name}_{stage_name}{suffix}",
             storage_path=str(OUTPUT_DIR / "ray_results"),
         ),
     )
     results = tuner.fit()
-    by_index: dict[int, dict] = {}
     for result in results:
         if result.error is not None:
             raise RuntimeError(f"{stage_name} run failed: {result.error}")

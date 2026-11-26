@@ -52,8 +52,13 @@ dev = [
 # Dependencies for the CPU build (installed with uv sync --extra cpu)
 cpu = ["torch>=2.7.0", "torchvision>=0.22.0"]
 
-# Dependencies for the CUDA build (installed with uv sync --extra cuda)
-cuda = ["torch>=2.7.0", "torchvision>=0.22.0"]
+# Dependencies for the CUDA build (installed with uv sync --extra cuda).
+# triton-windows backs torch.compile on Windows; 3.6 pairs with torch 2.10.
+cuda = [
+    "torch>=2.7.0",
+    "torchvision>=0.22.0",
+    "triton-windows>=3.6,<3.7; sys_platform == 'win32'",
+]
 
 # --- uv-specific configuration ---
 [tool.uv]

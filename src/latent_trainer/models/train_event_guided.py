@@ -36,6 +36,55 @@ logger = logging.getLogger(__name__)
 MODES = ("search", "confirm", "final")
 
 
+class GpuMemoryMonitor(Callback):
+    """
+    Log the epoch's peak GPU memory: what tensors used, and what PyTorch held.
+
+    ``gpu_peak_allocated_gb`` is what the configuration really needs;
+    ``gpu_peak_reserved_gb`` adds PyTorch's cache and fragmentation. Peaks are
+    reset every epoch. Does nothing without CUDA.
+    """
+
+    def on_train_epoch_start(
+        self, trainer: pl.Trainer, pl_module: pl.LightningModule
+    ) -> None:
+        """
+        Reset the peak counters.
+
+        Parameters
+        ----------
+        trainer : pl.Trainer
+            The trainer.
+        pl_module : pl.LightningModule
+            The module.
+        """
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
+    def on_train_epoch_end(
+        self, trainer: pl.Trainer, pl_module: pl.LightningModule
+    ) -> None:
+        """
+        Log the peaks in GiB.
+
+        Parameters
+        ----------
+        trainer : pl.Trainer
+            The trainer.
+        pl_module : pl.LightningModule
+            The module.
+        """
+        if not torch.cuda.is_available():
+            return
+        gib = 1024**3
+        pl_module.log_dict(
+            {
+                "gpu_peak_allocated_gb": torch.cuda.max_memory_allocated() / gib,
+                "gpu_peak_reserved_gb": torch.cuda.max_memory_reserved() / gib,
+            }
+        )
+
+
 def validation_tags(cutoffs_min: Sequence[float]) -> list[str]:
     """
     Name the validation settings: the whole game, then each cutoff.
@@ -126,17 +175,18 @@ def make_loaders(
     )
     if train_indices is not None:
         train_set = Subset(train_set, train_indices)
-    workers = {
-        "num_workers": config.num_workers,
-        "persistent_workers": config.num_workers > 0,
-    }
+    # Workers only for training: they prepare the next batch while the GPU
+    # trains. The short validation passes stay in the main process, since each
+    # worker costs seconds to start on Windows.
     train_loader = DataLoader(
         train_set,
         batch_size=params["batch_size"],
         shuffle=True,
         generator=torch.Generator().manual_seed(seed),
         collate_fn=collate,
-        **workers,
+        num_workers=config.num_workers,
+        persistent_workers=config.num_workers > 0,
+        pin_memory=config.num_workers > 0 and torch.cuda.is_available(),
     )
     val_sets = [EventSequenceDataset(bundle.val, crop=None, **common)] + [
         EventSequenceDataset(bundle.val, crop=cutoff * 60.0, **common)
@@ -148,7 +198,6 @@ def make_loaders(
             batch_size=max(params["batch_size"], 64),
             shuffle=False,
             collate_fn=collate,
-            **workers,
         )
         for dataset in val_sets
     ]
@@ -198,6 +247,35 @@ def build_model(
         objective_weights=dict(config.hpo_objective_weights),
     )
     return model.fit_input_transform(bundle.train.stat_values)
+
+
+def compile_if_requested(model: LitEventGuidedVAE, config: ExperimentConfig) -> None:
+    """
+    Compile the model's heavy submodules when ``config.compile_model`` is set.
+
+    Parameters
+    ----------
+    model : LitEventGuidedVAE
+        The module to compile in place.
+    config : ExperimentConfig
+        Run configuration (``compile_model``).
+
+    Raises
+    ------
+    RuntimeError
+        If compilation is requested without CUDA or without Triton.
+    """
+    if not config.compile_model:
+        return
+    from torch.utils._triton import has_triton
+
+    if not torch.cuda.is_available() or not has_triton():
+        raise RuntimeError(
+            "--compile_model needs CUDA and Triton; install the cuda extra "
+            "(uv sync --extra cuda), which brings triton on Linux and "
+            "triton-windows on Windows."
+        )
+    model.model.compile_submodules()
 
 
 def train_event_guided_run(
@@ -260,11 +338,13 @@ def train_event_guided_run(
     )
     model = build_model(bundle, params, config, steps_per_epoch=len(train_loader))
     model.val_tags = tags
+    compile_if_requested(model, config)
 
     logged = {
         **params,
         **run_provenance(seed, bundle.splits_sha256, config.cache_sha256, cache_path),
         "mode": mode,
+        "compile_model": config.compile_model,
         "n_train_replays": len(train_loader.dataset),
     }
     if parent_run_id:
@@ -291,7 +371,7 @@ def train_event_guided_run(
         if search
         else config.early_stopping_patience,
     )
-    callbacks: list[Callback] = [early_stopping, *extra_callbacks]
+    callbacks: list[Callback] = [early_stopping, GpuMemoryMonitor(), *extra_callbacks]
     checkpoint = None
     if mode == "final":
         checkpoint = ModelCheckpoint(
@@ -330,5 +410,9 @@ def train_event_guided_run(
     metrics["run_id"] = mlf_logger.run_id
     if checkpoint is not None:
         metrics["checkpoint"] = checkpoint.best_model_path
+        # Tagged so a resumed final stage can reuse this run's model.
+        mlf_logger.experiment.set_tag(
+            mlf_logger.run_id, "checkpoint", checkpoint.best_model_path
+        )
     mlf_logger.log_metrics({"best_val_objective": metrics["best_val_objective"]})
     return metrics

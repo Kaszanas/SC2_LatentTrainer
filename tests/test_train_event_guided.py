@@ -227,6 +227,120 @@ def test_training_run_logs_per_setting_metrics_objective_and_provenance(
         assert "checkpoint" not in metrics
 
 
+# Resuming a stage:
+def _logged_run(client, experiment_id, name, seed, params, status="FINISHED", **kw):
+    """Create an MLflow run shaped like a finished confirm/final run."""
+    run = client.create_run(experiment_id, run_name=name)
+    logged = {
+        "mode": kw.get("mode", "confirm"),
+        "prov_seed": str(seed),
+        "prov_cache_sha256": kw.get("cache", "def"),
+        **{key: str(value) for key, value in params.items()},
+    }
+    for key, value in logged.items():
+        client.log_param(run.info.run_id, key, value)
+    if kw.get("objective", True):
+        client.log_metric(run.info.run_id, "best_val_objective", 0.4)
+    if "checkpoint" in kw:
+        client.set_tag(run.info.run_id, "checkpoint", kw["checkpoint"])
+    if status != "RUNNING":
+        client.set_terminated(run.info.run_id, status=status)
+    return run.info.run_id
+
+
+def test_resume_reuses_only_identical_finished_runs(tmp_path):
+    """Seed, parameters, cache hash, status and the objective must all match."""
+    config = _config(tmp_path, resume=True)
+    client = MlflowClient(tracking_uri=config.mlflow_tracking_uri)
+    exp = client.create_experiment(config.experiment_name)
+    other = {**PARAMS, "learning_rate": 5e-4}
+    runs = [{"params": PARAMS, "seed": s, "name": f"confirm_c0_s{s}"} for s in range(6)]
+    reused = _logged_run(client, exp, "confirm_c0_s0", 0, PARAMS)
+    _logged_run(client, exp, "confirm_c0_s1", 99, PARAMS)  # other seed
+    _logged_run(client, exp, "confirm_c0_s2", 2, other)  # other parameters
+    _logged_run(client, exp, "confirm_c0_s3", 3, PARAMS, cache="zzz")  # other cache
+    _logged_run(client, exp, "confirm_c0_s4", 4, PARAMS, objective=False)
+    stale = _logged_run(client, exp, "confirm_c0_s5", 5, PARAMS, status="RUNNING")
+
+    found = hpo._finished_runs(config, "confirm", runs)
+    assert list(found) == ["confirm_c0_s0"]
+    assert found["confirm_c0_s0"] == {"best_val_objective": 0.4, "run_id": reused}
+    assert client.get_run(stale).info.status == "KILLED"
+
+
+def test_resume_of_final_runs_needs_their_checkpoint(tmp_path):
+    """A final run is reused only with its tagged checkpoint on disk."""
+    config = _config(tmp_path, resume=True)
+    client = MlflowClient(tracking_uri=config.mlflow_tracking_uri)
+    exp = client.create_experiment(config.experiment_name)
+    ckpt = tmp_path / "best.ckpt"
+    ckpt.write_text("x")
+    runs = [{"params": PARAMS, "seed": s, "name": f"final_s{s}"} for s in (0, 1)]
+    _logged_run(client, exp, "final_s0", 0, PARAMS, mode="final", checkpoint=str(ckpt))
+    missing = str(tmp_path / "gone.ckpt")
+    _logged_run(client, exp, "final_s1", 1, PARAMS, mode="final", checkpoint=missing)
+    found = hpo._finished_runs(config, "final", runs)
+    assert list(found) == ["final_s0"]
+    assert found["final_s0"]["checkpoint"] == str(ckpt)
+
+
+def test_fully_resumed_stage_starts_no_training(tmp_path, monkeypatch):
+    """When every run is reusable Ray is never started."""
+    import mlflow
+
+    config = _config(tmp_path, resume=True)
+    client = MlflowClient(tracking_uri=config.mlflow_tracking_uri)
+    exp = client.create_experiment(config.experiment_name)
+    runs = [{"params": PARAMS, "seed": 0, "name": "confirm_c0_s0"}]
+    _logged_run(client, exp, "confirm_c0_s0", 0, PARAMS)
+
+    def no_ray(*args, **kwargs):
+        raise AssertionError("Ray must not start")
+
+    monkeypatch.setattr(hpo.tune, "Tuner", no_ray)
+    mlflow.set_tracking_uri(config.mlflow_tracking_uri)
+    with mlflow.start_run(experiment_id=exp) as parent:
+        results = hpo._grid_runs(
+            config, tmp_path / "c.pt", runs, "confirm", parent.info.run_id, "confirm"
+        )
+    assert results[0]["best_val_objective"] == 0.4
+    tags = client.get_run(parent.info.run_id).data.tags
+    assert tags["resumed_run_ids"] == results[0]["run_id"]
+
+
+# Compilation:
+def _small_model(tmp_path):
+    config = _config(tmp_path)
+    return tev.build_model(_bundle(), PARAMS, config, steps_per_epoch=2)
+
+
+def test_compile_is_off_by_default_and_leaves_the_model_alone(tmp_path):
+    """Without the flag nothing is compiled."""
+    model = _small_model(tmp_path)
+    tev.compile_if_requested(model, _config(tmp_path))
+    assert model.model.encoder._compiled_call_impl is None
+
+
+def test_compile_without_triton_fails_clearly(tmp_path, monkeypatch):
+    """A missing Triton is reported, not silently ignored."""
+    import torch.utils._triton as triton_utils
+
+    monkeypatch.setattr(triton_utils, "has_triton", lambda: False)
+    with pytest.raises(RuntimeError, match="Triton"):
+        tev.compile_if_requested(
+            _small_model(tmp_path), _config(tmp_path, compile_model=True)
+        )
+
+
+def test_compiling_in_place_keeps_checkpoint_keys(tmp_path):
+    """Parameter names do not change, so checkpoints stay loadable."""
+    model = _small_model(tmp_path)
+    keys = list(model.state_dict())
+    model.model.compile_submodules()
+    assert list(model.state_dict()) == keys
+    assert model.model.encoder._compiled_call_impl is not None
+
+
 def test_unknown_mode_is_refused(tmp_path):
     """Only search, confirm and final exist."""
     with pytest.raises(ValueError, match="mode"):

@@ -181,6 +181,27 @@ logger = logging.getLogger(__name__)
     help="event_guided_vae: seeds of the final stage.",
 )
 @click.option(
+    "--resume",
+    is_flag=True,
+    default=False,
+    help=(
+        "event_guided_vae --confirm/--final: reuse runs that already finished "
+        "with the same setup and train only the missing ones."
+    ),
+)
+@click.option(
+    "--num_workers",
+    type=int,
+    default=None,
+    help="event_guided_vae: DataLoader workers preparing training batches.",
+)
+@click.option(
+    "--compile_model",
+    is_flag=True,
+    default=False,
+    help="event_guided_vae: compile the model with torch.compile (needs Triton).",
+)
+@click.option(
     "--max_input_dim",
     type=int,
     default=None,
@@ -214,6 +235,9 @@ def main(
     confirm_top_k: int | None,
     confirm_seeds: int | None,
     final_seeds: int | None,
+    resume: bool,
+    num_workers: int | None,
+    compile_model: bool,
     max_input_dim: int | None,
 ) -> None:
     """
@@ -262,6 +286,12 @@ def main(
         Seeds per config in the confirm stage.
     final_seeds : int | None
         Seeds of the final stage.
+    resume : bool
+        Event pipeline, confirm/final: reuse identical finished runs.
+    num_workers : int | None
+        Event pipeline: DataLoader workers for training batches.
+    compile_model : bool
+        Event pipeline: compile the model with ``torch.compile``.
     max_input_dim : int | None
         Keep only the first N feature columns (best mode only).
 
@@ -282,6 +312,8 @@ def main(
 
     if sum([sweep, confirm, final]) > 1:
         raise click.BadParameter("use at most one of --sweep, --confirm, --final")
+    if resume and not (confirm or final):
+        raise click.BadParameter("--resume works with --confirm or --final")
     if dataset_filename is None:
         dataset_filename = (
             "cached_dataset_events.pt"
@@ -296,6 +328,9 @@ def main(
         "confirm_top_k": confirm_top_k,
         "confirm_seeds": confirm_seeds,
         "final_seeds": final_seeds,
+        "num_workers": num_workers,
+        "compile_model": compile_model or None,
+        "resume": resume or None,
     }
     config = ExperimentConfig(
         **{key: value for key, value in overrides.items() if value is not None},

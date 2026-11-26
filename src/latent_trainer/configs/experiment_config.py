@@ -76,6 +76,13 @@ class ExperimentConfig:
         Lightning precision for the event model, by default ``"bf16-mixed"``.
     num_workers : int
         DataLoader workers for the event model, by default 0.
+    compile_model : bool
+        Compile the event model's heavy submodules with ``torch.compile``
+        (needs Triton: ``triton`` on Linux, ``triton-windows`` on Windows, both
+        installed by the ``cuda`` extra), by default False.
+    resume : bool
+        Confirm/final: reuse runs that already finished with the same setup
+        and train only the missing ones, by default False.
     search_train_fraction : float
         Share of the training split used by search trials, by default 0.3.
     search_max_epochs : int
@@ -165,6 +172,8 @@ class ExperimentConfig:
     kl_warmup_epochs: float = 2.0
     precision: str = "bf16-mixed"
     num_workers: int = 0
+    compile_model: bool = False
+    resume: bool = False
 
     # Event model search, confirm and final stages:
     search_train_fraction: float = 0.3
