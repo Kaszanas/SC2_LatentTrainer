@@ -177,9 +177,12 @@ class GuidedAdversarialModule(pl.LightningModule):
             else z[:, self.supervised_dim :]
         )
 
-    def _accuracy(self, outcome: torch.Tensor, label: torch.Tensor) -> float:
+    def _accuracy(self, outcome: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
         """
         Return the percentage of correct outcome predictions.
+
+        Kept as a device tensor: converting it with ``.item()`` on every
+        training step made the CPU wait for the GPU.
 
         Parameters
         ----------
@@ -190,11 +193,11 @@ class GuidedAdversarialModule(pl.LightningModule):
 
         Returns
         -------
-        float
-            Accuracy in percent.
+        torch.Tensor
+            Accuracy in percent, a 0-dim tensor.
         """
-        correct = self._predicts_player_1(outcome).eq(label).sum().item()
-        return correct / label.numel() * 100
+        correct = self._predicts_player_1(outcome).eq(label).sum()
+        return correct.float() / label.numel() * 100
 
     # Training / validation:
     def training_step(self, batch, batch_idx: int):

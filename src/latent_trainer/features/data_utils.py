@@ -233,7 +233,7 @@ def _group_events(
     stat_slice: torch.Tensor,
     stat_loops: torch.Tensor,
     max_events_per_slice: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, ...]:
     """
     Index one stream's events by slice, capped at ``K`` per slice.
 
@@ -255,11 +255,13 @@ def _group_events(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+    tuple[torch.Tensor, ...]
         ``group`` ``[S, K]`` event positions (0 where masked), ``mask``
         ``[S, K]``, ``count`` ``[S]`` true events per slice, ``slice_loops``
-        ``[S]`` the loop of each slice's last stat tick, and ``last_row``
-        ``[S]`` that tick's row in the stream (forward-filled over gaps), with
+        ``[S]`` the loop of each slice's last stat tick, ``last_row``
+        ``[S]`` that tick's row in the stream (forward-filled over gaps), and
+        ``slot`` ``[E]`` the inverse of ``group``: each event's flat position
+        ``slice * K + k``, or -1 for an event dropped by the cap, with
         ``S = last stat slice + 1``.
 
     Raises
@@ -298,11 +300,15 @@ def _group_events(
     )
     if n_slices:
         last_row = torch.cummax(last_row, dim=0).values.clamp(min=0)
-    return group, mask, count, slice_loops, last_row
+
+    # Inverse map: kept events are unique in ``group``, so each gets one slot.
+    slot = torch.full((evt_slice.numel(),), -1, dtype=torch.long)
+    slot[group[mask]] = torch.arange(n_slices * k).reshape(n_slices, k)[mask]
+    return group, mask, count, slice_loops, last_row, slot
 
 
 def collate_event_sequences(
-    batch: list[dict], max_events_per_slice: int = 64
+    batch: list[dict], max_events_per_slice: int | None = None
 ) -> dict[str, torch.Tensor]:
     """
     Pad a batch of ragged event samples to that batch's maximum lengths.
@@ -317,8 +323,9 @@ def collate_event_sequences(
     ----------
     batch : list[dict]
         Samples from :class:`EventSequenceDataset`.
-    max_events_per_slice : int
-        Cap ``K`` on events per slice in ``evt_group``, by default 64.
+    max_events_per_slice : int | None
+        Cap ``K`` on events per slice in ``evt_group``. None (the default)
+        keeps every event: ``K`` is the largest slice in the batch.
 
     Returns
     -------
@@ -331,19 +338,31 @@ def collate_event_sequences(
         that tick in ``stat_values``); ``evt_group`` ``[B, 2, S, K]`` positions into
         the event dimension with ``evt_group_mask``; ``evt_count`` ``[B, 2, S]``
         true events per slice before the cap; ``race`` ``[B, 2]``;
-        ``crop_loop`` ``[B]``; ``label`` ``[B]``.
+        ``crop_loop`` ``[B]``; ``label`` ``[B]``; ``evt_slot`` ``[B, 2, Le]``
+        each event's flat slot ``slice * K + k`` in its stream (``S * K`` for
+        padded and capped-out events); ``slice_valid_index`` ``[Nv]`` flat
+        indices of the real slices in ``slice_mask``.
 
     Raises
     ------
     ValueError
         If ``max_events_per_slice < 1``.
     """
-    if max_events_per_slice < 1:
+    if max_events_per_slice is not None and max_events_per_slice < 1:
         raise ValueError(
             f"max_events_per_slice must be >= 1, got {max_events_per_slice}"
         )
     n_players = len(batch[0]["players"])
     streams = [player for sample in batch for player in sample["players"]]
+    if max_events_per_slice is None:
+        max_events_per_slice = max(
+            [
+                int(torch.bincount(stream["evt_slice"].long()).max())
+                for stream in streams
+                if stream["evt_slice"].numel()
+            ],
+            default=1,
+        )
 
     stat_lengths = torch.tensor(
         [stream["stat_values"].shape[0] for stream in streams], dtype=torch.long
@@ -424,6 +443,13 @@ def collate_event_sequences(
         torch.arange(slice_max).unsqueeze(0) < n_slices.unsqueeze(1)
     ).reshape(n_batch, n_players, slice_max)
 
+    # Index forms computed here on the CPU, so the model never has to turn a
+    # boolean mask into indices on the GPU (each such call waits for the GPU).
+    k = collated["evt_group"].shape[-1]
+    dummy = slice_max * k  # one spare slot for padded and capped-out events
+    slots = [torch.where(g[5] >= 0, g[5], dummy) for g in grouped]
+    collated["evt_slot"] = _pad_stack(slots, n_players, pad_value=dummy)
+    collated["slice_valid_index"] = collated["slice_mask"].reshape(-1).nonzero()[:, 0]
     return collated
 
 

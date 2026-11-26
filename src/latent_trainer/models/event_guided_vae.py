@@ -239,6 +239,19 @@ class suEventGuidedVAE(nn.Module):
 
         self.outcome_head = PairHead(supervised_dim)
 
+    def compile_submodules(self) -> None:
+        """
+        Compile the heavy submodules in place with ``torch.compile``.
+
+        Covers the per-slice event attention, the slice transformer and the
+        decoder, so every entry point (``forward``, ``encode``, ``decode``)
+        benefits. In-place compilation keeps parameter names, so checkpoints
+        are unchanged. ``dynamic=True`` because batch, slice and event counts
+        vary from batch to batch.
+        """
+        for module in (self.slice_attn, self.encoder, self.decoder):
+            module.compile(dynamic=True)
+
     # Encoder:
     def _slice_tokens(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -263,7 +276,7 @@ class suEventGuidedVAE(nn.Module):
         stat_tok = self.stat_proj(slice_stats)  # [B, 2, S, d]
         batch_size, n_players, n_slices, width = stat_tok.shape
 
-        # Event tokens; one zero row is appended so empty streams can be gathered.
+        # Event tokens:
         evt_tok = self.type_emb(batch["evt_type"]) + self.unit_emb(batch["evt_unit"])
         end_loop = torch.gather(
             batch["slice_loops"], 2, batch["evt_slice"].clamp(max=max(n_slices - 1, 0))
@@ -272,44 +285,88 @@ class suEventGuidedVAE(nn.Module):
         evt_tok = evt_tok + self.offset_proj(
             ticks_before_end.clamp(min=0).unsqueeze(-1)
         )
-        evt_tok = torch.cat(
-            [evt_tok, evt_tok.new_zeros(batch_size, n_players, 1, width)], 2
+
+        # Group by slice: each event is written to its own slot. Reading slots
+        # out of events instead (a gather) made every empty slot point at one
+        # row, and the backward pass then piled ~95% of all slots' gradients
+        # onto that row one atomic add at a time.
+        k = batch["evt_group"].shape[-1]
+        n_slots = n_slices * k
+        slot = self._event_slots(batch, n_slots)  # [B*2, Le], n_slots = spare
+        # One buffer for all streams with a single spare row at the end: cutting
+        # the spare off then leaves a contiguous view, so the reshapes below do
+        # not copy it (a spare row per stream did, doubling peak memory).
+        n_streams = batch_size * n_players
+        total = n_streams * n_slots
+        offset = torch.arange(n_streams, device=slot.device).unsqueeze(1) * n_slots
+        target = torch.where(slot < n_slots, slot + offset, total).reshape(-1)
+        buffer = evt_tok.new_zeros(total + 1, width)
+        buffer.scatter_(
+            0, target.unsqueeze(-1).expand(-1, width), evt_tok.reshape(-1, width)
         )
+        grouped = buffer[:total]
 
-        group = batch["evt_group"]  # [B, 2, S, K]
-        k = group.shape[-1]
-        flat = evt_tok.reshape(batch_size * n_players, -1, width)
-        gathered = torch.gather(
-            flat,
-            1,
-            group.reshape(batch_size * n_players, n_slices * k, 1).expand(
-                -1, -1, width
-            ),
-        ).reshape(batch_size, n_players, n_slices, k, width)
-
-        # Level 1, on real slices only.
-        valid = batch["slice_mask"]
-        query = stat_tok[valid].unsqueeze(1)  # [Nv, 1, d]
-        keys = gathered[valid]  # [Nv, K, d]
+        # Level 1, on real slices only, selected by index (no GPU sync):
+        valid_index = batch.get("slice_valid_index")
+        if valid_index is None:
+            valid_index = batch["slice_mask"].reshape(-1).nonzero()[:, 0]
+        query = stat_tok.reshape(-1, width).index_select(0, valid_index).unsqueeze(1)
+        keys = grouped.reshape(-1, k, width).index_select(0, valid_index)  # [Nv, K, d]
         n_valid = keys.shape[0]
         keys = torch.cat([self.no_event.expand(n_valid, 1, width), keys], dim=1)
+        event_mask = batch["evt_group_mask"].reshape(-1, k).index_select(0, valid_index)
         padding = torch.cat(
             [
                 torch.zeros(n_valid, 1, dtype=torch.bool, device=keys.device),
-                ~batch["evt_group_mask"][valid],
+                ~event_mask,
             ],
             dim=1,
         )
         attended, _ = self.slice_attn(
             query, keys, keys, key_padding_mask=padding, need_weights=False
         )
-        count = torch.log1p(batch["evt_count"][valid].float()).unsqueeze(-1)
+        count = batch["evt_count"].reshape(-1).index_select(0, valid_index)
+        count = torch.log1p(count.float()).unsqueeze(-1)
         slice_vec = self.slice_norm(
             query.squeeze(1) + attended.squeeze(1) + self.count_proj(count)
         )
-        tokens = stat_tok.new_zeros(batch_size, n_players, n_slices, width)
-        tokens[valid] = slice_vec.to(tokens.dtype)
-        return tokens, slice_stats
+        tokens = stat_tok.new_zeros(batch_size * n_players * n_slices, width)
+        tokens = tokens.index_copy(0, valid_index, slice_vec.to(tokens.dtype))
+        return tokens.reshape(batch_size, n_players, n_slices, width), slice_stats
+
+    @staticmethod
+    def _event_slots(batch: dict, n_slots: int) -> torch.Tensor:
+        """
+        Return each event's flat slot in its stream, ``n_slots`` for none.
+
+        Uses ``evt_slot`` from the collate; batches built without it get the
+        same map by inverting ``evt_group`` on the device.
+
+        Parameters
+        ----------
+        batch : dict
+            Output of ``collate_event_sequences``.
+        n_slots : int
+            ``S * K``; also the index of the spare slot.
+
+        Returns
+        -------
+        torch.Tensor
+            Slots ``[B * 2, Le]``.
+        """
+        group = batch["evt_group"]
+        n_streams = group.shape[0] * group.shape[1]
+        n_events = batch["evt_type"].shape[2]
+        if "evt_slot" in batch:
+            return batch["evt_slot"].reshape(n_streams, n_events)
+        positions = torch.where(batch["evt_group_mask"], group, n_events)
+        positions = positions.reshape(n_streams, -1)
+        slot = torch.full(
+            (n_streams, n_events + 1), n_slots, dtype=torch.long, device=group.device
+        )
+        order = torch.arange(n_slots, device=group.device).expand(n_streams, -1)
+        # Masked slots all target the spare column n_events, which is dropped.
+        return slot.scatter(1, positions, order)[:, :n_events]
 
     def _encode(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """

@@ -124,6 +124,20 @@ def test_padding_does_not_change_the_encoding():
     assert torch.allclose(alone[0], padded[0], atol=1e-5)
 
 
+def test_batches_without_index_keys_encode_identically():
+    """Older batches lacking evt_slot/slice_valid_index take the fallback path."""
+    split = _split()
+    module = _module(split).eval()
+    batch = _batch(split, range(4))
+    bare = {
+        k: v for k, v in batch.items() if k not in ("evt_slot", "slice_valid_index")
+    }
+    with torch.no_grad():
+        fast, _ = module.model.encode(batch)
+        fallback, _ = module.model.encode(bare)
+    assert torch.equal(fast, fallback)
+
+
 def test_swapping_players_negates_the_logit_exactly():
     """Slot independence by construction: P(swapped) = 1 - P."""
     split = _split()

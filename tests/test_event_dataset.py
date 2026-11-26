@@ -153,7 +153,7 @@ def test_invalid_arguments_raise(kwargs):
 
 
 # Collate:
-def _batch(max_events_per_slice: int = 2) -> dict:
+def _batch(max_events_per_slice: int | None = 2) -> dict:
     split = _split(
         [
             _sample(
@@ -201,6 +201,49 @@ def test_collate_slice_loops_race_and_crop():
     assert batch["slice_mask"][0].sum(dim=1).tolist() == [4, 4]
     assert batch["race"].tolist() == [[2, 1]]
     assert batch["crop_loop"].tolist() == [480]
+
+
+def test_event_slots_invert_the_groups():
+    """Every kept event's slot points back at it; the others get the spare."""
+    batch = _batch(max_events_per_slice=2)
+    group, mask, slot = batch["evt_group"], batch["evt_group_mask"], batch["evt_slot"]
+    spare = group.shape[2] * group.shape[3]
+    for player in range(2):
+        flat_group = group[0, player].reshape(-1)
+        flat_mask = mask[0, player].reshape(-1)
+        kept = set(flat_group[flat_mask].tolist())
+        for event, s in enumerate(slot[0, player].tolist()):
+            if s == spare:
+                assert event not in kept
+            else:
+                assert flat_mask[s] and flat_group[s] == event
+        assert sum(s != spare for s in slot[0, player].tolist()) == len(kept)
+
+
+def test_slice_valid_index_lists_the_real_slices():
+    """The index form equals the mask's positions."""
+    batch = _batch()
+    expected = batch["slice_mask"].reshape(-1).nonzero()[:, 0]
+    assert torch.equal(batch["slice_valid_index"], expected)
+
+
+def test_collate_without_a_cap_keeps_every_event():
+    """None sizes K to the batch's busiest slice, so nothing is dropped."""
+    batch = _batch(max_events_per_slice=None)
+    assert batch["evt_group"].shape[-1] == 5
+    assert (batch["evt_group_mask"].sum(-1) == batch["evt_count"]).all()
+
+
+def test_flatten_refuses_ids_that_overflow_their_dtype():
+    """A vocabulary beyond int16 raises instead of wrapping around."""
+    big = [f"U{i}" for i in range(40_000)]
+    player = _player(3, [10])
+    player.evt_unit_local = np.asarray([0], dtype=np.int32)
+    sample = ReplayEventSample(
+        players=(player, _player(3)), local_vocab=[big[-1]], label=1
+    )
+    with pytest.raises(OverflowError, match="int16"):
+        _flatten_split([sample], ["<PAD>", "<UNK>", *big])
 
 
 def test_collate_rejects_a_zero_cap():

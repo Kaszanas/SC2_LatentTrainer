@@ -178,18 +178,22 @@ class LitEventGuidedVAE(GuidedAdversarialModule):
         """
         return self.model(batch)
 
-    def _current_beta(self) -> float:
+    def _current_beta(self) -> float | torch.Tensor:
         """
         Return the KL weight for this step (full weight outside training).
 
+        Computed on the device from the ``kl_step`` buffer, so it never waits
+        for the GPU.
+
         Returns
         -------
-        float
+        float | torch.Tensor
             ``kl_beta`` scaled by the warm-up progress while training.
         """
         if not self.training or self.kl_warmup_steps <= 0:
             return self.kl_beta
-        return self.kl_beta * min(1.0, int(self.kl_step) / self.kl_warmup_steps)
+        progress = (self.kl_step.float() / self.kl_warmup_steps).clamp(max=1.0)
+        return self.kl_beta * progress
 
     # Validation over several settings:
     def on_validation_epoch_start(self) -> None:
@@ -223,12 +227,15 @@ class LitEventGuidedVAE(GuidedAdversarialModule):
             self.val_tags[dataloader_idx],
             {"n": 0.0, "vae": 0.0, "cls": 0.0, "correct": 0.0, "recon": 0.0, "kl": 0.0},
         )
+        # Sums stay on the device; they are read once per epoch, not per batch.
         sums["n"] += n
-        sums["vae"] += float(vae_loss) * n
-        sums["cls"] += float(cls_loss) * n
-        sums["correct"] += float(self._predicts_player_1(outcome).eq(label).sum())
-        sums["recon"] += float(extra["recon_loss"]) * n
-        sums["kl"] += float(extra["kl"]) * n
+        sums["vae"] = sums["vae"] + vae_loss.detach().double() * n
+        sums["cls"] = sums["cls"] + cls_loss.detach().double() * n
+        sums["correct"] = sums["correct"] + (
+            self._predicts_player_1(outcome).eq(label).sum().double()
+        )
+        sums["recon"] = sums["recon"] + extra["recon_loss"].detach().double() * n
+        sums["kl"] = sums["kl"] + extra["kl"].detach().double() * n
         return vae_loss + cls_loss * self.classification_weight
 
     def on_validation_epoch_end(self) -> None:
@@ -240,11 +247,11 @@ class LitEventGuidedVAE(GuidedAdversarialModule):
                 continue
             n = sums["n"]
             metrics = {
-                "val_vae_loss": sums["vae"] / n,
-                "val_cls_loss": sums["cls"] / n,
-                "val_acc": sums["correct"] / n * 100,
-                "val_recon_loss": sums["recon"] / n,
-                "val_kl": sums["kl"] / n,
+                "val_vae_loss": float(sums["vae"]) / n,
+                "val_cls_loss": float(sums["cls"]) / n,
+                "val_acc": float(sums["correct"]) / n * 100,
+                "val_recon_loss": float(sums["recon"]) / n,
+                "val_kl": float(sums["kl"]) / n,
             }
             metrics["val_loss"] = (
                 metrics["val_vae_loss"]
