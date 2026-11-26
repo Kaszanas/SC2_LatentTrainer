@@ -244,9 +244,9 @@ def get_event_guided_vae_search_space(trial: optuna.Trial) -> dict:
         "kl_beta": trial.suggest_float("kl_beta", 1e-3, 1.0, log=True),
         "batch_size": trial.suggest_categorical("batch_size", [16, 32, 64]),
         "min_crop_s": trial.suggest_categorical("min_crop_s", [120.0, 180.0, 300.0]),
-        "max_events_per_slice": trial.suggest_categorical(
-            "max_events_per_slice", [32, 64, 128]
-        ),
+        # Not searched: 128 drops 0.018% of events (busiest slice: 263), while
+        # keeping all of them made large configs 3.4x slower per epoch.
+        "max_events_per_slice": 128,
     }
 
 

@@ -167,7 +167,14 @@ def _flatten_split(
     def _cat(arrays: list[np.ndarray], dtype: torch.dtype) -> torch.Tensor:
         if not arrays:
             return torch.empty(0, dtype=dtype)
-        return torch.from_numpy(np.concatenate(arrays)).to(dtype)
+        values = np.concatenate(arrays)
+        # Range check: a narrowing cast would wrap silently.
+        info = torch.iinfo(dtype)
+        if values.size and (values.min() < info.min or values.max() > info.max):
+            raise OverflowError(
+                f"values in [{values.min()}, {values.max()}] do not fit {dtype}"
+            )
+        return torch.from_numpy(values).to(dtype)
 
     empty_stats = torch.empty((0, N_STAT_CHANNELS), dtype=torch.float32)
 

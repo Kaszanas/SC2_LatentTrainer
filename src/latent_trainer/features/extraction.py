@@ -21,12 +21,16 @@ from tqdm import tqdm
 
 from latent_trainer.features.splits import (
     SPLIT_NAMES,
+    ReplayIdentity,
     ReplayRef,
     SplitManifest,
     SplitManifestError,
     assign_splits,
     replay_id_from_filepath,
+    replay_identity,
     sc2_datasets_version,
+    series_groups,
+    subsample_manifest_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,6 +78,8 @@ class ExtractionRecord:
         Whether the transform returned None, by default False.
     error : str | None
         Exception type and message if extraction failed, by default None.
+    identity : ReplayIdentity | None
+        Players' nicknames and toons, used to group series, by default None.
     """
 
     index: int
@@ -81,6 +87,7 @@ class ExtractionRecord:
     output: Any = None
     skipped: bool = False
     error: str | None = None
+    identity: ReplayIdentity | None = None
 
     @property
     def kept(self) -> bool:
@@ -143,9 +150,11 @@ def _extract_chunk(
     records: list[ExtractionRecord] = []
     for index in indices:
         replay_id: str | None = None
+        identity: ReplayIdentity | None = None
         try:
             replay = dataset_object[index]
             replay_id = replay_id_from_filepath(replay.filepath)
+            identity = replay_identity(replay)
             output = transform_fn(replay)
         except Exception as exc:  # noqa: BLE001 - recorded; fatal for manifest replays
             records.append(
@@ -159,11 +168,15 @@ def _extract_chunk(
 
         if output is None:
             records.append(
-                ExtractionRecord(index=index, replay_id=replay_id, skipped=True)
+                ExtractionRecord(
+                    index=index, replay_id=replay_id, skipped=True, identity=identity
+                )
             )
         else:
             records.append(
-                ExtractionRecord(index=index, replay_id=replay_id, output=output)
+                ExtractionRecord(
+                    index=index, replay_id=replay_id, output=output, identity=identity
+                )
             )
     return records
 
@@ -326,11 +339,14 @@ def extract_with_manifest(
     splits_path : Path
         Location of ``splits.json``.
     create_splits : bool
-        Create a new manifest from the replays this run keeps (never
-        overwriting); otherwise the existing manifest is loaded and enforced.
+        Create a new manifest from the replays this run keeps, cut by series
+        (never overwriting); otherwise the existing manifest is loaded and
+        enforced.
     n_samples : int
         If > 0, restrict the run to a seeded subset: of all replays when
-        creating, proportionally per split when reusing, by default 0.
+        creating (the manifest then goes to :func:`subsample_manifest_path`,
+        never to ``splits_path``), proportionally per split when reusing, by
+        default 0.
     seed : int
         Seed for the split assignment and subsampling, by default 42.
     n_workers : int
@@ -350,12 +366,15 @@ def extract_with_manifest(
     FileNotFoundError
         If ``create_splits`` is not set and there is no manifest.
     SplitManifestError
-        If the manifest does not match the dataset or a listed replay cannot
-        be placed.
+        If the manifest does not match the dataset, is a subset while
+        ``n_samples`` is not set, or a listed replay cannot be placed.
     """
     n_source = len(dataset_object)
 
     if create_splits:
+        if n_samples > 0:
+            # A smoke-test manifest must never take the place of the real one.
+            splits_path = subsample_manifest_path(splits_path, n_samples)
         if splits_path.exists():
             raise FileExistsError(
                 f"--create_splits given but {splits_path} already exists. Reuse it "
@@ -377,11 +396,14 @@ def extract_with_manifest(
             desc=f"{transform_name} (all replays)",
         )
         _log_errors(records)
+        kept_records = [record for record in records if record.kept]
         kept = [
             ReplayRef(index=record.index, replay_id=record.replay_id)
-            for record in records
-            if record.kept
+            for record in kept_records
         ]
+        series = series_groups(
+            kept, {record.index: record.identity for record in kept_records}
+        )
         manifest = SplitManifest(
             seed=seed,
             dataset_file=dataset_file,
@@ -389,7 +411,8 @@ def extract_with_manifest(
             sc2_datasets_version=sc2_datasets_version(),
             created_by_transform=transform_name,
             subsampled=n_samples > 0,
-            splits=assign_splits(kept, seed=seed),
+            splits=assign_splits(kept, seed=seed, series=series),
+            grouping="series",
         )
         manifest.save(splits_path)
         logger.info(
@@ -401,6 +424,11 @@ def extract_with_manifest(
         manifest.check_matches_dataset(
             dataset_file=dataset_file, n_source_replays=n_source
         )
+        if manifest.subsampled and n_samples <= 0:
+            raise SplitManifestError(
+                f"{splits_path} is a --n_samples subset; a full run needs the full "
+                "manifest."
+            )
         if n_samples > 0:
             manifest = manifest.subsample(n_samples=n_samples, seed=seed)
         logger.info(

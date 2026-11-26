@@ -62,6 +62,7 @@ EVENT_TYPE_NAMES: tuple[str, ...] = (
     "UnitInit",
     "UnitDied",
     "Upgrade",
+    "UnitTypeChange",
 )
 EVENT_TYPE_IDS = {name: idx for idx, name in enumerate(EVENT_TYPE_NAMES)}
 
@@ -88,10 +89,9 @@ RACE_IDS = {name: idx for idx, name in enumerate(RACE_NAMES)}
 #
 # The line drawn here is "did a player decide this, and can they act on it".
 # Deployed ability units that a player aims and that affect the game are KEPT:
-# KD8Charge, OracleStasisTrap, Changeling*, Interceptor, LocustMP, Broodling,
-# CreepTumor, MULE.  Larva is emphatically kept -- larva births encode inject
-# cadence, which is exactly the kind of coachable macro this project exists to
-# give feedback on.
+# KD8Charge, OracleStasisTrap, Changeling*, LocustMP, CreepTumor, MULE.
+# Interceptor, Broodling and Larva are real units but spawn automatically; they
+# are removed separately, see AUTO_SPAWNED_NAMES below.
 NON_GAMEPLAY_PREFIXES: tuple[str, ...] = (
     "Beacon",  # rally / control-group UI markers, spawned once per player
     "Spray",  # cosmetic emote sprays
@@ -142,8 +142,10 @@ AUTO_SPAWNED_NAMES: frozenset[str] = frozenset(
         "Interceptor",  # Carrier rebuilds these for free on a timer
     }
 )
-# Transitional morph states. The morph decision is already marked by the birth
-# of whatever the unit becomes, so these are pure duplication.
+# Transitional morph states (Larva -> Egg, Zergling -> BanelingCocoon). A unit
+# hatched from an egg or cocoon gets its own UnitBorn, so these duplicate it.
+# Morphs in place (Hatchery -> Lair, CommandCenter -> OrbitalCommand, Roach ->
+# Ravager, Gateway -> WarpGate) have no birth and are emitted as UnitTypeChange.
 AUTO_SPAWNED_SUFFIXES: tuple[str, ...] = ("Egg", "Cocoon")
 
 
@@ -337,7 +339,9 @@ def _extract_streams(
     ``UnitDied`` carries only ``(unitTagIndex, unitTagRecycle)``, so owner and
     type come from a tag map built as the game plays out, joining ``UnitBorn``
     and ``UnitInit`` (100% of deaths resolved) and replaying ``UnitTypeChange``
-    so a morph is attributed to what the unit was when it died.
+    so a morph is attributed to what the unit was when it died. Each gameplay
+    ``UnitTypeChange`` is also an event of its own, since in-place morphs
+    (Lair, OrbitalCommand, Ravager, WarpGate) have no ``UnitBorn``.
 
     Parameters
     ----------
@@ -384,7 +388,20 @@ def _extract_streams(
                 existing = spawn_by_tag.get(key)
                 if existing is not None:
                     # Keep the owner; only the type changes.
-                    spawn_by_tag[key] = (event.unitTypeName, existing[1])
+                    owner_id = existing[1]
+                    spawn_by_tag[key] = (event.unitTypeName, owner_id)
+                    # Tech morphs (Lair, OrbitalCommand, Ravager) and mode
+                    # toggles (SiegeTankSieged) are emitted under the new type.
+                    if owner_id in events_by_player and is_gameplay_entity(
+                        event.unitTypeName
+                    ):
+                        events_by_player[owner_id].append(
+                            (
+                                event.loop,
+                                EVENT_TYPE_IDS["UnitTypeChange"],
+                                event.unitTypeName,
+                            )
+                        )
 
             case "UnitDied":
                 key = (event.unitTagIndex, event.unitTagRecycle)

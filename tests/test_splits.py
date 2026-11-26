@@ -1,7 +1,9 @@
 """Tests for the split manifest and manifest-driven extraction."""
 
+import json
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -14,7 +16,10 @@ from latent_trainer.features.splits import (
     SplitManifest,
     SplitManifestError,
     assign_splits,
+    normalise_nickname,
     replay_id_from_filepath,
+    replay_identity,
+    series_groups,
 )
 
 N_REPLAYS = 200
@@ -22,10 +27,22 @@ N_REPLAYS = 200
 
 @dataclass
 class FakeReplay:
-    """Minimal replay with a ``filepath`` and its source index."""
+    """Minimal replay with a ``filepath``, its source index and its players."""
 
     filepath: str
     index: int
+    toonPlayerDescMap: list = field(default_factory=list)
+
+
+def _players(*players: tuple[str, str]) -> list:
+    """Return a ``toonPlayerDescMap`` for ``(nickname, toon)`` of players 1, 2."""
+    return [
+        SimpleNamespace(
+            toon=toon,
+            toon_player_info=SimpleNamespace(playerID=pid, nickname=nickname),
+        )
+        for pid, (nickname, toon) in enumerate(players, start=1)
+    ]
 
 
 class FakeDataset:
@@ -97,6 +114,111 @@ def test_assign_splits_ignores_input_order_and_depends_on_seed():
     random.Random(5).shuffle(shuffled)
     assert assign_splits(refs, seed=3) == assign_splits(shuffled, seed=3)
     assert assign_splits(refs, seed=3) != assign_splits(refs, seed=4)
+
+
+# Series grouping:
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("&lt;mouz&gt;HeroMarine", "heromarine"),
+        ("<Rival>Cuddlebear", "cuddlebear"),
+        ("Liquid<sp/>Clem", "clem"),
+        ("  Serral ", "serral"),
+        ("&lt;TAG&gt;", None),
+        (None, None),
+    ],
+)
+def test_nicknames_lose_clan_tags_and_case(raw, expected):
+    """Escaped and raw clan tags, ``<sp/>`` prefixes and case are removed."""
+    assert normalise_nickname(raw) == expected
+
+
+def test_replay_identity_reads_both_players():
+    """Identity is (p1 nick, p2 nick, p1 toon, p2 toon), normalised."""
+    replay = FakeReplay("P\\r", 0, _players(("<A>Alpha", "1-S2-1-1"), ("Beta", "2")))
+    assert replay_identity(replay) == ("alpha", "beta", "1-S2-1-1", "2")
+    assert replay_identity(FakeReplay("P\\r", 0)) == (None, None, None, None)
+
+
+def test_series_link_by_nickname_or_toon_within_a_pack_only():
+    """Same pair by name or by account joins a series; another pack never does."""
+    kept = [ReplayRef(i, f"{pack}/r{i}") for i, pack in enumerate("AAAAB")]
+    identities = {
+        0: ("x", "y", "t1", "t2"),
+        1: ("y", "x", "t9", "t8"),  # same names, other accounts (other server)
+        2: ("x2", "y", "t1", "t2"),  # renamed, same accounts
+        3: ("x", "z", "t1", "t3"),  # different opponent
+        4: ("x", "y", "t1", "t2"),  # same pair, different tournament
+    }
+    groups = series_groups(kept, identities)
+    assert groups[0] == groups[1] == groups[2] == "A/r0"
+    assert groups[3] == "A/r3"
+    assert groups[4] == "B/r4"
+
+
+def test_missing_identity_never_links_replays():
+    """Replays without names or toons stay in their own series."""
+    kept = [ReplayRef(i, f"A/r{i}") for i in range(3)]
+    groups = series_groups(kept, {i: (None, None, None, None) for i in range(3)})
+    assert len(set(groups.values())) == 3
+
+
+def _series_refs(n_series: int, seed: int) -> tuple[list[ReplayRef], dict[int, str]]:
+    """Return refs in series of 1-5 replays, plus their series ids."""
+    rng = random.Random(seed)
+    refs, series = [], {}
+    for s in range(n_series):
+        for _ in range(rng.randint(1, 5)):
+            index = len(refs)
+            refs.append(ReplayRef(index, f"t/r{index}"))
+            series[index] = f"s{s}"
+    return refs, series
+
+
+def test_series_assignment_keeps_series_whole_and_sizes_close():
+    """No series spans two splits; val/test sit within one series of 10%."""
+    refs, series = _series_refs(400, seed=0)
+    splits = assign_splits(refs, seed=1, series=series)
+    owner: dict[str, str] = {}
+    for split in SPLIT_NAMES:
+        for ref in splits[split]:
+            assert ref.series == series[ref.index]
+            assert owner.setdefault(ref.series, split) == split
+    n = len(refs)
+    for split in ("val", "test"):
+        assert round(0.1 * n) - 5 <= len(splits[split]) <= round(0.1 * n)
+    assert sum(len(v) for v in splits.values()) == n
+    assert splits == assign_splits(list(reversed(refs)), seed=1, series=series)
+    assert splits != assign_splits(refs, seed=2, series=series)
+
+
+def test_series_manifest_rejects_a_series_in_two_splits():
+    """Validation catches a series split across train and test."""
+    refs = [ReplayRef(i, f"t/r{i}", series="s") for i in range(3)]
+    with pytest.raises(SplitManifestError, match="spans"):
+        SplitManifest(
+            seed=0,
+            dataset_file="d",
+            n_source_replays=3,
+            sc2_datasets_version="x",
+            created_by_transform="t",
+            subsampled=False,
+            splits={"train": refs[:2], "val": [], "test": refs[2:]},
+            grouping="series",
+        )
+
+
+def test_version_1_manifest_loads_with_its_hash_unchanged(tmp_path):
+    """Old per-replay manifests still load and hash as they always did."""
+    manifest = _manifest()
+    old = manifest.to_dict()
+    old["version"] = 1
+    old.pop("grouping")
+    path = tmp_path / "splits.json"
+    path.write_text(json.dumps(old), encoding="utf-8")
+    loaded = SplitManifest.load(path)
+    assert loaded.grouping == "replay" and loaded.version == 1
+    assert loaded.to_dict() == old
 
 
 # Manifest:
@@ -207,6 +329,45 @@ def test_reuse_fails_when_source_replay_changed(tmp_path):
     changed = FakeDataset(rename={11: "different.json"})
     with pytest.raises(SplitManifestError, match="manifest says"):
         _extract(tmp_path, lambda r: r.index, create=False, dataset=changed)
+
+
+def test_created_manifest_keeps_each_series_in_one_split(tmp_path):
+    """--create_splits groups replays of the same pair in one tournament."""
+
+    class PairedDataset(FakeDataset):
+        def __getitem__(self, index: int) -> FakeReplay:
+            replay = super().__getitem__(index)
+            pair = index // 4  # series of four games
+            replay.toonPlayerDescMap = _players((f"a{pair}", ""), (f"b{pair}", ""))
+            return replay
+
+    result = _extract(tmp_path, lambda r: r.index, create=True, dataset=PairedDataset())
+    assert result.manifest.grouping == "series"
+    for split in SPLIT_NAMES:
+        pairs = {i // 4 for i in result.outputs[split]}
+        for other in SPLIT_NAMES:
+            if other != split:
+                assert not pairs & {i // 4 for i in result.outputs[other]}
+    assert SplitManifest.load(tmp_path / "splits.json") == result.manifest
+
+
+def test_create_with_n_samples_writes_a_separate_manifest(tmp_path):
+    """A smoke-test manifest goes to splits_n<N>.json and a full run refuses it."""
+    _extract(tmp_path, lambda r: r.index, create=True, n_samples=40)
+    assert not (tmp_path / "splits.json").exists()
+    small_path = tmp_path / "splits_n40.json"
+    assert SplitManifest.load(small_path).subsampled
+
+    with pytest.raises(SplitManifestError, match="subset"):
+        extract_with_manifest(
+            FakeDataset(),
+            lambda r: r.index,
+            transform_name="fake",
+            dataset_file="data.json",
+            splits_path=small_path,
+            create_splits=False,
+            n_workers=1,
+        )
 
 
 def test_reuse_with_n_samples_draws_from_manifest(tmp_path):

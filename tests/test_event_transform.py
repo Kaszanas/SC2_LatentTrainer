@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from latent_trainer.features.event_transform import (
+    EVENT_TYPE_NAMES,
     N_STAT_CHANNELS,
     RACE_IDS,
     SKIP_REASONS,
@@ -47,6 +48,29 @@ class PlayerStats:
     def __init__(self, loop: int, player: int, value: float = 1.0):
         self.loop, self.playerId = loop, player
         self.stats = SimpleNamespace(**{k: value for k in SORTED_PLAYERSTATS_KEYS})
+
+
+class UnitBorn:
+    """Tracker birth of a unit owned by ``player``."""
+
+    def __init__(self, loop: int, tag: int, name: str, player: int):
+        self.loop, self.unitTagIndex, self.unitTagRecycle = loop, tag, 1
+        self.unitTypeName, self.controlPlayerId = name, player
+
+
+class UnitTypeChange:
+    """Tracker morph of an existing unit."""
+
+    def __init__(self, loop: int, tag: int, name: str):
+        self.loop, self.unitTagIndex, self.unitTagRecycle = loop, tag, 1
+        self.unitTypeName = name
+
+
+class UnitDied:
+    """Tracker death; type and owner come from the tag map."""
+
+    def __init__(self, loop: int, tag: int):
+        self.loop, self.unitTagIndex, self.unitTagRecycle = loop, tag, 1
 
 
 def _scenario_a() -> list:
@@ -216,6 +240,39 @@ def _replay(
         trackerEvents=tracker,
         toonPlayerDescMap=[SimpleNamespace(toon_player_info=info) for info in infos],
     )
+
+
+def _player_events(sample, player: int) -> list[tuple[str, str]]:
+    """Return ``(event type, unit name)`` of one player's events, in order."""
+    streams = sample.players[player]
+    return [
+        (EVENT_TYPE_NAMES[t], sample.local_vocab[u])
+        for t, u in zip(streams.evt_type, streams.evt_unit_local, strict=True)
+    ]
+
+
+def test_morphs_and_mode_toggles_are_emitted_and_deaths_use_the_current_type():
+    """In-place morphs have no birth, so UnitTypeChange carries them."""
+    replay = _replay()
+    replay.trackerEvents += [
+        UnitBorn(200, 1, "Hatchery", player=2),
+        UnitTypeChange(900, 1, "Lair"),
+        UnitBorn(300, 2, "SiegeTank", player=1),
+        UnitTypeChange(1000, 2, "SiegeTankSieged"),
+        UnitDied(1500, 2),
+        UnitBorn(400, 3, "Larva", player=2),
+        UnitTypeChange(500, 3, "Egg"),
+    ]
+    sample = event_transform(replay)
+    assert _player_events(sample, 1) == [
+        ("UnitBorn", "Hatchery"),
+        ("UnitTypeChange", "Lair"),
+    ]
+    assert _player_events(sample, 0) == [
+        ("UnitBorn", "SiegeTank"),
+        ("UnitTypeChange", "SiegeTankSieged"),
+        ("UnitDied", "SiegeTankSieged"),
+    ]
 
 
 def test_race_is_the_race_played_not_the_lobby_pick():
